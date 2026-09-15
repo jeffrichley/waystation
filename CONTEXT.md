@@ -13,7 +13,7 @@ One agent execution against a host repo: prepare workspace, start sandbox, execu
 _Avoid_: job, ticket, session
 
 **Primitive**:
-A public, composable building block of a run that a flow script may use individually instead of the whole loop.
+A public, composable building block a flow script may use individually instead of the whole loop — a stage of a run, or a cross-run tool such as fan-out.
 
 **Sandbox**:
 The isolated, ephemeral environment an agent executes in — created for a run, destroyed after it.

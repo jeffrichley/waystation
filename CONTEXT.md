@@ -15,6 +15,9 @@ _Avoid_: job, ticket, session
 **Primitive**:
 A public, composable building block a flow script may use individually instead of the whole loop — a stage of a run, or a cross-run tool such as fan-out.
 
+**Fan-out**:
+Running multiple runs concurrently and consuming each result as it completes.
+
 **Sandbox**:
 The isolated, ephemeral environment an agent executes in — created for a run, destroyed after it.
 _Avoid_: container (that's one backend's implementation detail)
@@ -29,8 +32,12 @@ The AI coding tool executed inside a sandbox (e.g. Claude Code).
 **Agent provider**:
 The adapter that lets waystation run a specific agent: builds its command line and environment, parses its output.
 
-**Branch strategy**:
-The rule for how a run's commits reach the host repo: `head`, `merge-to-head`, or a named branch.
+**Integration strategy**:
+The pluggable rule for how a run's patch series reaches the host repo. The shipped strategy is parameterized by target (head, or a named branch) and mechanism (apply linearly, or merge).
+_Avoid_: branch strategy, merge-back
+
+**Integration report**:
+What integration did for a run — where commits landed, conflict state, whether a salvage commit exists. Returned alongside the Outcome.
 
 **Base ref**:
 The ref in the host repo a run's workspace starts from; defaults to the host repo's HEAD. Only committed state — a run never sees the host repo's uncommitted changes.
@@ -38,6 +45,9 @@ The ref in the host repo a run's workspace starts from; defaults to the host rep
 **Patch series**:
 The ordered, linear sequence of commits a run produced atop its base ref — the run's collected product. Cannot contain merge commits.
 _Avoid_: diff, changeset
+
+**Salvage commit**:
+The automatic final commit capturing work the agent left uncommitted at run end; it rides the patch series and is flagged in the integration report.
 
 **Outcome**:
 The structured result an agent reports back to the flow script at the end of a run.

@@ -32,6 +32,9 @@ The adapter that lets waystation run a specific agent: builds its command line a
 **Branch strategy**:
 The rule for how a run's commits reach the host repo: `head`, `merge-to-head`, or a named branch.
 
+**Base ref**:
+The ref in the host repo a run's workspace starts from; defaults to the host repo's HEAD. Only committed state — a run never sees the host repo's uncommitted changes.
+
 **Outcome**:
 The structured result an agent reports back to the flow script at the end of a run.
 _Avoid_: result, response

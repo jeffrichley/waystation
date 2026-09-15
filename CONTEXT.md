@@ -35,6 +35,10 @@ The rule for how a run's commits reach the host repo: `head`, `merge-to-head`, o
 **Base ref**:
 The ref in the host repo a run's workspace starts from; defaults to the host repo's HEAD. Only committed state — a run never sees the host repo's uncommitted changes.
 
+**Patch series**:
+The ordered, linear sequence of commits a run produced atop its base ref — the run's collected product. Cannot contain merge commits.
+_Avoid_: diff, changeset
+
 **Outcome**:
 The structured result an agent reports back to the flow script at the end of a run.
 _Avoid_: result, response

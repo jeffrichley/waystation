@@ -12,6 +12,10 @@ _Avoid_: workflow, pipeline, config
 One agent execution against a host repo: prepare workspace, start sandbox, execute agent, collect commits, integrate them back.
 _Avoid_: job, ticket, session
 
+**Workspace**:
+The run's private copy of the host repo at the base ref — what the agent works in. Exists inside the sandbox for the run's lifetime.
+_Avoid_: worktree (a git mechanism, not the concept), checkout
+
 **Primitive**:
 A public, composable building block a flow script may use individually instead of the whole loop — a stage of a run, or a cross-run tool such as fan-out.
 
@@ -25,6 +29,18 @@ _Avoid_: container (that's one backend's implementation detail)
 **Sandbox backend**:
 A pluggable implementation of sandbox isolation (e.g. Docker, user-namespace, none).
 _Avoid_: provider (reserved for agents)
+
+**Sandbox spec**:
+The value a flow script supplies describing the sandbox it wants — which backend, image, environment, transport. A sandbox backend turns a spec into a live sandbox.
+_Avoid_: config, settings
+
+**Transport**:
+How a workspace gets into a sandbox — copied in, or bound in place. An option of the sandbox backend, chosen per host by default.
+_Avoid_: mount (one mechanism, not the concept)
+
+**Preflight**:
+Validation a sandbox backend performs before any run starts — proving the host can create sandboxes and every spec in a batch is satisfiable. Fails fast; never repairs.
+_Avoid_: setup, bootstrap
 
 **Agent**:
 The AI coding tool executed inside a sandbox (e.g. Claude Code).

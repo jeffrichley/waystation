@@ -22,6 +22,10 @@ A public, composable building block a flow script may use individually instead o
 **Fan-out**:
 Running multiple runs concurrently and consuming each result as it completes.
 
+**Batch**:
+The iterable of runs handed to one fan-out — heterogeneous by design: different agents, sandboxes, integration targets, even different flows.
+_Avoid_: group, stage, job set
+
 **Sandbox**:
 The isolated, ephemeral environment an agent executes in — created for a run, destroyed after it.
 _Avoid_: container (that's one backend's implementation detail)

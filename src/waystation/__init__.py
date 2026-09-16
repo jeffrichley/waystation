@@ -10,6 +10,7 @@ from waystation.agents import (
     outcome_instructions,
     run_agent,
 )
+from waystation.collect import PatchSeries, collect
 from waystation.errors import PreflightError, StageError, WaystationError
 from waystation.flow import Flow, RunSpec
 from waystation.results import (
@@ -50,6 +51,7 @@ __all__ = [
     "OutcomeInvalid",
     "OutcomeMissing",
     "OutcomeReported",
+    "PatchSeries",
     "PreflightError",
     "Refused",
     "RunFailed",
@@ -65,6 +67,7 @@ __all__ = [
     "Timeouts",
     "WaystationError",
     "Workspace",
+    "collect",
     "find_outcome",
     "outcome_instructions",
     "prepare_workspace",

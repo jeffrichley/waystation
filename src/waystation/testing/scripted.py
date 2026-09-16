@@ -63,15 +63,36 @@ def _outcome_payload(outcome: Any) -> str:
     return json.dumps(TypeAdapter(type(outcome)).dump_python(outcome, mode="json"))
 
 
+def _write_file_commands(path: str, content: str) -> list[str]:
+    parent = Path(path).parent.as_posix()
+    cmds: list[str] = []
+    if parent not in ("", "."):
+        cmds.append(f"mkdir -p {_shell_single_quote(parent)}")
+    cmds.append(
+        f"printf '%s' {_shell_single_quote(content)} > {_shell_single_quote(path)}"
+    )
+    return cmds
+
+
+@dataclass(frozen=True, slots=True)
+class ScriptedCommit:
+    """One commit the scripted agent creates before exiting."""
+
+    message: str
+    files: Mapping[str, str]
+
+
 @dataclass(frozen=True, slots=True)
 class ScriptedAgent:
-    """Play back canned lines and an Outcome through ``sh -c``."""
+    """Play back canned lines, commits, and an Outcome through ``sh -c``."""
 
     lines: Sequence[str] = ()
     outcome: Any = None
     exit_code: int = 0
     env: Mapping[str, str] = field(default_factory=dict)
     pass_env: Sequence[str] = ()
+    commits: Sequence[ScriptedCommit] = ()
+    uncommitted: Mapping[str, str] = field(default_factory=dict)
 
     def preflight(self) -> None:
         try:
@@ -84,6 +105,13 @@ class ScriptedAgent:
         parts: list[str] = ["set -e"]
         for line in self.lines:
             parts.append(f"printf '%s\\n' {_shell_single_quote(line)}")
+        for commit in self.commits:
+            for path, content in commit.files.items():
+                parts.extend(_write_file_commands(path, content))
+            parts.append("git add -A")
+            parts.append(f"git commit -m {_shell_single_quote(commit.message)}")
+        for path, content in self.uncommitted.items():
+            parts.extend(_write_file_commands(path, content))
         payload = _outcome_payload(self.outcome)
         if payload:
             marker_line = f"{OUTCOME_MARKER} {payload}"

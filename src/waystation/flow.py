@@ -13,13 +13,16 @@ from pydantic.json_schema import GenerateJsonSchema
 
 from waystation.agents.protocol import AgentProvider
 from waystation.agents.run_agent import run_agent
+from waystation.collect import collect, preserve_series
 from waystation.errors import PreflightError, StageError
 from waystation.results import (
     AgentExit,
     Errored,
     Failure,
+    Refused,
     RunFailed,
     RunSucceeded,
+    Series,
     Stage,
     Summary,
     Timeouts,
@@ -50,6 +53,8 @@ def _run_failed(
     agent: AgentExit | None,
     stage: Stage,
     failure: Failure,
+    series: Series | None = None,
+    preserved: str | None = None,
 ) -> RunFailed:
     return RunFailed(
         run_id=run_id,
@@ -57,8 +62,8 @@ def _run_failed(
         base_sha=base_sha,
         elapsed=elapsed,
         agent=agent,
-        series=None,
-        preserved=None,
+        series=series,
+        preserved=preserved,
         stage=stage,
         failure=failure,
     )
@@ -92,6 +97,7 @@ class Flow:
             prompt=prompt,
             outcome_type=outcome,
             timeouts=self.timeouts,
+            salvage=self.salvage,
         )
 
 
@@ -106,6 +112,7 @@ class RunSpec[OutcomeT]:
     prompt: str | Path
     outcome_type: type[OutcomeT]
     timeouts: Timeouts
+    salvage: bool = True
 
     def __await__(self):  # type: ignore[no-untyped-def]
         return self._execute().__await__()
@@ -115,6 +122,8 @@ class RunSpec[OutcomeT]:
         base_sha: str | None = None
         elapsed: dict[Stage, float] = {}
         agent_exit: AgentExit | None = None
+        series: Series | None = None
+        preserved: str | None = None
         stage: Stage = "workspace"
 
         try:
@@ -150,6 +159,8 @@ class RunSpec[OutcomeT]:
                 except Exception as exc:
                     raise StageError("agent", Errored(exception=exc)) from exc
 
+                agent_failure: StageError | None = None
+                outcome: OutcomeT | None = None
                 t2 = time.perf_counter()
                 try:
                     agent_exit, outcome = await run_agent(
@@ -158,25 +169,76 @@ class RunSpec[OutcomeT]:
                         command,
                         self.outcome_type,
                     )
-                except StageError:
+                except StageError as err:
                     elapsed["agent"] = time.perf_counter() - t2
-                    raise
+                    agent_failure = err
+                    if err.agent is not None:
+                        agent_exit = err.agent
                 except Exception as exc:
                     elapsed["agent"] = time.perf_counter() - t2
-                    raise StageError("agent", Errored(exception=exc)) from exc
-                elapsed["agent"] = time.perf_counter() - t2
+                    agent_failure = StageError("agent", Errored(exception=exc))
+                else:
+                    elapsed["agent"] = time.perf_counter() - t2
 
-            return RunSucceeded(
-                run_id=run_id,
-                name=None,
-                base_sha=base_sha,
-                elapsed=elapsed,
-                agent=agent_exit,
-                series=None,
-                preserved=None,
-                outcome=outcome,
-                report=None,
-            )
+                # Collect runs after agent start (best-effort when the agent failed).
+                stage = "collect"
+                t3 = time.perf_counter()
+                collected = await collect(sandbox, workspace, salvage=self.salvage)
+                elapsed["collect"] = time.perf_counter() - t3
+                series = collected.series_meta
+                if collected.patch_series.commits > 0:
+                    preserved = preserve_series(
+                        self.repo,
+                        branch=f"waystation/{run_id}",
+                        series=collected.patch_series,
+                    )
+
+                if collected.squashed:
+                    return _run_failed(
+                        run_id=run_id,
+                        base_sha=base_sha,
+                        elapsed=elapsed,
+                        agent=agent_exit,
+                        stage="collect",
+                        failure=Refused(
+                            reason="nonlinear_series",
+                            detail=(
+                                "series contains merge commits or "
+                                "HEAD does not descend from base"
+                            ),
+                        ),
+                        series=series,
+                        preserved=preserved,
+                    )
+
+                if agent_failure is not None:
+                    return _run_failed(
+                        run_id=run_id,
+                        base_sha=base_sha,
+                        elapsed=elapsed,
+                        agent=(
+                            agent_failure.agent
+                            if agent_failure.agent is not None
+                            else agent_exit
+                        ),
+                        stage=agent_failure.stage,
+                        failure=agent_failure.failure,
+                        series=series,
+                        preserved=preserved,
+                    )
+
+                assert outcome is not None
+                return RunSucceeded(
+                    run_id=run_id,
+                    name=None,
+                    base_sha=base_sha,
+                    elapsed=elapsed,
+                    agent=agent_exit,
+                    series=series,
+                    preserved=preserved,
+                    outcome=outcome,
+                    report=None,
+                )
         except StageError as err:
             return _run_failed(
                 run_id=run_id,
@@ -185,6 +247,8 @@ class RunSpec[OutcomeT]:
                 agent=err.agent if err.agent is not None else agent_exit,
                 stage=err.stage,
                 failure=err.failure,
+                series=series,
+                preserved=preserved,
             )
         except PreflightError as err:
             failure: Failure = (
@@ -197,6 +261,8 @@ class RunSpec[OutcomeT]:
                 agent=agent_exit,
                 stage=stage,
                 failure=failure,
+                series=series,
+                preserved=preserved,
             )
         except Exception as exc:
             return _run_failed(
@@ -206,4 +272,6 @@ class RunSpec[OutcomeT]:
                 agent=agent_exit,
                 stage=stage,
                 failure=Errored(exception=exc),
+                series=series,
+                preserved=preserved,
             )

@@ -67,6 +67,19 @@ class Series:
 
 
 @dataclass(frozen=True, slots=True)
+class IntegrationReport:
+    """What integration did for a run."""
+
+    strategy: str
+    target: str
+    mechanism: str
+    target_before: str
+    target_after: str | None
+    landed: tuple[str, ...]
+    conflict: None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TimedOut:
     bound: str
     limit: float
@@ -141,7 +154,7 @@ class RunSucceeded[OutcomeT]:
     series: Series | None
     preserved: str | None
     outcome: OutcomeT
-    report: None = None
+    report: IntegrationReport | None = None
 
 
 @dataclass(frozen=True, slots=True)

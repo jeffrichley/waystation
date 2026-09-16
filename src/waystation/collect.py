@@ -56,7 +56,11 @@ def _split_format_patch(stdout: str) -> tuple[str, ...]:
 
 
 def _host_git(
-    repo: Path, *args: str, check: bool = True, env: dict[str, str] | None = None
+    repo: Path,
+    *args: str,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+    stage: str = "collect",
 ) -> subprocess.CompletedProcess[str]:
     argv = ["git", "-C", str(repo), *args]
     result = subprocess.run(
@@ -68,7 +72,7 @@ def _host_git(
     )
     if check and result.returncode != 0:
         raise StageError(
-            "collect",
+            stage,  # type: ignore[arg-type]
             CommandFailed(
                 argv=tuple(argv),
                 exit_code=result.returncode,
@@ -255,6 +259,7 @@ def _commit_patch(
     committer_name: str,
     committer_email: str,
     env: dict[str, str],
+    stage: str = "collect",
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="waystation-patch-") as tmp:
         tmp_path = Path(tmp)
@@ -270,7 +275,7 @@ def _commit_patch(
         )
         if mail.returncode != 0:
             raise StageError(
-                "collect",
+                stage,  # type: ignore[arg-type]
                 CommandFailed(
                     argv=("git", "mailinfo"),
                     exit_code=mail.returncode,
@@ -294,7 +299,7 @@ def _commit_patch(
             )
             if apply.returncode != 0:
                 raise StageError(
-                    "collect",
+                    stage,  # type: ignore[arg-type]
                     CommandFailed(
                         argv=("git", "apply", "--cached"),
                         exit_code=apply.returncode,
@@ -302,7 +307,7 @@ def _commit_patch(
                     ),
                 )
 
-        tree = _host_git(host, "write-tree", env=env).stdout.strip()
+        tree = _host_git(host, "write-tree", env=env, stage=stage).stdout.strip()
         commit_env = {
             **env,
             "GIT_AUTHOR_NAME": author_name or committer_name,
@@ -321,6 +326,7 @@ def _commit_patch(
             "-F",
             str(msg_file),
             env=commit_env,
+            stage=stage,
         ).stdout.strip()
         return commit
 

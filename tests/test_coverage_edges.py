@@ -8,9 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from waystation import Flow, NoSandbox, Summary, prepare_workspace
+from waystation import Flow, NoSandbox, ScriptedAgent, Summary, prepare_workspace
 from waystation.agents.outcome import OUTCOME_MARKER, find_outcome
-from waystation.testing import ScriptedAgent
 
 
 @pytest.mark.unit

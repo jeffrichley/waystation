@@ -10,8 +10,14 @@ from typing import TypedDict
 import pytest
 from pydantic import BaseModel
 
-from waystation import Flow, NoSandbox, RunSucceeded, Summary, prepare_workspace
-from waystation.testing import ScriptedAgent
+from waystation import (
+    Flow,
+    NoSandbox,
+    RunSucceeded,
+    ScriptedAgent,
+    Summary,
+    prepare_workspace,
+)
 
 
 @pytest.fixture

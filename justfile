@@ -12,3 +12,7 @@ check:
     uv run ruff format --check src tests examples
     uv run mypy
     uv run pytest
+
+# Runnable demo of collect / salvage / typed failures (NoSandbox + ScriptedAgent (waystation.agents.scripted)).
+smoke:
+    uv run python examples/smoke_collect.py

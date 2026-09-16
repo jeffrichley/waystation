@@ -43,7 +43,7 @@ How a workspace gets into a sandbox — copied in, or bound in place. An option 
 _Avoid_: mount (one mechanism, not the concept)
 
 **Preflight**:
-Validation a sandbox backend performs before any run starts — proving the host can create sandboxes and every spec in a batch is satisfiable. Fails fast; never repairs.
+Validation a sandbox backend or agent provider performs before any run starts — proving the host can create sandboxes, every spec in a batch is satisfiable, and each agent's credentials are present. Fails fast; never repairs.
 _Avoid_: setup, bootstrap
 
 **Agent**:
@@ -51,6 +51,10 @@ The AI coding tool executed inside a sandbox (e.g. Claude Code).
 
 **Agent provider**:
 The adapter that lets waystation run a specific agent: builds its command line and environment, parses its output.
+
+**Prompt**:
+The instructions a run hands its agent. Belongs to the run, not the agent provider — one provider serves many prompts.
+_Avoid_: task, message, query
 
 **Integration strategy**:
 The pluggable rule for how a run's patch series reaches the host repo. The shipped strategy is parameterized by target (head, or a named branch) and mechanism (apply linearly, or merge).

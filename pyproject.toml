@@ -38,7 +38,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 strict = true
 mypy_path = "src"
-files = ["src", "tests"]
+files = ["src", "tests", "examples"]
 explicit_package_bases = true
 
 [tool.pytest.ini_options]

@@ -6,10 +6,11 @@ import os
 import time
 from typing import Any
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from waystation.agents.protocol import AgentCommand, AgentProvider, OutcomeReported
-from waystation.results import AgentExit
+from waystation.errors import StageError
+from waystation.results import AgentExit, AgentExited, OutcomeInvalid, OutcomeMissing
 from waystation.sandbox.protocol import Sandbox
 
 
@@ -19,16 +20,26 @@ async def run_agent[OutcomeT](
     command: AgentCommand,
     outcome_type: type[OutcomeT],
 ) -> tuple[AgentExit, OutcomeT]:
-    """Exec ``command``, parse stdout lines, validate the last Outcome report."""
+    """Exec ``command``, parse stdout lines, validate the last valid Outcome report.
+
+    Raises ``StageError`` for agent-stage failures (non-zero exit, missing/invalid
+    Outcome). Unexpected ``Exception`` from ``parse`` propagates for the orchestrator
+    to wrap as ``Errored``.
+    """
     adapter = TypeAdapter(outcome_type)
-    last_raw: Any | None = None
+    last_valid: OutcomeT | None = None
+    last_invalid: tuple[Any, ValidationError] | None = None
     started = time.perf_counter()
 
     async def on_stdout(line: str) -> None:
-        nonlocal last_raw
+        nonlocal last_valid, last_invalid
         for event in provider.parse(line):
             if isinstance(event, OutcomeReported):
-                last_raw = event.raw
+                try:
+                    last_valid = adapter.validate_python(event.raw)
+                    last_invalid = None
+                except ValidationError as exc:
+                    last_invalid = (event.raw, exc)
 
     exec_env = dict(command.env)
     for key in command.pass_env:
@@ -48,8 +59,28 @@ async def run_agent[OutcomeT](
         elapsed=elapsed,
         hanging=False,
     )
-    if last_raw is None:
-        msg = "agent reported no Outcome"
-        raise RuntimeError(msg)
-    outcome = adapter.validate_python(last_raw)
-    return agent_exit, outcome
+    if result.exit_code != 0:
+        raise StageError(
+            "agent",
+            AgentExited(
+                exit_code=result.exit_code,
+                stdout_tail=result.stdout,
+                stderr_tail=result.stderr,
+                outcome=last_valid,
+            ),
+            agent=agent_exit,
+        )
+    if last_valid is not None:
+        return agent_exit, last_valid
+    if last_invalid is not None:
+        raw, error = last_invalid
+        raise StageError(
+            "agent",
+            OutcomeInvalid(raw=raw, error=error),
+            agent=agent_exit,
+        )
+    raise StageError(
+        "agent",
+        OutcomeMissing(stdout_tail=result.stdout),
+        agent=agent_exit,
+    )

@@ -51,13 +51,17 @@ def test_prepare_workspace_requires_git_identity(
         check=True,
         capture_output=True,
     )
-    with pytest.raises(RuntimeError, match="git identity"):
+    from waystation import Refused, StageError
+
+    with pytest.raises(StageError) as caught:
         prepare_workspace(repo)
+    assert isinstance(caught.value.failure, Refused)
+    assert caught.value.failure.reason == "no_git_identity"
 
 
 @pytest.mark.git
 @pytest.mark.asyncio
-async def test_run_agent_raises_when_outcome_missing(tmp_path: Path) -> None:
+async def test_run_returns_outcome_missing_when_no_report(tmp_path: Path) -> None:
     repo = tmp_path / "host"
     repo.mkdir()
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
@@ -82,13 +86,16 @@ async def test_run_agent_raises_when_outcome_missing(tmp_path: Path) -> None:
         capture_output=True,
     )
 
+    from waystation import OutcomeMissing, RunFailed
+
     flow = Flow(
         repo,
         agent=ScriptedAgent(lines=["hello"], outcome=None),
         sandbox=NoSandbox(),
     )
-    with pytest.raises(RuntimeError, match="no Outcome"):
-        await flow.run("missing")
+    result = await flow.run("missing")
+    assert isinstance(result, RunFailed)
+    assert isinstance(result.failure, OutcomeMissing)
 
 
 @pytest.mark.unit

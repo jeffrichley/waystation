@@ -140,6 +140,8 @@ async def test_default_outcome_is_summary(host_repo: Path) -> None:
 async def test_path_prompt_is_read_at_agent_stage(
     host_repo: Path, tmp_path: Path
 ) -> None:
+    from waystation import Errored, RunFailed
+
     prompt_file = tmp_path / "prompt.txt"
     prompt_file.write_text("early", encoding="utf-8")
     flow = Flow(
@@ -149,8 +151,11 @@ async def test_path_prompt_is_read_at_agent_stage(
     )
     spec = flow.run(prompt_file, outcome=Answer)
     prompt_file.unlink()
-    with pytest.raises(FileNotFoundError):
-        await spec
+    result = await spec
+    assert isinstance(result, RunFailed)
+    assert result.stage == "agent"
+    assert isinstance(result.failure, Errored)
+    assert isinstance(result.failure.exception, FileNotFoundError)
 
 
 @pytest.mark.git

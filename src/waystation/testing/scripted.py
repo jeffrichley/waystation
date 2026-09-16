@@ -12,13 +12,15 @@ from typing import Any
 
 from pydantic import BaseModel, TypeAdapter
 
-from waystation.agents.outcome import OUTCOME_MARKER, find_outcome
+from waystation.agents.outcome import OUTCOME_MARKER
 from waystation.agents.protocol import (
     AgentCommand,
     AgentEvent,
     AgentText,
     OutcomeReported,
 )
+from waystation.errors import PreflightError
+from waystation.results import Errored
 
 
 def _find_sh() -> str:
@@ -72,7 +74,10 @@ class ScriptedAgent:
     pass_env: Sequence[str] = ()
 
     def preflight(self) -> None:
-        _find_sh()
+        try:
+            _find_sh()
+        except FileNotFoundError as exc:
+            raise PreflightError(str(exc), failure=Errored(exception=exc)) from exc
 
     def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
         del prompt, outcome_schema  # scripted playback ignores prompt/schema
@@ -94,9 +99,16 @@ class ScriptedAgent:
 
     def parse(self, line: str) -> Sequence[AgentEvent]:
         events: list[AgentEvent] = []
-        raw = find_outcome(line)
-        if raw is not None:
-            events.append(OutcomeReported(raw=raw))
-        elif line:
+        stripped = line.strip()
+        if stripped.startswith(OUTCOME_MARKER):
+            payload = stripped[len(OUTCOME_MARKER) :].strip()
+            if payload:
+                try:
+                    raw: Any = json.loads(payload)
+                except json.JSONDecodeError:
+                    raw = payload
+                events.append(OutcomeReported(raw=raw))
+                return events
+        if line:
             events.append(AgentText(text=line))
         return events

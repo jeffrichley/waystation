@@ -15,7 +15,7 @@ Why: the fan-out promise — every run reports — is the product, and it only h
 - `stage="hook"` as a sixth stage. Rejected: the dashboard column, the hook boundaries and `RunFailed.stage` share one five-word vocabulary.
 - An optional Outcome when the run supplies no schema. Rejected: the Outcome line is the completion contract (ADR-0009).
 - Losing the series when a run fails. Rejected: never lose agent work — sandcastle's dirty-worktree preservation, transferred to the ephemeral-sandbox model.
-- Parsing git's stderr to upgrade a `CommandFailed` into a `Refused`. Rejected: `Refused` is reserved for preconditions waystation checks itself (dirty working tree on a head target, missing `extra_ref`, image gone since preflight).
+- Parsing git's stderr to upgrade a `CommandFailed` into a `Refused`. Rejected: `Refused` is reserved for preconditions waystation checks itself (dirty working tree on a head target, missing `extra_ref`, image gone since preflight; [wayfinder ticket 7](https://github.com/jeffrichley/waystation/issues/7) adds a target branch checked out in another worktree, a target moved outside the process, a non-linear series and a host with no git identity).
 
 ## Consequences
 

@@ -16,6 +16,6 @@ Why: measured on Windows, a throwaway worktree costs 5.5–15 s at 5k files and 
 
 ## Consequences
 
-Debian bookworm (git 2.39), Ubuntu 22.04 (2.34) and older Xcode command-line tools cannot host waystation without a newer git. The integrate stage runs none of the user's git hooks.
+Debian bookworm (git 2.39), Ubuntu 22.04 (2.34) and older Xcode command-line tools cannot host waystation without a newer git. The integrate stage runs none of the user's git hooks. The per-repo lock is in-process only; when something outside the process moves the target between read and write, the compare-and-swap fails and the run fails with `Refused("target_moved")`, its series preserved — the flow script re-integrates, as a Kubernetes client re-reads after a 409. No cross-process file lock: it would write into the host's `.git`, and the compare-and-swap already keeps the target safe.
 
 Decided in [wayfinder ticket 7](https://github.com/jeffrichley/waystation/issues/7); facts gathered on this host against git 2.34, 2.43 and 2.54.

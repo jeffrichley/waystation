@@ -93,6 +93,9 @@ class ScriptedAgent:
     pass_env: Sequence[str] = ()
     commits: Sequence[ScriptedCommit] = ()
     uncommitted: Mapping[str, str] = field(default_factory=dict)
+    delay: float | None = None
+    linger: bool = False
+    linger_touch: str | None = None
 
     def preflight(self) -> None:
         try:
@@ -103,6 +106,8 @@ class ScriptedAgent:
     def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
         del prompt, outcome_schema  # scripted playback ignores prompt/schema
         parts: list[str] = ["set -e"]
+        if self.delay is not None:
+            parts.append(f"sleep {float(self.delay)}")
         for line in self.lines:
             parts.append(f"printf '%s\\n' {_shell_single_quote(line)}")
         for commit in self.commits:
@@ -116,6 +121,17 @@ class ScriptedAgent:
         if payload:
             marker_line = f"{OUTCOME_MARKER} {payload}"
             parts.append(f"printf '%s\\n' {_shell_single_quote(marker_line)}")
+        if self.linger:
+            touch = self.linger_touch
+            if touch is not None:
+                q = _shell_single_quote(touch)
+                parts.append(
+                    f"( while true; do printf x >> {q}; sleep 0.05; done ) &"
+                )
+            parts.append("( sleep 999 ) &")
+            if payload is None or payload == "":
+                # Block so wall/silence can cancel a still-running exec.
+                parts.append("wait")
         parts.append(f"exit {int(self.exit_code)}")
         script = "\n".join(parts)
         return AgentCommand(

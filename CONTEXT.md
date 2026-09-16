@@ -73,6 +73,10 @@ _Avoid_: result, response
 The git repository a run targets. Waystation core speaks only git, the VCS.
 _Avoid_: any forge name — GitHub/Bitbucket (forges are out of core; forge operations belong to flow scripts)
 
+**Stage**:
+One of the ordered phases a run passes through: workspace, sandbox, agent, collect, integrate. A failure is attributed to the stage it happened in.
+_Avoid_: step, phase
+
 **Hook**:
-A user-supplied function invoked at a named lifecycle point of a run.
+A user-supplied function invoked at a named point of a run — a stage boundary, or each line the agent emits.
 _Avoid_: callback, listener

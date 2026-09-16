@@ -11,7 +11,10 @@ build/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+uv.lock.bak
 
 # Local scratch
 .scratch/

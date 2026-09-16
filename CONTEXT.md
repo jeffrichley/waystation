@@ -70,7 +70,7 @@ _Avoid_: diff, changeset
 The automatic final commit capturing work the agent left uncommitted at run end; it rides the patch series and is flagged in the integration report.
 
 **Preservation branch**:
-The branch that keeps a conflicted run's patch series when integration aborts, so nothing the agent produced is lost. Created only on conflict; waystation never deletes it.
+The branch that keeps a run's patch series when integration aborts or the run fails, so nothing the agent produced is lost. Created only on conflict or failure, and only when the series is non-empty; waystation never deletes it.
 _Avoid_: backup branch, conflict branch
 
 **Resolver run**:

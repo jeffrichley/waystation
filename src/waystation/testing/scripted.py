@@ -26,13 +26,7 @@ def _find_sh() -> str:
     if found:
         return found
     if sys.platform == "win32":
-        candidates: list[Path] = [
-            Path(r"C:\Program Files\Git\bin\sh.exe"),
-            Path(r"C:\Program Files\Git\usr\bin\sh.exe"),
-            Path(r"C:\Program Files (x86)\Git\bin\sh.exe"),
-            Path(r"E:\Program Files\Git\bin\sh.exe"),
-            Path(r"E:\Program Files\Git\usr\bin\sh.exe"),
-        ]
+        candidates: list[Path] = []
         git = shutil.which("git")
         if git is not None:
             git_path = Path(git).resolve()

@@ -37,13 +37,13 @@ class Flow:
     """Defaults shared by runs against one host repo."""
 
     repo: Path | str
-    agent: AgentProvider
-    sandbox: SandboxBackend
-    base: str = "HEAD"
-    integration: None = None
-    timeouts: Timeouts = field(default_factory=Timeouts)
-    salvage: bool = True
-    hooks: Sequence[Any] = ()
+    agent: AgentProvider = field(kw_only=True)
+    sandbox: SandboxBackend = field(kw_only=True)
+    base: str = field(default="HEAD", kw_only=True)
+    integration: None = field(default=None, kw_only=True)
+    timeouts: Timeouts = field(default_factory=Timeouts, kw_only=True)
+    salvage: bool = field(default=True, kw_only=True)
+    hooks: Sequence[Any] = field(default=(), kw_only=True)
 
     def run[OutcomeT](
         self,

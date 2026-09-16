@@ -8,7 +8,6 @@ import shutil
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.workspace import Workspace
@@ -51,7 +50,6 @@ def _build_env(
 @dataclass(slots=True)
 class _HostSandbox:
     workspace: str
-    _root: Path
     _env: dict[str, str]
 
     async def exec(
@@ -142,7 +140,6 @@ class NoSandbox:
         built = _build_env(literal=merged_literal, pass_env=merged_pass)
         sandbox: Sandbox = _HostSandbox(
             workspace=str(ws.path),
-            _root=ws.path,
             _env=built,
         )
         try:

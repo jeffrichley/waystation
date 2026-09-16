@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -30,6 +31,10 @@ async def run_agent[OutcomeT](
                 last_raw = event.raw
 
     exec_env = dict(command.env)
+    for key in command.pass_env:
+        value = os.environ.get(key)
+        if value is not None:
+            exec_env[key] = value
     result = await sandbox.exec(
         list(command.argv),
         stdin=command.stdin,

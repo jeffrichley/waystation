@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from waystation import Flow, NoSandbox, prepare_workspace
+from waystation import Flow, NoSandbox, Summary, prepare_workspace
 from waystation.agents.outcome import OUTCOME_MARKER, find_outcome
 from waystation.testing import ScriptedAgent
 
@@ -99,3 +99,45 @@ def test_scripted_agent_serializes_mapping_and_lines() -> None:
     assert OUTCOME_MARKER in cmd.argv[-1]
     events = agent.parse(f'{OUTCOME_MARKER} {{"summary": "m"}}')
     assert len(events) == 1
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_pass_env_reaches_agent_command(tmp_path: Path) -> None:
+    repo = tmp_path / "host"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "T"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "t@e.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    (repo / "README").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "i"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    os.environ["WAYSTATION_TEST_PASS"] = "visible"
+    try:
+        flow = Flow(
+            repo,
+            agent=ScriptedAgent(
+                outcome={"summary": "ok"},
+                pass_env=("WAYSTATION_TEST_PASS",),
+            ),
+            sandbox=NoSandbox(),
+        )
+        result = await flow.run("pass", outcome=Summary)
+        assert result.outcome.summary == "ok"
+    finally:
+        os.environ.pop("WAYSTATION_TEST_PASS", None)

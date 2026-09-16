@@ -9,8 +9,12 @@ A plain Python script, owned by the user, that orchestrates agent runs. The hack
 _Avoid_: workflow, pipeline, config
 
 **Run**:
-One agent execution against a host repo: prepare workspace, start sandbox, execute agent, collect commits, integrate them back.
+One agent execution against a host repo: prepare workspace, start sandbox, execute agent, collect commits, and integrate them when asked.
 _Avoid_: job, ticket, session
+
+**Run spec**:
+The value a flow script builds to describe a run — prompt, agent, sandbox, integration, hooks. Awaiting it performs a run; awaiting it again performs another, with a new run id.
+_Avoid_: run (that's the execution), builder, job definition
 
 **Workspace**:
 The run's private copy of the host repo at the base ref — what the agent works in. Exists inside the sandbox for the run's lifetime.

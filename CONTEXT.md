@@ -31,11 +31,11 @@ The isolated, ephemeral environment an agent executes in — created for a run, 
 _Avoid_: container (that's one backend's implementation detail)
 
 **Sandbox backend**:
-A pluggable implementation of sandbox isolation (e.g. Docker, user-namespace, none).
+A pluggable implementation of sandbox isolation (e.g. Docker, user-namespace, none). Each configured instance of a backend is a sandbox spec.
 _Avoid_: provider (reserved for agents)
 
 **Sandbox spec**:
-The value a flow script supplies describing the sandbox it wants — which backend, image, environment, transport. A sandbox backend turns a spec into a live sandbox.
+An instance of a sandbox backend: the value a flow script supplies describing the sandbox it wants — image, environment, transport. The backend it is an instance of turns it into a live sandbox; two equal specs describe the same sandbox.
 _Avoid_: config, settings
 
 **Transport**:
@@ -61,7 +61,7 @@ The pluggable rule for how a run's patch series reaches the host repo. The shipp
 _Avoid_: branch strategy, merge-back
 
 **Integration report**:
-What integration did for a run — where commits landed, conflict state, whether a salvage commit exists. Returned alongside the Outcome.
+What integration did for a run — the target, where commits landed, conflict state. Returned alongside the Outcome when the run integrates.
 
 **Base ref**:
 The ref in the host repo a run's workspace starts from; defaults to the host repo's HEAD. Only committed state — a run never sees the host repo's uncommitted changes.
@@ -71,7 +71,7 @@ The ordered, linear sequence of commits a run produced atop its base ref — the
 _Avoid_: diff, changeset
 
 **Salvage commit**:
-The automatic final commit capturing work the agent left uncommitted at run end; it rides the patch series and is flagged in the integration report.
+The automatic final commit capturing work the agent left uncommitted at run end; it rides the patch series and is flagged on the run's result.
 
 **Preservation branch**:
 The branch that keeps a run's patch series whenever the series does not reach a target — integration conflicted, the run failed, or the run had no integration — so nothing the agent produced is lost. Created only when the series is non-empty; waystation never deletes it.

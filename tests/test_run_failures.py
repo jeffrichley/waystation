@@ -19,13 +19,13 @@ from waystation import (
     OutcomeInvalid,
     OutcomeMissing,
     RunFailed,
+    ScriptedAgent,
     StageError,
     WaystationError,
     prepare_workspace,
     run_agent,
 )
 from waystation.agents.protocol import AgentCommand, AgentEvent
-from waystation.testing import ScriptedAgent
 
 
 class Answer(BaseModel):
@@ -239,7 +239,7 @@ async def test_capture_false_keeps_only_tails(host_repo: Path) -> None:
         async with backend.start(ws, env={}, pass_env=()) as sandbox:
             # 100 short lines — over the 80-line tail limit
             script = "i=0; while [ $i -lt 100 ]; do echo line-$i; i=$((i+1)); done"
-            from waystation.testing.scripted import _find_sh
+            from waystation.agents.scripted import _find_sh
 
             result = await sandbox.exec(
                 [_find_sh(), "-c", script],

@@ -17,12 +17,13 @@ from waystation import (
     Refused,
     RunFailed,
     RunSucceeded,
+    ScriptedAgent,
+    ScriptedCommit,
     Series,
 )
 from waystation.agents.outcome import OUTCOME_MARKER, find_outcome
 from waystation.agents.protocol import AgentCommand, AgentEvent, OutcomeReported
-from waystation.testing import ScriptedAgent, ScriptedCommit
-from waystation.testing.scripted import _find_sh, _shell_single_quote
+from waystation.agents.scripted import _find_sh, _shell_single_quote
 
 
 class Answer(BaseModel):

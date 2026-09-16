@@ -9,6 +9,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from waystation.errors import StageError
+from waystation.results import CommandFailed, Refused
+from waystation.tails import bound_tail
+
 
 @dataclass(frozen=True, slots=True)
 class Workspace:
@@ -23,12 +27,23 @@ class Workspace:
 def _git(
     repo: Path, *args: str, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=check,
+    argv = ["git", "-C", str(repo), *args]
+    result = subprocess.run(
+        argv,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if check and result.returncode != 0:
+        raise StageError(
+            "workspace",
+            CommandFailed(
+                argv=tuple(argv),
+                exit_code=result.returncode,
+                stderr_tail=bound_tail(result.stderr),
+            ),
+        )
+    return result
 
 
 def prepare_workspace(
@@ -54,17 +69,39 @@ def prepare_workspace(
         or not name.stdout.strip()
         or not email.stdout.strip()
     ):
-        msg = "host repo has no git identity (user.name / user.email)"
-        raise RuntimeError(msg)
+        raise StageError(
+            "workspace",
+            Refused(
+                reason="no_git_identity",
+                detail="host repo has no git identity (user.name / user.email)",
+            ),
+        )
 
     tmp = Path(tempfile.mkdtemp(prefix=f"waystation-{rid}-"))
     try:
-        subprocess.run(
-            ["git", "clone", "--local", "--no-checkout", str(host), str(tmp)],
-            check=True,
+        clone_argv = [
+            "git",
+            "clone",
+            "--local",
+            "--no-checkout",
+            str(host),
+            str(tmp),
+        ]
+        clone = subprocess.run(
+            clone_argv,
+            check=False,
             capture_output=True,
             text=True,
         )
+        if clone.returncode != 0:
+            raise StageError(
+                "workspace",
+                CommandFailed(
+                    argv=tuple(clone_argv),
+                    exit_code=clone.returncode,
+                    stderr_tail=bound_tail(clone.stderr),
+                ),
+            )
         branch = f"waystation/{rid}"
         _git(tmp, "checkout", "-B", branch, base_sha)
         _git(tmp, "config", "user.name", name.stdout.strip())

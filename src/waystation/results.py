@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
+
+from pydantic import ValidationError
 
 Stage = Literal["workspace", "sandbox", "agent", "collect", "integrate"]
+
+RefusalReason = Literal[
+    "dirty_tree",
+    "target_checked_out",
+    "target_moved",
+    "missing_extra_ref",
+    "image_missing",
+    "nonlinear_series",
+    "no_git_identity",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +67,69 @@ class Series:
 
 
 @dataclass(frozen=True, slots=True)
+class TimedOut:
+    bound: str
+    limit: float
+    elapsed: float
+
+
+@dataclass(frozen=True, slots=True)
+class AgentExited:
+    exit_code: int
+    stdout_tail: str
+    stderr_tail: str
+    outcome: Any | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OutcomeMissing:
+    stdout_tail: str
+
+
+@dataclass(frozen=True, slots=True)
+class OutcomeInvalid:
+    raw: Any
+    error: ValidationError
+
+
+@dataclass(frozen=True, slots=True)
+class HookRaised:
+    hook: str
+    function: str
+    exception: BaseException
+
+
+@dataclass(frozen=True, slots=True)
+class CommandFailed:
+    argv: Sequence[str]
+    exit_code: int
+    stderr_tail: str
+
+
+@dataclass(frozen=True, slots=True)
+class Refused:
+    reason: RefusalReason
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class Errored:
+    exception: BaseException
+
+
+Failure = (
+    TimedOut
+    | AgentExited
+    | OutcomeMissing
+    | OutcomeInvalid
+    | HookRaised
+    | CommandFailed
+    | Refused
+    | Errored
+)
+
+
+@dataclass(frozen=True, slots=True)
 class RunSucceeded[OutcomeT]:
     """A run that completed its agent stage with a validated Outcome."""
 
@@ -67,3 +142,18 @@ class RunSucceeded[OutcomeT]:
     preserved: str | None
     outcome: OutcomeT
     report: None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunFailed:
+    """A run that failed at a stage; never raised from an awaited run."""
+
+    run_id: str
+    name: str | None
+    base_sha: str | None
+    elapsed: Mapping[Stage, float]
+    agent: AgentExit | None
+    series: Series | None
+    preserved: str | None
+    stage: Stage
+    failure: Failure

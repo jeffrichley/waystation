@@ -13,7 +13,17 @@ from pydantic.json_schema import GenerateJsonSchema
 
 from waystation.agents.protocol import AgentProvider
 from waystation.agents.run_agent import run_agent
-from waystation.results import RunSucceeded, Summary, Timeouts
+from waystation.errors import PreflightError, StageError
+from waystation.results import (
+    AgentExit,
+    Errored,
+    Failure,
+    RunFailed,
+    RunSucceeded,
+    Stage,
+    Summary,
+    Timeouts,
+)
 from waystation.sandbox.protocol import SandboxBackend
 from waystation.workspace import prepare_workspace
 
@@ -30,6 +40,28 @@ def _assert_object_outcome(outcome_type: type[Any]) -> None:
     if schema_type != "object" and "properties" not in schema:
         msg = f"outcome type must be an object-shaped type, got {outcome_type!r}"
         raise TypeError(msg)
+
+
+def _run_failed(
+    *,
+    run_id: str,
+    base_sha: str | None,
+    elapsed: dict[Stage, float],
+    agent: AgentExit | None,
+    stage: Stage,
+    failure: Failure,
+) -> RunFailed:
+    return RunFailed(
+        run_id=run_id,
+        name=None,
+        base_sha=base_sha,
+        elapsed=elapsed,
+        agent=agent,
+        series=None,
+        preserved=None,
+        stage=stage,
+        failure=failure,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,45 +110,100 @@ class RunSpec[OutcomeT]:
     def __await__(self):  # type: ignore[no-untyped-def]
         return self._execute().__await__()
 
-    async def _execute(self) -> RunSucceeded[OutcomeT]:
-        self.agent.preflight()
-        await self.sandbox.preflight()
+    async def _execute(self) -> RunSucceeded[OutcomeT] | RunFailed:
+        run_id = ""
+        base_sha: str | None = None
+        elapsed: dict[Stage, float] = {}
+        agent_exit: AgentExit | None = None
+        stage: Stage = "workspace"
 
-        elapsed: dict[str, float] = {}
+        try:
+            try:
+                self.agent.preflight()
+                await self.sandbox.preflight()
+            except PreflightError:
+                raise
+            except Exception as exc:
+                raise PreflightError(str(exc), failure=Errored(exception=exc)) from exc
 
-        t0 = time.perf_counter()
-        workspace = prepare_workspace(self.repo, base=self.base)
-        elapsed["workspace"] = time.perf_counter() - t0
+            stage = "workspace"
+            t0 = time.perf_counter()
+            workspace = prepare_workspace(self.repo, base=self.base)
+            elapsed["workspace"] = time.perf_counter() - t0
+            run_id = workspace.run_id
+            base_sha = workspace.base_sha
 
-        t1 = time.perf_counter()
-        async with self.sandbox.start(workspace, env={}, pass_env=()) as sandbox:
-            elapsed["sandbox"] = time.perf_counter() - t1
+            stage = "sandbox"
+            t1 = time.perf_counter()
+            async with self.sandbox.start(workspace, env={}, pass_env=()) as sandbox:
+                elapsed["sandbox"] = time.perf_counter() - t1
 
-            if isinstance(self.prompt, Path):
-                prompt_text = self.prompt.read_text(encoding="utf-8")
-            else:
-                prompt_text = self.prompt
+                stage = "agent"
+                if isinstance(self.prompt, Path):
+                    prompt_text = self.prompt.read_text(encoding="utf-8")
+                else:
+                    prompt_text = self.prompt
 
-            schema = TypeAdapter(self.outcome_type).json_schema()
-            command = self.agent.command(prompt_text, schema)
+                schema = TypeAdapter(self.outcome_type).json_schema()
+                try:
+                    command = self.agent.command(prompt_text, schema)
+                except Exception as exc:
+                    raise StageError("agent", Errored(exception=exc)) from exc
 
-            t2 = time.perf_counter()
-            agent_exit, outcome = await run_agent(
-                sandbox,
-                self.agent,
-                command,
-                self.outcome_type,
+                t2 = time.perf_counter()
+                try:
+                    agent_exit, outcome = await run_agent(
+                        sandbox,
+                        self.agent,
+                        command,
+                        self.outcome_type,
+                    )
+                except StageError:
+                    elapsed["agent"] = time.perf_counter() - t2
+                    raise
+                except Exception as exc:
+                    elapsed["agent"] = time.perf_counter() - t2
+                    raise StageError("agent", Errored(exception=exc)) from exc
+                elapsed["agent"] = time.perf_counter() - t2
+
+            return RunSucceeded(
+                run_id=run_id,
+                name=None,
+                base_sha=base_sha,
+                elapsed=elapsed,
+                agent=agent_exit,
+                series=None,
+                preserved=None,
+                outcome=outcome,
+                report=None,
             )
-            elapsed["agent"] = time.perf_counter() - t2
-
-        return RunSucceeded(
-            run_id=workspace.run_id,
-            name=None,
-            base_sha=workspace.base_sha,
-            elapsed=elapsed,  # type: ignore[arg-type]
-            agent=agent_exit,
-            series=None,
-            preserved=None,
-            outcome=outcome,
-            report=None,
-        )
+        except StageError as err:
+            return _run_failed(
+                run_id=run_id,
+                base_sha=base_sha,
+                elapsed=elapsed,
+                agent=err.agent if err.agent is not None else agent_exit,
+                stage=err.stage,
+                failure=err.failure,
+            )
+        except PreflightError as err:
+            failure: Failure = (
+                err.failure if err.failure is not None else Errored(exception=err)
+            )
+            return _run_failed(
+                run_id=run_id,
+                base_sha=base_sha,
+                elapsed=elapsed,
+                agent=agent_exit,
+                stage=stage,
+                failure=failure,
+            )
+        except Exception as exc:
+            return _run_failed(
+                run_id=run_id,
+                base_sha=base_sha,
+                elapsed=elapsed,
+                agent=agent_exit,
+                stage=stage,
+                failure=Errored(exception=exc),
+            )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -10,7 +11,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
+from waystation.tails import TailBuffer
 from waystation.workspace import Workspace
+
+logger = logging.getLogger("waystation")
 
 # Minimal host keys required for process startup on Windows / POSIX.
 _BASE_PASS_ENV = (
@@ -78,7 +82,8 @@ class _HostSandbox:
         async def _pump(
             stream: asyncio.StreamReader | None,
             callback: LineCallback | None,
-            sink: list[str],
+            full: list[str] | None,
+            tail: TailBuffer | None,
         ) -> None:
             if stream is None:
                 return
@@ -87,19 +92,27 @@ class _HostSandbox:
                 if not line_b:
                     break
                 text = line_b.decode("utf-8", errors="replace")
-                if capture or callback is not None:
-                    sink.append(text)
+                if full is not None:
+                    full.append(text)
+                if tail is not None:
+                    tail.append(text)
                 if callback is not None:
                     maybe = callback(text.rstrip("\r\n"))
                     if asyncio.iscoroutine(maybe):
                         await maybe
 
-        stdout_parts: list[str] = []
-        stderr_parts: list[str] = []
+        stdout_full: list[str] | None = [] if capture else None
+        stderr_full: list[str] | None = [] if capture else None
+        stdout_tail = None if capture else TailBuffer()
+        stderr_tail = None if capture else TailBuffer()
         assert process.stdout is not None
         assert process.stderr is not None
-        pump_out = asyncio.create_task(_pump(process.stdout, on_stdout, stdout_parts))
-        pump_err = asyncio.create_task(_pump(process.stderr, on_stderr, stderr_parts))
+        pump_out = asyncio.create_task(
+            _pump(process.stdout, on_stdout, stdout_full, stdout_tail)
+        )
+        pump_err = asyncio.create_task(
+            _pump(process.stderr, on_stderr, stderr_full, stderr_tail)
+        )
 
         if stdin is not None and process.stdin is not None:
             process.stdin.write(stdin.encode("utf-8"))
@@ -110,10 +123,20 @@ class _HostSandbox:
 
         exit_code = await process.wait()
         await asyncio.gather(pump_out, pump_err)
+        if capture:
+            assert stdout_full is not None
+            assert stderr_full is not None
+            return ExecResult(
+                exit_code=exit_code,
+                stdout="".join(stdout_full),
+                stderr="".join(stderr_full),
+            )
+        assert stdout_tail is not None
+        assert stderr_tail is not None
         return ExecResult(
             exit_code=exit_code,
-            stdout="".join(stdout_parts),
-            stderr="".join(stderr_parts),
+            stdout=stdout_tail.text(),
+            stderr=stderr_tail.text(),
         )
 
 
@@ -145,4 +168,7 @@ class NoSandbox:
         try:
             yield sandbox
         finally:
-            shutil.rmtree(ws.path, ignore_errors=True)
+            try:
+                shutil.rmtree(ws.path)
+            except OSError:
+                logger.exception("teardown failed while removing workspace %s", ws.path)

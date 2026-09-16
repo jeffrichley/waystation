@@ -4,7 +4,7 @@ status: accepted
 
 # Workspace transport is a backend option, copy by default on Windows
 
-How a workspace gets into a sandbox is an option on the backend — `DockerSandbox(transport="auto"|"copy"|"bind")`, where `auto` means copy on Windows and bind on Linux and macOS — not a pluggable seam. The protocol promises only that the workspace appears at `/workspace`, and commits always leave via `git format-patch` on exec stdout.
+How a workspace gets into a sandbox is an option on the backend — `DockerSandbox(transport="auto"|"copy"|"bind")`, where `auto` means copy on Windows and bind on Linux and macOS — not a pluggable seam. The protocol promises only that every exec runs with its working directory at the workspace root — `/workspace` on container backends, a host temp directory under `NoSandbox` (narrowed in [wayfinder ticket 7](https://github.com/jeffrichley/waystation/issues/7): a host path cannot promise `/workspace`) — and commits always leave via `git format-patch` on exec stdout.
 
 Why not a seam: every mechanism is backend-specific (`docker cp`, `-v`, bwrap `--bind`, nothing) and the axis is ragged (NoSandbox has none, bwrap binds only), so a transport protocol would be an enum wearing a protocol's clothes. Promote it only if a backend-agnostic mechanism such as tar over stdin appears.
 

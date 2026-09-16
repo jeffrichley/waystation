@@ -9,6 +9,6 @@ How a run's patch series reaches the host repo is an integration strategy (GoF S
 ## Considered options
 
 - Three named branch strategies (`head` / `merge-to-head` / named branch), as charted — collapsed into the two orthogonal knobs.
-- A conflict-resolution seam — still open in [wayfinder ticket 11](https://github.com/jeffrichley/waystation/issues/11).
+- A conflict-resolution seam — rejected in ADR-0015: resolution is an ordinary run the flow script launches.
 
 Decided in [wayfinder ticket 3](https://github.com/jeffrichley/waystation/issues/3).

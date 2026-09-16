@@ -65,6 +65,14 @@ _Avoid_: diff, changeset
 **Salvage commit**:
 The automatic final commit capturing work the agent left uncommitted at run end; it rides the patch series and is flagged in the integration report.
 
+**Preservation branch**:
+The branch that keeps a conflicted run's patch series when integration aborts, so nothing the agent produced is lost. Created only on conflict; waystation never deletes it.
+_Avoid_: backup branch, conflict branch
+
+**Resolver run**:
+An ordinary run whose prompt asks the agent to replay a preservation branch onto a target, resolving conflicts commit by commit. Nothing distinguishes it from any other run but its prompt.
+_Avoid_: merger, fixer, healer, conflict handler
+
 **Outcome**:
 The structured result an agent reports back to the flow script at the end of a run.
 _Avoid_: result, response

@@ -13,6 +13,6 @@ check:
     uv run mypy
     uv run pytest
 
-# Runnable demo of collect / salvage / typed failures (NoSandbox + ScriptedAgent (waystation.agents.scripted)).
+# Runnable demo: ScriptedAgent → Integration onto a named branch.
 smoke:
     uv run python examples/smoke_collect.py

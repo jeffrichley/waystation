@@ -1,9 +1,10 @@
-"""Smoke demo: what waystation does today (collect + preserve + typed failures).
+"""Smoke demo: land an agent series onto a named branch (issue #23).
 
-Creates a throwaway host repo, runs three ScriptedAgent flows on NoSandbox, and
-prints the typed results plus any ``waystation/<run-id>`` preservation branches.
+Creates a throwaway host repo, runs one ScriptedAgent flow with
+``Integration("agents/demo")``, and shows the typed result plus the
+target branch — without touching HEAD.
 
-Requires: git, POSIX sh (Git Bash on Windows). No Docker, no API keys.
+Requires: git ≥ 2.40, POSIX sh (Git Bash on Windows). No Docker, no API keys.
 
 Run::
 
@@ -23,14 +24,13 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from waystation import (
-    AgentExited,
     Flow,
+    Integration,
     NoSandbox,
     RunFailed,
     RunSucceeded,
     ScriptedAgent,
     ScriptedCommit,
-    Summary,
 )
 
 
@@ -61,146 +61,61 @@ def _init_host(root: Path) -> Path:
     return repo
 
 
-def _show_preserved(repo: Path, branch: str | None) -> None:
-    if not branch:
-        print("  preserved: (none)")
-        return
-    tip = _git(repo, "rev-parse", "--short", branch)
-    subject = _git(repo, "log", "-1", "--format=%s", branch)
-    print(f"  preserved: {branch} @ {tip} — {subject}")
-    files = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", branch)
-    for name in files.splitlines():
-        if name:
-            print(f"    + {name}")
-
-
-async def _run_cases(host: Path) -> None:
-    head_before = _git(host, "rev-parse", "--short", "HEAD")
-    print(f"host HEAD before: {head_before}")
-    print()
-
-    # 1) Agent commits → series preserved on waystation/<run-id>
-    print("=== 1. commit lands on preservation branch ===")
-    flow = Flow(
-        host,
-        agent=ScriptedAgent(
-            commits=(
-                ScriptedCommit(
-                    message="add greeting",
-                    files={"hello.txt": "hello from the agent\n"},
-                ),
-            ),
-            outcome=Answer(summary="committed"),
-        ),
-        sandbox=NoSandbox(),
-    )
-    result = await flow.run("write a greeting", outcome=Answer)
-    match result:
-        case RunSucceeded(series=series, preserved=preserved, outcome=outcome):
-            print(f"  result: RunSucceeded outcome={outcome!r}")
-            print(
-                f"  series: commits={series.commits if series else 0} "
-                f"salvaged={series.salvaged if series else False}"
-            )
-            _show_preserved(host, preserved)
-        case RunFailed(stage=stage, failure=failure):
-            print(f"  unexpected failure: {stage} {failure!r}")
-    print(f"  host HEAD still: {_git(host, 'rev-parse', '--short', 'HEAD')}")
-    print()
-
-    # 2) Dirty worktree → salvage WIP commit
-    print("=== 2. uncommitted work is salvaged ===")
-    flow = Flow(
-        host,
-        agent=ScriptedAgent(
-            uncommitted={"scratch.txt": "forgot to commit\n"},
-            outcome=Answer(summary="salvaged"),
-        ),
-        sandbox=NoSandbox(),
-    )
-    result = await flow.run("leave a dirty file", outcome=Answer)
-    match result:
-        case RunSucceeded(series=series, preserved=preserved):
-            print("  result: RunSucceeded")
-            print(
-                f"  series: commits={series.commits if series else 0} "
-                f"salvaged={series.salvaged if series else False}"
-            )
-            _show_preserved(host, preserved)
-        case RunFailed(stage=stage, failure=failure):
-            print(f"  unexpected failure: {stage} {failure!r}")
-    print()
-
-    # 3) Non-zero exit → RunFailed, but commits still preserved
-    print("=== 3. agent exits non-zero; series still preserved ===")
-    flow = Flow(
-        host,
-        agent=ScriptedAgent(
-            commits=(
-                ScriptedCommit(
-                    message="partial work",
-                    files={"partial.txt": "still worth keeping\n"},
-                ),
-            ),
-            outcome=Answer(summary="crashed"),
-            exit_code=7,
-        ),
-        sandbox=NoSandbox(),
-    )
-    result = await flow.run("crash after committing", outcome=Answer)
-    match result:
-        case RunFailed(
-            stage=stage, failure=failure, series=series, preserved=preserved
-        ):
-            print(f"  result: RunFailed stage={stage}")
-            match failure:
-                case AgentExited(exit_code=code, outcome=out):
-                    print(f"  failure: AgentExited({code}) outcome={out!r}")
-                case _:
-                    print(f"  failure: {failure!r}")
-            print(f"  series: commits={series.commits if series else 0}")
-            _show_preserved(host, preserved)
-        case RunSucceeded():
-            print("  unexpected success")
-    print()
-
-    # 4) Empty series → success, no branch
-    print("=== 4. empty series (outcome only) ===")
-    flow = Flow(
-        host,
-        agent=ScriptedAgent(outcome=Summary(summary="nothing to land")),
-        sandbox=NoSandbox(),
-    )
-    result = await flow.run("research only")
-    match result:
-        case RunSucceeded(series=series, preserved=preserved, outcome=outcome):
-            print(f"  result: RunSucceeded outcome={outcome!r}")
-            print(f"  series: commits={series.commits if series else 0}")
-            print(f"  preserved: {preserved!r}")
-        case RunFailed(stage=stage, failure=failure):
-            print(f"  unexpected failure: {stage} {failure!r}")
-    print()
-
-    print(f"host HEAD after (unchanged): {_git(host, 'rev-parse', '--short', 'HEAD')}")
-    branches = [
-        b
-        for b in _git(host, "for-each-ref", "--format=%(refname:short)").splitlines()
-        if b.startswith("waystation/")
-    ]
-    print(f"preservation branches left behind: {len(branches)}")
-    for b in branches:
-        print(f"  - {b}")
-
-
 async def main() -> None:
     # Windows often logs teardown PermissionError; result kind is unchanged.
     logging.getLogger("waystation").setLevel(logging.CRITICAL)
     root = Path(tempfile.mkdtemp(prefix="waystation-smoke-"))
     try:
         host = _init_host(root)
+        head = _git(host, "rev-parse", "--short", "HEAD")
         print(f"throwaway host repo: {host}")
+        print(f"host HEAD: {head}")
         print()
-        await _run_cases(host)
+
+        print("=== land ScriptedAgent commits onto agents/demo (apply) ===")
+        flow = Flow(
+            host,
+            agent=ScriptedAgent(
+                commits=(
+                    ScriptedCommit(
+                        message="add greeting",
+                        files={"hello.txt": "hello from the agent\n"},
+                    ),
+                ),
+                outcome=Answer(summary="landed"),
+            ),
+            sandbox=NoSandbox(),
+            integration=Integration("agents/demo"),
+        )
+        result = await flow.run("write a greeting", outcome=Answer)
+
+        match result:
+            case RunSucceeded(
+                series=series,
+                preserved=preserved,
+                outcome=outcome,
+                report=report,
+            ):
+                print(f"  result:    RunSucceeded outcome={outcome!r}")
+                commits = series.commits if series else 0
+                salvaged = series.salvaged if series else False
+                print(f"  series:    commits={commits} salvaged={salvaged}")
+                print(f"  preserved: {preserved!r}  (None = integrated)")
+                if report is not None:
+                    after = report.target_after[:8] if report.target_after else None
+                    print(f"  report:    target={report.target}")
+                    print(f"             mechanism={report.mechanism}")
+                    print(f"             before={report.target_before[:8]}…")
+                    print(f"             after={after}…")
+                    print(f"             landed={len(report.landed)} commit(s)")
+                head_now = _git(host, "rev-parse", "--short", "HEAD")
+                tip = _git(host, "log", "-1", "--oneline", "agents/demo")
+                body = _git(host, "show", "agents/demo:hello.txt")
+                print(f"  host HEAD still: {head_now}")
+                print(f"  agents/demo tip: {tip}")
+                print(f"  hello.txt on branch: {body!r}")
+            case RunFailed(stage=stage, failure=failure):
+                print(f"  unexpected failure: {stage} {failure!r}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
         print()

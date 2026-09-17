@@ -216,7 +216,7 @@ class _HostSandbox:
 
     def _assign_windows_job(self, process: asyncio.subprocess.Process) -> None:
         """Place the process in a Job Object so tree kill is reliable."""
-        if process.pid is None:
+        if sys.platform != "win32" or process.pid is None:  # pragma: no cover
             return
         try:
             import ctypes

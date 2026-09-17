@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import logging
 import secrets
-import shutil
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -44,7 +43,7 @@ from waystation.results import (
     Timeouts,
 )
 from waystation.sandbox.protocol import Sandbox, SandboxBackend
-from waystation.workspace import Workspace, prepare_workspace
+from waystation.workspace import Workspace, prepare_workspace, remove_workspace
 
 logger = logging.getLogger("waystation")
 
@@ -406,7 +405,8 @@ class RunSpec[OutcomeT]:
                 await hooks.fire("workspace_ready", "workspace", ctx)
             except BaseException:
                 # No sandbox owns the workspace yet, so nothing else removes it.
-                shutil.rmtree(workspace.path, ignore_errors=True)
+                with contextlib.suppress(OSError):
+                    remove_workspace(workspace.path)
                 raise
 
             stage = "sandbox"

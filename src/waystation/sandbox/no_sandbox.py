@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.tails import TailBuffer
-from waystation.workspace import Workspace
+from waystation.workspace import Workspace, remove_workspace
 
 logger = logging.getLogger("waystation")
 
@@ -90,13 +90,12 @@ def _kill_process_tree(
 
 def _rmtree_retry(path: str | os.PathLike[str], *, attempts: int = 5) -> None:
     """Remove a workspace dir; retry briefly on Windows file-lock races."""
-    import shutil
     import time
 
     last: OSError | None = None
     for i in range(attempts):
         try:
-            shutil.rmtree(path)
+            remove_workspace(path)
             return
         except OSError as exc:
             last = exc

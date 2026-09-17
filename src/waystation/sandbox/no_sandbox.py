@@ -9,10 +9,10 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 
-from waystation.sandbox.process_tree import (
+from waystation.sandbox.processes import (
+    ProcessStrategy,
     ProcessTree,
-    ProcessTreeStrategy,
-    host_process_trees,
+    host_processes,
 )
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.tails import TailBuffer
@@ -20,38 +20,19 @@ from waystation.workspace import Workspace, remove_workspace
 
 logger = logging.getLogger("waystation")
 
-# Minimal host keys required for process startup on Windows / POSIX.
-_BASE_PASS_ENV = (
-    "PATH",
-    "PATHEXT",
-    "SYSTEMROOT",
-    "SYSTEMDRIVE",
-    "WINDIR",
-    "COMSPEC",
-    "TMP",
-    "TEMP",
-    "TMPDIR",
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
-)
-
 
 def _build_env(
     *,
+    base: Sequence[str],
     literal: Mapping[str, str],
     pass_env: Sequence[str],
-    extra: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     env: dict[str, str] = {}
-    for key in (*_BASE_PASS_ENV, *pass_env):
+    for key in (*base, *pass_env):
         value = os.environ.get(key)
         if value is not None:
             env[key] = value
     env.update(literal)
-    if extra:
-        env.update(extra)
     return env
 
 
@@ -74,7 +55,7 @@ def _rmtree_retry(path: str | os.PathLike[str], *, attempts: int = 5) -> None:
 class _HostSandbox:
     workspace: str
     _env: dict[str, str]
-    _strategy: ProcessTreeStrategy
+    _strategy: ProcessStrategy
     _trees: list[ProcessTree] = field(default_factory=list)
 
     async def exec(
@@ -186,7 +167,7 @@ class NoSandbox:
 
     env: Mapping[str, str] = field(default_factory=dict)
     pass_env: Sequence[str] = ()
-    process_trees: ProcessTreeStrategy = field(default_factory=host_process_trees)
+    processes: ProcessStrategy = field(default_factory=host_processes)
 
     async def preflight(self) -> None:
         return None
@@ -201,11 +182,15 @@ class NoSandbox:
     ) -> AsyncIterator[Sandbox]:
         merged_literal = {**dict(self.env), **dict(env)}
         merged_pass = (*self.pass_env, *pass_env)
-        built = _build_env(literal=merged_literal, pass_env=merged_pass)
+        built = _build_env(
+            base=self.processes.base_env_keys(),
+            literal=merged_literal,
+            pass_env=merged_pass,
+        )
         sandbox = _HostSandbox(
             workspace=str(ws.path),
             _env=built,
-            _strategy=self.process_trees,
+            _strategy=self.processes,
         )
         try:
             yield sandbox

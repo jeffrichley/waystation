@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
+from waystation._redaction import redact_argv
+
 Stage = Literal["workspace", "sandbox", "agent", "collect", "integrate"]
 
 HookName = Literal[
@@ -124,9 +126,14 @@ class HookRaised:
 
 @dataclass(frozen=True, slots=True)
 class CommandFailed:
+    """A command exited non-zero. ``argv`` is redacted, whoever built it."""
+
     argv: Sequence[str]
     exit_code: int
     stderr_tail: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "argv", redact_argv(self.argv))
 
 
 @dataclass(frozen=True, slots=True)

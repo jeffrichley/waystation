@@ -7,7 +7,7 @@ import contextlib
 import logging
 import secrets
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -19,7 +19,7 @@ from pydantic.json_schema import GenerateJsonSchema
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
-from waystation.collect import CollectResult, collect
+from waystation.collect import CollectResult, PatchSeries, collect
 from waystation.errors import PreflightError, StageError
 from waystation.hooks import (
     HookEntry,
@@ -37,7 +37,6 @@ from waystation.integration import (
 from waystation.results import (
     AgentExit,
     Errored,
-    Failure,
     IntegrationReport,
     Refused,
     RunFailed,
@@ -84,28 +83,67 @@ def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
     return exc if isinstance(exc, StageError) else StageError(stage, Errored(exc))
 
 
-def _run_failed(
-    *,
-    run_id: str,
-    base_sha: str | None,
-    elapsed: dict[Stage, float],
-    agent: AgentExit | None,
-    stage: Stage,
-    failure: Failure,
-    series: Series | None = None,
-    preserved: str | None = None,
-) -> RunFailed:
-    return RunFailed(
-        run_id=run_id,
-        name=None,
-        base_sha=base_sha,
-        elapsed=elapsed,
-        agent=agent,
-        series=series,
-        preserved=preserved,
-        stage=stage,
-        failure=failure,
-    )
+@dataclass(slots=True)
+class _RunRecord:
+    """What a run has gathered so far, and the one failure it will report."""
+
+    run_id: str
+    stage: Stage = "workspace"
+    base_sha: str | None = None
+    elapsed: dict[Stage, float] = field(default_factory=dict)
+    agent: AgentExit | None = None
+    series: Series | None = None
+    patches: PatchSeries | None = None
+    preserved: str | None = None
+    failure: StageError | None = None
+
+    @contextlib.contextmanager
+    def entering(self, stage: Stage) -> Iterator[None]:
+        """Enter ``stage``; its elapsed time is recorded however it ends."""
+        self.stage = stage
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.elapsed[stage] = time.perf_counter() - started
+
+    def fail(self, err: StageError) -> None:
+        """Keep the first failure; log any later one (ADR-0024)."""
+        if self.failure is not None:
+            _log_later_failure(self.run_id, err)
+            return
+        self.failure = err
+        if err.agent is not None:
+            self.agent = err.agent
+
+    def failed(self) -> RunFailed:
+        assert self.failure is not None
+        return RunFailed(
+            run_id=self.run_id,
+            name=None,
+            base_sha=self.base_sha,
+            elapsed=dict(self.elapsed),
+            agent=self.agent,
+            series=self.series,
+            preserved=self.preserved,
+            stage=self.failure.stage,
+            failure=self.failure.failure,
+        )
+
+    def succeeded[OutcomeT](
+        self, outcome: OutcomeT, report: IntegrationReport | None
+    ) -> RunSucceeded[OutcomeT]:
+        return RunSucceeded(
+            run_id=self.run_id,
+            name=None,
+            base_sha=self.base_sha,
+            elapsed=dict(self.elapsed),
+            agent=self.agent,
+            series=self.series,
+            preserved=self.preserved,
+            outcome=outcome,
+            report=report,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,206 +380,173 @@ class RunSpec[OutcomeT]:
                 TimedOut(bound=bound, limit=seconds, elapsed=elapsed),
             ) from exc
 
-    async def _teardown(
-        self, cm: AbstractAsyncContextManager[Sandbox], run_id: str
-    ) -> None:
-        """Leave the sandbox; a failure is logged, never reported (ADR-0016)."""
-
-        async def _leave() -> None:
-            await cm.__aexit__(None, None, None)
-
-        try:
-            await self._bounded("sandbox", "teardown", self.timeouts.teardown, _leave)
-        except Exception as exc:
-            _log_later_failure(run_id, _as_stage_error("sandbox", exc))
-
     async def _execute(self) -> RunSucceeded[OutcomeT] | RunFailed:
         state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
         ctx = RunContext(state)
-        result = await self._lifecycle(ctx, state)
-        end_stage: Stage
-        if isinstance(result, RunFailed):
-            end_stage = result.stage
-        else:
-            end_stage = "integrate" if result.report is not None else "collect"
+        record = _RunRecord(run_id=state.run_id)
+        result = await self._lifecycle(ctx, state, record)
+        end_stage = result.stage if isinstance(result, RunFailed) else record.stage
         try:
             # Every run_end hook sees the result, even after one raises.
             await self.hook_registry.fire(
                 "run_end", end_stage, ctx, result, stop_on_raise=False
             )
         except StageError as err:
-            if isinstance(result, RunFailed):
-                _log_later_failure(result.run_id, err)
-                return result
-            return _run_failed(
-                run_id=result.run_id,
-                base_sha=result.base_sha,
-                elapsed=dict(result.elapsed),
-                agent=result.agent,
-                stage=err.stage,
-                failure=err.failure,
-                series=result.series,
-                preserved=result.preserved,
-            )
+            record.fail(err)
+            return record.failed()
         return result
 
     async def _lifecycle(
-        self, ctx: RunContext, state: RunState
+        self, ctx: RunContext, state: RunState, record: _RunRecord
     ) -> RunSucceeded[OutcomeT] | RunFailed:
-        hooks = self.hook_registry
-        run_id = state.run_id
-        base_sha: str | None = None
-        elapsed: dict[Stage, float] = {}
-        agent_exit: AgentExit | None = None
-        series: Series | None = None
-        preserved: str | None = None
-        report: IntegrationReport | None = None
-        patch_series = None
-        stage: Stage = "workspace"
-        timeouts = self.timeouts
-
+        """Run the stages in order; each phase below owns its own stages."""
         try:
-            await hooks.fire("run_start", "workspace", ctx)
-            try:
-                self.agent.preflight()
-                await self.sandbox.preflight()
-            except PreflightError:
-                raise
-            except Exception as exc:
-                raise PreflightError(str(exc), failure=Errored(exception=exc)) from exc
+            await self.hook_registry.fire("run_start", "workspace", ctx)
+            await self._preflight()
+            workspace = await self._prepare(ctx, state, record)
+            outcome = await self._in_sandbox(ctx, state, record, workspace)
+            if record.failure is not None:
+                self._preserve(record)
+                return record.failed()
+            assert outcome is not None
+            return await self._land(ctx, record, outcome)
+        except PreflightError as err:
+            failure = err.failure if err.failure is not None else Errored(err)
+            record.fail(StageError(record.stage, failure))
+        except Exception as exc:
+            record.fail(_as_stage_error(record.stage, exc))
+        return record.failed()
 
-            stage = "workspace"
-            t0 = time.perf_counter()
+    async def _preflight(self) -> None:
+        try:
+            self.agent.preflight()
+            await self.sandbox.preflight()
+        except PreflightError:
+            raise
+        except Exception as exc:
+            raise PreflightError(str(exc), failure=Errored(exception=exc)) from exc
 
-            async def _workspace() -> Workspace:
-                return await asyncio.to_thread(
-                    prepare_workspace, self.repo, base=self.base, run_id=run_id
-                )
+    async def _prepare(
+        self, ctx: RunContext, state: RunState, record: _RunRecord
+    ) -> Workspace:
+        """Workspace stage: a private clone of the base, then ``workspace_ready``."""
 
-            workspace: Workspace = await self._bounded(
-                "workspace", "workspace", timeouts.workspace, _workspace
+        async def _workspace() -> Workspace:
+            return await asyncio.to_thread(
+                prepare_workspace, self.repo, base=self.base, run_id=record.run_id
             )
-            elapsed["workspace"] = time.perf_counter() - t0
-            base_sha = workspace.base_sha
-            state.base_sha = base_sha
-            try:
-                await hooks.fire("workspace_ready", "workspace", ctx)
-            except BaseException:
-                # No sandbox owns the workspace yet, so nothing else removes it.
-                with contextlib.suppress(OSError):
-                    remove_workspace(workspace.path)
-                raise
 
-            stage = "sandbox"
-            t1 = time.perf_counter()
+        with record.entering("workspace"):
+            workspace: Workspace = await self._bounded(
+                "workspace", "workspace", self.timeouts.workspace, _workspace
+            )
+        record.base_sha = state.base_sha = workspace.base_sha
+        try:
+            await self.hook_registry.fire("workspace_ready", "workspace", ctx)
+        except BaseException:
+            # No sandbox owns the workspace yet, so nothing else removes it.
+            with contextlib.suppress(OSError):
+                remove_workspace(workspace.path)
+            raise
+        return workspace
 
-            # start() is an async context manager — bound covers enter only.
-            cm = self.sandbox.start(workspace, env={}, pass_env=())
+    async def _in_sandbox(
+        self,
+        ctx: RunContext,
+        state: RunState,
+        record: _RunRecord,
+        workspace: Workspace,
+    ) -> OutcomeT | None:
+        """Sandbox, agent and collect stages; the sandbox is gone on return."""
+        # start() is an async context manager — the bound covers enter only.
+        cm = self.sandbox.start(workspace, env={}, pass_env=())
 
-            async def _enter_sandbox() -> Sandbox:
-                return await cm.__aenter__()
+        async def _enter() -> Sandbox:
+            return await cm.__aenter__()
 
+        with record.entering("sandbox"):
             try:
                 sandbox: Sandbox = await self._bounded(
-                    "sandbox", "sandbox", timeouts.sandbox, _enter_sandbox
+                    "sandbox", "sandbox", self.timeouts.sandbox, _enter
                 )
             except BaseException as exc:
                 await cm.__aexit__(type(exc), exc, exc.__traceback__)
                 raise
-            elapsed["sandbox"] = time.perf_counter() - t1
+        try:
+            state.sandbox = sandbox
+            await self.hook_registry.fire("sandbox_ready", "sandbox", ctx)
+            outcome = await self._run_agent(ctx, record, sandbox)
+            await self._collect(record, sandbox, workspace)
+            return outcome
+        finally:
+            state.sandbox = None
+            await self._teardown(cm, record)
 
-            agent_failure: StageError | None = None
-            outcome: OutcomeT | None = None
-            collected: CollectResult | None = None
+    async def _run_agent(
+        self, ctx: RunContext, record: _RunRecord, sandbox: Sandbox
+    ) -> OutcomeT | None:
+        """Agent stage: exec the provider's command, then ``agent_end``."""
+        record.stage = "agent"
+        if isinstance(self.prompt, Path):
+            prompt_text = self.prompt.read_text(encoding="utf-8")
+        else:
+            prompt_text = self.prompt
+        schema = TypeAdapter(self.outcome_type).json_schema()
+        try:
+            command = self.agent.command(prompt_text, schema)
+        except Exception as exc:
+            raise StageError("agent", Errored(exception=exc)) from exc
+
+        async def _on_output(line: AgentLine) -> None:
+            await self.hook_registry.fire("agent_output", "agent", ctx, line)
+
+        outcome: OutcomeT | None = None
+        with record.entering("agent"):
             try:
-                state.sandbox = sandbox
-                await hooks.fire("sandbox_ready", "sandbox", ctx)
-
-                stage = "agent"
-                if isinstance(self.prompt, Path):
-                    prompt_text = self.prompt.read_text(encoding="utf-8")
-                else:
-                    prompt_text = self.prompt
-
-                schema = TypeAdapter(self.outcome_type).json_schema()
-                try:
-                    command = self.agent.command(prompt_text, schema)
-                except Exception as exc:
-                    raise StageError("agent", Errored(exception=exc)) from exc
-
-                async def _on_output(line: AgentLine) -> None:
-                    await hooks.fire("agent_output", "agent", ctx, line)
-
-                t2 = time.perf_counter()
-                try:
-                    agent_exit, outcome = await run_agent(
-                        sandbox,
-                        self.agent,
-                        command,
-                        self.outcome_type,
-                        timeouts=timeouts,
-                        on_output=_on_output,
-                    )
-                except StageError as err:
-                    elapsed["agent"] = time.perf_counter() - t2
-                    agent_failure = err
-                    if err.agent is not None:
-                        agent_exit = err.agent
-                except Exception as exc:
-                    elapsed["agent"] = time.perf_counter() - t2
-                    agent_failure = StageError("agent", Errored(exception=exc))
-                else:
-                    elapsed["agent"] = time.perf_counter() - t2
-
-                if agent_exit is None:
-                    # Stopped (a bound fired, or a line raised): no exit code.
-                    agent_exit = AgentExit(
-                        exit_code=-1, elapsed=elapsed["agent"], hanging=False
-                    )
-                try:
-                    await hooks.fire("agent_end", "agent", ctx, agent_exit)
-                except StageError as err:
-                    if agent_failure is None:
-                        agent_failure = err
-                    else:
-                        _log_later_failure(run_id, err)
-
-                stage = "collect"
-                t3 = time.perf_counter()
-
-                async def _collect() -> CollectResult:
-                    return await collect(sandbox, workspace, salvage=self.salvage)
-
-                try:
-                    collected = await self._bounded(
-                        "collect", "collect", timeouts.collect, _collect
-                    )
-                except Exception as exc:
-                    if agent_failure is None:
-                        raise
-                    # Best-effort after an agent failure (ADR-0024).
-                    _log_later_failure(run_id, _as_stage_error("collect", exc))
-                elapsed["collect"] = time.perf_counter() - t3
-            finally:
-                state.sandbox = None
-                await self._teardown(cm, run_id)
-
-            # The sandbox is gone; everything below works on the host repo.
-            if collected is None:
-                assert agent_failure is not None
-                return _run_failed(
-                    run_id=run_id,
-                    base_sha=base_sha,
-                    elapsed=elapsed,
-                    agent=agent_exit,
-                    stage=agent_failure.stage,
-                    failure=agent_failure.failure,
+                record.agent, outcome = await run_agent(
+                    sandbox,
+                    self.agent,
+                    command,
+                    self.outcome_type,
+                    timeouts=self.timeouts,
+                    on_output=_on_output,
                 )
-            series = collected.series_meta
-            patch_series = collected.patch_series
+            except Exception as exc:
+                record.fail(_as_stage_error("agent", exc))
+        if record.agent is None:
+            # Stopped (a bound fired, or a line raised): no exit code.
+            record.agent = AgentExit(
+                exit_code=-1, elapsed=record.elapsed["agent"], hanging=False
+            )
+        try:
+            await self.hook_registry.fire("agent_end", "agent", ctx, record.agent)
+        except StageError as err:
+            record.fail(err)
+        return outcome
 
-            if agent_failure is None and collected.squashed:
-                agent_failure = StageError(
+    async def _collect(
+        self, record: _RunRecord, sandbox: Sandbox, workspace: Workspace
+    ) -> None:
+        """Collect stage: best-effort once the run has already failed (ADR-0024)."""
+
+        async def _collected() -> CollectResult:
+            return await collect(sandbox, workspace, salvage=self.salvage)
+
+        with record.entering("collect"):
+            try:
+                collected: CollectResult = await self._bounded(
+                    "collect", "collect", self.timeouts.collect, _collected
+                )
+            except Exception as exc:
+                if record.failure is None:
+                    raise
+                record.fail(_as_stage_error("collect", exc))
+                return
+        record.series = collected.series_meta
+        record.patches = collected.patch_series
+        if collected.squashed:
+            record.fail(
+                StageError(
                     "collect",
                     Refused(
                         reason="nonlinear_series",
@@ -551,119 +556,61 @@ class RunSpec[OutcomeT]:
                         ),
                     ),
                 )
-            if agent_failure is not None:
-                if patch_series.commits > 0:
-                    try:
-                        preserved = preserve_series(
-                            self.repo,
-                            branch=f"waystation/{run_id}",
-                            series=patch_series,
-                        )
-                    except Exception as exc:
-                        _log_later_failure(run_id, _as_stage_error("collect", exc))
-                return _run_failed(
-                    run_id=run_id,
-                    base_sha=base_sha,
-                    elapsed=elapsed,
-                    agent=agent_exit,
-                    stage=agent_failure.stage,
-                    failure=agent_failure.failure,
-                    series=series,
-                    preserved=preserved,
-                )
-
-            assert outcome is not None
-
-            if self.integration is not None:
-                stage = "integrate"
-                t4 = time.perf_counter()
-                strategy = self.integration
-                landing = patch_series
-
-                async def _integrate() -> IntegrationReport:
-                    return await integrate(self.repo, landing, strategy)
-
-                report = await self._bounded(
-                    "integrate", "integrate", timeouts.integrate, _integrate
-                )
-                elapsed["integrate"] = time.perf_counter() - t4
-                preserved = None
-                try:
-                    await hooks.fire("integrated", "integrate", ctx, report)
-                except StageError as err:
-                    # The series landed; a hook failure must not preserve it.
-                    return _run_failed(
-                        run_id=run_id,
-                        base_sha=base_sha,
-                        elapsed=elapsed,
-                        agent=agent_exit,
-                        stage=err.stage,
-                        failure=err.failure,
-                        series=series,
-                    )
-            elif patch_series.commits > 0:
-                preserved = preserve_series(
-                    self.repo,
-                    branch=f"waystation/{run_id}",
-                    series=patch_series,
-                )
-
-            return RunSucceeded(
-                run_id=run_id,
-                name=None,
-                base_sha=base_sha,
-                elapsed=elapsed,
-                agent=agent_exit,
-                series=series,
-                preserved=preserved,
-                outcome=outcome,
-                report=report,
             )
+
+    async def _land(
+        self, ctx: RunContext, record: _RunRecord, outcome: OutcomeT
+    ) -> RunSucceeded[OutcomeT] | RunFailed:
+        """Integrate stage, or preservation when the run integrates nowhere."""
+        patches, strategy = record.patches, self.integration
+        assert patches is not None
+        if strategy is None:
+            self._preserve(record)
+            return (
+                record.failed() if record.failure else record.succeeded(outcome, None)
+            )
+
+        async def _integrated() -> IntegrationReport:
+            return await integrate(self.repo, patches, strategy)
+
+        with record.entering("integrate"):
+            try:
+                report: IntegrationReport = await self._bounded(
+                    "integrate", "integrate", self.timeouts.integrate, _integrated
+                )
+            except Exception as exc:
+                record.fail(_as_stage_error("integrate", exc))
+        if record.failure is not None:
+            self._preserve(record)
+            return record.failed()
+        try:
+            await self.hook_registry.fire("integrated", "integrate", ctx, report)
         except StageError as err:
-            if (
-                preserved is None
-                and patch_series is not None
-                and patch_series.commits > 0
-                and err.stage == "integrate"
-            ):
-                with contextlib.suppress(Exception):
-                    preserved = preserve_series(
-                        self.repo,
-                        branch=f"waystation/{run_id}",
-                        series=patch_series,
-                    )
-            return _run_failed(
-                run_id=run_id,
-                base_sha=base_sha,
-                elapsed=elapsed,
-                agent=err.agent if err.agent is not None else agent_exit,
-                stage=err.stage,
-                failure=err.failure,
-                series=series,
-                preserved=preserved,
-            )
-        except PreflightError as err:
-            failure: Failure = (
-                err.failure if err.failure is not None else Errored(exception=err)
-            )
-            return _run_failed(
-                run_id=run_id,
-                base_sha=base_sha,
-                elapsed=elapsed,
-                agent=agent_exit,
-                stage=stage,
-                failure=failure,
-                series=series,
-                preserved=preserved,
+            # The series landed; a hook failure must not preserve it.
+            record.fail(err)
+            return record.failed()
+        return record.succeeded(outcome, report)
+
+    def _preserve(self, record: _RunRecord) -> None:
+        """Keep a series that reached no target on ``waystation/<run-id>``."""
+        if record.patches is None or record.patches.commits == 0:
+            return
+        try:
+            record.preserved = preserve_series(
+                self.repo, branch=f"waystation/{record.run_id}", series=record.patches
             )
         except Exception as exc:
-            return _run_failed(
-                run_id=run_id,
-                base_sha=base_sha,
-                elapsed=elapsed,
-                agent=agent_exit,
-                stage=stage,
-                failure=Errored(exception=exc),
-                series=series,
-                preserved=preserved,
-            )
+            record.fail(_as_stage_error("integrate", exc))
+
+    async def _teardown(
+        self, cm: AbstractAsyncContextManager[Sandbox], record: _RunRecord
+    ) -> None:
+        """Leave the sandbox; a failure is logged, never reported (ADR-0016)."""
+
+        async def _leave() -> None:
+            await cm.__aexit__(None, None, None)
+
+        try:
+            await self._bounded("sandbox", "teardown", self.timeouts.teardown, _leave)
+        except Exception as exc:
+            _log_later_failure(record.run_id, _as_stage_error("sandbox", exc))

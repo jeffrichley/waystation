@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
+from helpers import git
 from waystation import (
     AgentExited,
     Flow,
@@ -31,36 +31,12 @@ class Answer(BaseModel):
     summary: str
 
 
-@pytest.fixture
-def host_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "host"
-    repo.mkdir()
-    _git(repo, "init")
-    _git(repo, "config", "user.name", "Waystation Test")
-    _git(repo, "config", "user.email", "test@waystation.example")
-    (repo / "README").write_text("committed\n", encoding="utf-8")
-    _git(repo, "add", "README")
-    _git(repo, "commit", "-m", "init")
-    return repo
-
-
-def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
-
-
 def _host_head(repo: Path) -> str:
-    return _git(repo, "rev-parse", "HEAD")
+    return git(repo, "rev-parse", "HEAD")
 
 
 def _host_porcelain(repo: Path) -> str:
-    return _git(repo, "status", "--porcelain")
+    return git(repo, "status", "--porcelain")
 
 
 @pytest.mark.git
@@ -89,17 +65,17 @@ async def test_committed_work_preserved_on_host_branch(host_repo: Path) -> None:
     assert result.preserved == f"waystation/{result.run_id}"
     assert _host_head(host_repo) == before_head
     assert _host_porcelain(host_repo) == ""
-    tip = _git(host_repo, "rev-parse", result.preserved)
+    tip = git(host_repo, "rev-parse", result.preserved)
     assert tip != before_head
-    assert _git(host_repo, "log", "-1", "--format=%s", tip) == "add note"
-    assert "hello" in _git(host_repo, "show", f"{tip}:NOTE")
+    assert git(host_repo, "log", "-1", "--format=%s", tip) == "add note"
+    assert "hello" in git(host_repo, "show", f"{tip}:NOTE")
 
 
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_empty_series_creates_no_branch(host_repo: Path) -> None:
     before = set(
-        _git(host_repo, "for-each-ref", "--format=%(refname:short)").splitlines()
+        git(host_repo, "for-each-ref", "--format=%(refname:short)").splitlines()
     )
     flow = Flow(
         host_repo,
@@ -111,7 +87,7 @@ async def test_empty_series_creates_no_branch(host_repo: Path) -> None:
     assert result.series == Series(commits=0, salvaged=False)
     assert result.preserved is None
     after = set(
-        _git(host_repo, "for-each-ref", "--format=%(refname:short)").splitlines()
+        git(host_repo, "for-each-ref", "--format=%(refname:short)").splitlines()
     )
     assert after == before
 
@@ -133,11 +109,11 @@ async def test_uncommitted_work_is_salvaged_by_default(host_repo: Path) -> None:
     assert result.series.commits == 1
     assert result.series.salvaged is True
     assert result.preserved is not None
-    tip = _git(host_repo, "rev-parse", result.preserved)
-    msg = _git(host_repo, "log", "-1", "--format=%B", tip)
+    tip = git(host_repo, "rev-parse", result.preserved)
+    msg = git(host_repo, "log", "-1", "--format=%B", tip)
     assert "WIP: salvaged uncommitted work" in msg
     assert f"Waystation-Run: {result.run_id}" in msg
-    assert "left behind" in _git(host_repo, "show", f"{tip}:DIRTY")
+    assert "left behind" in git(host_repo, "show", f"{tip}:DIRTY")
 
 
 @pytest.mark.git
@@ -176,8 +152,8 @@ async def test_agent_failure_still_preserves_series(host_repo: Path) -> None:
     assert result.series is not None
     assert result.series.commits == 1
     assert result.preserved == f"waystation/{result.run_id}"
-    tip = _git(host_repo, "rev-parse", result.preserved)
-    assert "yes" in _git(host_repo, "show", f"{tip}:KEPT")
+    tip = git(host_repo, "rev-parse", result.preserved)
+    assert "yes" in git(host_repo, "show", f"{tip}:KEPT")
 
 
 @pytest.mark.git
@@ -200,7 +176,7 @@ async def test_stale_index_lock_does_not_cost_the_series(host_repo: Path) -> Non
     assert isinstance(result.failure, AgentExited)
     assert result.series == Series(commits=2, salvaged=True)
     assert result.preserved == f"waystation/{result.run_id}"
-    assert "over" in _git(host_repo, "show", f"{result.preserved}:LEFT")
+    assert "over" in git(host_repo, "show", f"{result.preserved}:LEFT")
 
 
 @pytest.mark.git
@@ -283,8 +259,8 @@ async def test_nonlinear_series_refused_and_squashed(host_repo: Path) -> None:
     assert result.preserved is not None
     assert result.series is not None
     assert result.series.commits == 1
-    tip = _git(host_repo, "rev-parse", result.preserved)
-    assert _git(host_repo, "rev-list", "--count", f"{result.base_sha}..{tip}") == "1"
+    tip = git(host_repo, "rev-parse", result.preserved)
+    assert git(host_repo, "rev-list", "--count", f"{result.base_sha}..{tip}") == "1"
 
 
 @pytest.mark.git
@@ -305,11 +281,11 @@ async def test_agent_failure_outranks_a_nonlinear_series(host_repo: Path) -> Non
 def test_patch_series_from_range(host_repo: Path) -> None:
     from waystation import PatchSeries
 
-    _git(host_repo, "checkout", "-b", "feature")
+    git(host_repo, "checkout", "-b", "feature")
     (host_repo / "X").write_text("x\n", encoding="utf-8")
-    _git(host_repo, "add", "X")
-    _git(host_repo, "commit", "-m", "on feature")
-    base = _git(host_repo, "rev-parse", "feature^")
+    git(host_repo, "add", "X")
+    git(host_repo, "commit", "-m", "on feature")
+    base = git(host_repo, "rev-parse", "feature^")
     series = PatchSeries.from_range(host_repo, base, "feature")
     assert series.commits == 1
     assert series.base_sha == base

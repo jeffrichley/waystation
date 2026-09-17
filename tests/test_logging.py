@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import logging
-import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -121,24 +120,6 @@ def test_configure_logging_writes_the_run_tag_to_stderr_only(
     assert captured.out == ""
     assert "hello" in captured.err
     assert "0badcafe" in captured.err
-
-
-@pytest.fixture
-def host_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "host"
-    repo.mkdir()
-    for args in (
-        ("init",),
-        ("config", "user.name", "Waystation Test"),
-        ("config", "user.email", "test@waystation.example"),
-    ):
-        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
-    (repo / "README").write_text("committed\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True
-    )
-    return repo
 
 
 PROMPT = "Do the thing.\nWith detail on a second line."

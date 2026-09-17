@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
+from helpers import git
 from waystation import (
     Flow,
     Integration,
@@ -22,30 +23,6 @@ from waystation.integration import GitRepo
 
 class Answer(BaseModel):
     summary: str
-
-
-@pytest.fixture
-def host_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "host"
-    repo.mkdir()
-    _git(repo, "init")
-    _git(repo, "config", "user.name", "Waystation Test")
-    _git(repo, "config", "user.email", "test@waystation.example")
-    (repo / "notes.txt").write_bytes(b"committed\n")
-    _git(repo, "add", "notes.txt")
-    _git(repo, "commit", "-m", "init")
-    return repo
-
-
-def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
 
 
 def _bytes(repo: Path, *args: str) -> bytes:
@@ -94,14 +71,14 @@ async def test_carriage_returns_in_content_survive_from_range(
     host_repo: Path,
 ) -> None:
     (host_repo / ".gitattributes").write_bytes(b"*.crlf -text\n")
-    _git(host_repo, "add", ".gitattributes")
-    _git(host_repo, "commit", "-m", "attributes")
-    base = _git(host_repo, "rev-parse", "HEAD")
-    _git(host_repo, "switch", "-q", "-c", "source")
+    git(host_repo, "add", ".gitattributes")
+    git(host_repo, "commit", "-m", "attributes")
+    base = git(host_repo, "rev-parse", "HEAD")
+    git(host_repo, "switch", "-q", "-c", "source")
     (host_repo / "dos.crlf").write_bytes(b"one\r\ntwo\r\n")
-    _git(host_repo, "add", "dos.crlf")
-    _git(host_repo, "commit", "-m", "dos file")
-    _git(host_repo, "switch", "-q", "-")
+    git(host_repo, "add", "dos.crlf")
+    git(host_repo, "commit", "-m", "dos file")
+    git(host_repo, "switch", "-q", "-")
 
     series = PatchSeries.from_range(host_repo, base, "source")
     report = await Integration("agents/dos").integrate(GitRepo.open(host_repo), series)

@@ -38,7 +38,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = "src"
+# tests/ too: test modules import their shared helpers as a top-level module,
+# the same way pytest puts the rootdir of a test file on sys.path.
+mypy_path = "src:tests"
 files = ["src", "tests", "examples"]
 explicit_package_bases = true
 

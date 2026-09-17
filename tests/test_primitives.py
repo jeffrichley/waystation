@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
 
+from helpers import git
 from waystation import (
     Integration,
     NoSandbox,
@@ -22,30 +22,6 @@ from waystation import (
 
 class Answer(BaseModel):
     summary: str
-
-
-@pytest.fixture
-def host_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "host"
-    repo.mkdir()
-    _git(repo, "init")
-    _git(repo, "config", "user.name", "Waystation Test")
-    _git(repo, "config", "user.email", "test@waystation.example")
-    (repo / "README").write_bytes(b"committed\n")
-    _git(repo, "add", "README")
-    _git(repo, "commit", "-m", "init")
-    return repo
-
-
-def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
 
 
 @pytest.mark.git
@@ -70,4 +46,4 @@ async def test_loop_composed_by_hand_lands_the_series(host_repo: Path) -> None:
     assert outcome == Answer(summary="done")
     assert collected.patch_series.commits == 1
     assert report.landed
-    assert _git(host_repo, "log", "-1", "--format=%s", "agents/by-hand") == "by hand"
+    assert git(host_repo, "log", "-1", "--format=%s", "agents/by-hand") == "by hand"

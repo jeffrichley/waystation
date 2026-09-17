@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from helpers import init_host_repo
+
 
 @pytest.fixture(autouse=True)
 def isolated_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -17,6 +19,12 @@ def isolated_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     temp.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(temp))
     return temp
+
+
+@pytest.fixture
+def host_repo(tmp_path: Path) -> Path:
+    """A throwaway host repo with a git identity and one commit on HEAD."""
+    return init_host_repo(tmp_path)
 
 
 def _docker_daemon_reachable() -> bool:

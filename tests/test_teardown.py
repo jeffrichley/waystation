@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,6 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
+from helpers import git
 from waystation import (
     Flow,
     Integration,
@@ -27,30 +27,6 @@ from waystation import (
 
 class Answer(BaseModel):
     summary: str
-
-
-@pytest.fixture
-def host_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "host"
-    repo.mkdir()
-    _git(repo, "init")
-    _git(repo, "config", "user.name", "Waystation Test")
-    _git(repo, "config", "user.email", "test@waystation.example")
-    (repo / "README").write_bytes(b"committed\n")
-    _git(repo, "add", "README")
-    _git(repo, "commit", "-m", "init")
-    return repo
-
-
-def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
 
 
 class TrackedSandbox:
@@ -121,7 +97,7 @@ async def test_teardown_error_is_logged_and_the_series_still_lands(
 
     assert isinstance(result, RunSucceeded)
     assert result.report is not None
-    assert _git(host_repo, "log", "-1", "--format=%s", "agents/despite-teardown") == (
+    assert git(host_repo, "log", "-1", "--format=%s", "agents/despite-teardown") == (
         "feat"
     )
     assert any("teardown exploded" in r.getMessage() for r in caplog.records)

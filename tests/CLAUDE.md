@@ -38,7 +38,9 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 
 Test modules import helpers as a top-level module — `from helpers import git` — because pytest puts the test file's directory on `sys.path`. `mypy_path` in `pyproject.toml` includes `tests` so the type checker resolves it the same way.
 
-A fixture used by one module stays in that module. It moves to `conftest.py` the second time it's needed — not the third.
+**Keep the tables above current.** `test_docs.py` fails if a shared fixture or helper isn't listed here, so adding one means adding its row — the table is what the next agent reads instead of copy-pasting yours.
+
+**Hoist on the second use, not the third.** A fixture or helper used by one module stays in that module. The moment a second module needs it, move it — to `conftest.py` if it's a fixture, `helpers.py` if it's a plain function. And when you catch yourself about to copy setup out of another test module, that *is* the second use: hoist it instead, in the same commit, rather than leaving a third copy for someone else to find.
 
 ## Idiom
 

@@ -126,7 +126,7 @@ class HookRaised:
 
 @dataclass(frozen=True, slots=True)
 class CommandFailed:
-    """A command exited non-zero. ``argv`` is redacted, whoever built it."""
+    """A command exited non-zero. ``argv`` is redacted, whoever built it (ADR-0025)."""
 
     argv: Sequence[str]
     exit_code: int

@@ -1,4 +1,9 @@
-"""Pure argv redaction, shared by logged command lines and ``CommandFailed``."""
+"""Pure argv redaction, shared by logged command lines and ``CommandFailed``.
+
+The elision lives inside the value rather than at each call site (ADR-0025),
+so a command line a third-party sandbox backend or integration strategy builds
+is redacted without its cooperation.
+"""
 
 from __future__ import annotations
 

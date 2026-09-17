@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import os
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 from pydantic import TypeAdapter, ValidationError
 
-from waystation.agents.protocol import AgentCommand, AgentProvider, OutcomeReported
+from waystation.agents.protocol import (
+    AgentCommand,
+    AgentLine,
+    AgentProvider,
+    OutcomeReported,
+)
 from waystation.clock import get_clock
 from waystation.errors import StageError
 from waystation.results import (
@@ -51,12 +58,16 @@ async def run_agent[OutcomeT](
     outcome_type: type[OutcomeT],
     *,
     timeouts: Timeouts | None = None,
+    on_output: Callable[[AgentLine], Awaitable[None] | None] | None = None,
 ) -> tuple[AgentExit, OutcomeT]:
     """Exec ``command``, parse stdout lines, validate the last valid Outcome report.
 
+    ``on_output`` receives every stdout and stderr line as an ``AgentLine``,
+    awaited before the next line is read.
+
     Raises ``StageError`` for agent-stage failures (non-zero exit, missing/invalid
-    Outcome, silence/wall timeout). Unexpected ``Exception`` from ``parse``
-    propagates for the orchestrator to wrap as ``Errored``.
+    Outcome, silence/wall timeout). An ``Exception`` from ``parse`` or
+    ``on_output`` cancels the exec, then propagates unchanged.
     """
     bounds = timeouts if timeouts is not None else Timeouts()
     adapter = TypeAdapter(outcome_type)
@@ -69,11 +80,12 @@ async def run_agent[OutcomeT](
     exec_task: asyncio.Task[ExecResult] | None = None
     bound_event = asyncio.Event()
     fired: _AgentBound | None = None
+    line_error: Exception | None = None
     t_origin = clock.monotonic()
 
     def _fire(bound: BoundName, limit: float, *, is_hanging: bool = False) -> None:
         nonlocal fired
-        if fired is not None:
+        if fired is not None or line_error is not None:
             return
         elapsed = clock.monotonic() - t_origin
         fired = _AgentBound(bound, limit=limit, elapsed=elapsed, hanging=is_hanging)
@@ -107,12 +119,34 @@ async def run_agent[OutcomeT](
 
         grace_task = asyncio.create_task(_grace(), name="completion-grace")
 
-    async def on_stdout(line: str) -> None:
+    async def _handle_line(handler: Callable[[], Awaitable[None]]) -> None:
+        # A raising parser or output callback stops the agent: cancel the exec
+        # instead of letting the error strand the pipe readers.
+        nonlocal line_error
+        if fired is not None or line_error is not None:
+            return
+        try:
+            await handler()
+        except Exception as exc:
+            line_error = exc
+            bound_event.set()
+            if exec_task is not None and not exec_task.done():
+                exec_task.cancel()
+
+    async def _emit(line: AgentLine) -> None:
+        if on_output is None:
+            return
+        returned = on_output(line)
+        if inspect.isawaitable(returned):
+            await returned
+
+    async def _stdout_line(line: str) -> None:
         nonlocal last_valid, last_invalid
         # After Outcome, only completion_grace runs — do not re-arm silence.
         if grace_task is None:
             _arm_silence()
-        for event in provider.parse(line):
+        events = tuple(provider.parse(line))
+        for event in events:
             if isinstance(event, OutcomeReported):
                 try:
                     last_valid = adapter.validate_python(event.raw)
@@ -123,6 +157,13 @@ async def run_agent[OutcomeT](
                     if silence_task is not None and not silence_task.done():
                         silence_task.cancel()
                     _arm_grace()
+        await _emit(AgentLine("stdout", line, events))
+
+    async def on_stdout(line: str) -> None:
+        await _handle_line(lambda: _stdout_line(line))
+
+    async def on_stderr(line: str) -> None:
+        await _handle_line(lambda: _emit(AgentLine("stderr", line)))
 
     exec_env = dict(command.env)
     for key in command.pass_env:
@@ -139,6 +180,7 @@ async def run_agent[OutcomeT](
             env=exec_env,
             capture=False,
             on_stdout=on_stdout,
+            on_stderr=on_stderr,
         )
 
     exec_task = asyncio.create_task(_exec(), name="agent-exec")
@@ -159,6 +201,10 @@ async def run_agent[OutcomeT](
             {exec_task, wall_task, bound_waiter},
             return_when=asyncio.FIRST_COMPLETED,
         )
+        if line_error is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await exec_task
+            raise line_error
         if fired is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await exec_task

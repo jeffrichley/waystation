@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +34,18 @@ class AgentToolUse:
 
 
 AgentEvent = OutcomeReported | AgentText | AgentToolUse
+
+
+@dataclass(frozen=True, slots=True)
+class AgentLine:
+    """One line the agent exec emitted, with the events its provider parsed.
+
+    stderr lines are never parsed, so their ``events`` is always empty.
+    """
+
+    stream: Literal["stdout", "stderr"]
+    raw: str
+    events: tuple[AgentEvent, ...] = ()
 
 
 @runtime_checkable

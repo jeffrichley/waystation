@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -179,8 +180,59 @@ async def test_agent_failure_still_preserves_series(host_repo: Path) -> None:
     assert "yes" in _git(host_repo, "show", f"{tip}:KEPT")
 
 
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_stale_index_lock_does_not_cost_the_series(host_repo: Path) -> None:
+    # A git process killed mid-write leaves .git/index.lock behind.
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(
+            commits=(ScriptedCommit(message="kept", files={"KEPT": "yes\n"}),),
+            uncommitted={"LEFT": "over\n", ".git/index.lock": ""},
+            exit_code=3,
+        ),
+        sandbox=NoSandbox(),
+    )
+
+    result = await flow.run("killed mid-git", outcome=Answer)
+
+    assert isinstance(result, RunFailed)
+    assert isinstance(result.failure, AgentExited)
+    assert result.series == Series(commits=2, salvaged=True)
+    assert result.preserved == f"waystation/{result.run_id}"
+    assert "over" in _git(host_repo, "show", f"{result.preserved}:LEFT")
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_collect_failing_after_agent_failure_is_logged_not_reported(
+    host_repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A stale HEAD.lock blocks the salvage commit whatever index it uses.
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(
+            uncommitted={"LEFT": "over\n", ".git/HEAD.lock": ""},
+            exit_code=3,
+        ),
+        sandbox=NoSandbox(),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="waystation"):
+        result = await flow.run("unsalvageable", outcome=Answer)
+
+    assert isinstance(result, RunFailed)
+    assert result.stage == "agent"
+    assert isinstance(result.failure, AgentExited)
+    assert result.failure.exit_code == 3
+    assert any("collect" in record.getMessage() for record in caplog.records)
+
+
 class _MergeAgent:
     """Creates a merge commit so collect refuses nonlinear series."""
+
+    def __init__(self, exit_code: int = 0) -> None:
+        self.exit_code = exit_code
 
     def preflight(self) -> None:
         return None
@@ -202,7 +254,7 @@ class _MergeAgent:
                 "git checkout -",
                 "git merge --no-ff -m merge-commit other",
                 f"printf '%s\\n' {_shell_single_quote(marker)}",
-                "exit 0",
+                f"exit {self.exit_code}",
             ]
         )
         return AgentCommand(
@@ -233,6 +285,20 @@ async def test_nonlinear_series_refused_and_squashed(host_repo: Path) -> None:
     assert result.series.commits == 1
     tip = _git(host_repo, "rev-parse", result.preserved)
     assert _git(host_repo, "rev-list", "--count", f"{result.base_sha}..{tip}") == "1"
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_agent_failure_outranks_a_nonlinear_series(host_repo: Path) -> None:
+    flow = Flow(host_repo, agent=_MergeAgent(exit_code=4), sandbox=NoSandbox())
+
+    result = await flow.run("merge then fail", outcome=Answer)
+
+    assert isinstance(result, RunFailed)
+    assert result.stage == "agent"
+    assert isinstance(result.failure, AgentExited)
+    assert result.failure.exit_code == 4
+    assert result.preserved == f"waystation/{result.run_id}"
 
 
 @pytest.mark.git

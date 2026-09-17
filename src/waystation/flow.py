@@ -74,6 +74,10 @@ def _log_later_failure(run_id: str, err: StageError) -> None:
     )
 
 
+def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
+    return exc if isinstance(exc, StageError) else StageError(stage, Errored(exc))
+
+
 def _run_failed(
     *,
     run_id: str,
@@ -488,55 +492,56 @@ class RunSpec[OutcomeT]:
                 async def _collect() -> CollectResult:
                     return await collect(sandbox, workspace, salvage=self.salvage)
 
-                collected: CollectResult = await self._bounded(
-                    "collect", "collect", timeouts.collect, _collect
-                )
+                try:
+                    collected: CollectResult = await self._bounded(
+                        "collect", "collect", timeouts.collect, _collect
+                    )
+                except Exception as exc:
+                    if agent_failure is None:
+                        raise
+                    # Best-effort after an agent failure (ADR-0024).
+                    elapsed["collect"] = time.perf_counter() - t3
+                    _log_later_failure(run_id, _as_stage_error("collect", exc))
+                    return _run_failed(
+                        run_id=run_id,
+                        base_sha=base_sha,
+                        elapsed=elapsed,
+                        agent=agent_exit,
+                        stage=agent_failure.stage,
+                        failure=agent_failure.failure,
+                    )
                 elapsed["collect"] = time.perf_counter() - t3
                 series = collected.series_meta
                 patch_series = collected.patch_series
                 # The run is done with its sandbox; hooks lose it here (#28).
                 state.sandbox = None
 
-                if collected.squashed:
-                    if patch_series.commits > 0:
-                        preserved = preserve_series(
-                            self.repo,
-                            branch=f"waystation/{run_id}",
-                            series=patch_series,
-                        )
-                    return _run_failed(
-                        run_id=run_id,
-                        base_sha=base_sha,
-                        elapsed=elapsed,
-                        agent=agent_exit,
-                        stage="collect",
-                        failure=Refused(
+                if agent_failure is None and collected.squashed:
+                    agent_failure = StageError(
+                        "collect",
+                        Refused(
                             reason="nonlinear_series",
                             detail=(
                                 "series contains merge commits or "
                                 "HEAD does not descend from base"
                             ),
                         ),
-                        series=series,
-                        preserved=preserved,
                     )
-
                 if agent_failure is not None:
                     if patch_series.commits > 0:
-                        preserved = preserve_series(
-                            self.repo,
-                            branch=f"waystation/{run_id}",
-                            series=patch_series,
-                        )
+                        try:
+                            preserved = preserve_series(
+                                self.repo,
+                                branch=f"waystation/{run_id}",
+                                series=patch_series,
+                            )
+                        except Exception as exc:
+                            _log_later_failure(run_id, _as_stage_error("collect", exc))
                     return _run_failed(
                         run_id=run_id,
                         base_sha=base_sha,
                         elapsed=elapsed,
-                        agent=(
-                            agent_failure.agent
-                            if agent_failure.agent is not None
-                            else agent_exit
-                        ),
+                        agent=agent_exit,
                         stage=agent_failure.stage,
                         failure=agent_failure.failure,
                         series=series,

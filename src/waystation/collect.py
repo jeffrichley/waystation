@@ -86,9 +86,10 @@ async def _sandbox_git(
     sandbox: Sandbox,
     *args: str,
     check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     argv = ["git", *args]
-    result = await sandbox.exec(argv, capture=True)
+    result = await sandbox.exec(argv, env=env, capture=True)
     if check and result.exit_code != 0:
         raise StageError(
             "collect",
@@ -119,15 +120,7 @@ async def collect(
     if salvage:
         _, status, _ = await _sandbox_git(sandbox, "status", "--porcelain")
         if status.strip():
-            await _sandbox_git(sandbox, "add", "-A")
-            await _sandbox_git(
-                sandbox,
-                "commit",
-                "-m",
-                "WIP: salvaged uncommitted work",
-                "--trailer",
-                f"Waystation-Run: {workspace.run_id}",
-            )
+            await _salvage(sandbox, workspace)
             salvaged = True
 
     base = workspace.base_sha
@@ -153,6 +146,37 @@ async def collect(
         series_meta=Series(commits=patch_series.commits, salvaged=salvaged),
         patch_series=patch_series,
         squashed=False,
+    )
+
+
+async def _salvage(sandbox: Sandbox, workspace: Workspace) -> None:
+    """Commit everything uncommitted; fall back to a private index if needed.
+
+    A git process killed mid-write leaves ``index.lock`` behind, which blocks
+    ``git add`` on the agent's index. A private index seeded from ``HEAD``
+    yields the same commit without touching that lock.
+    """
+    try:
+        await _commit_worktree(sandbox, workspace)
+    except StageError:
+        _, git_dir, _ = await _sandbox_git(sandbox, "rev-parse", "--absolute-git-dir")
+        env = {"GIT_INDEX_FILE": f"{git_dir.strip()}/waystation-salvage-index"}
+        await _sandbox_git(sandbox, "read-tree", "HEAD", env=env)
+        await _commit_worktree(sandbox, workspace, env=env)
+
+
+async def _commit_worktree(
+    sandbox: Sandbox, workspace: Workspace, env: dict[str, str] | None = None
+) -> None:
+    await _sandbox_git(sandbox, "add", "-A", env=env)
+    await _sandbox_git(
+        sandbox,
+        "commit",
+        "-m",
+        "WIP: salvaged uncommitted work",
+        "--trailer",
+        f"Waystation-Run: {workspace.run_id}",
+        env=env,
     )
 
 

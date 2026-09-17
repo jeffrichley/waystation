@@ -1,10 +1,13 @@
-"""Process-tree strategies: how a host kills an exec and everything it started.
+"""Process strategies: everything OS-specific about running host processes.
 
-ADR-0023 promises that cancelling an exec kills its whole process tree. Each
-operating system does that differently, so each way is a strategy that
-``NoSandbox`` takes by injection. The host's own strategy is the default, and
-``host_process_trees`` is the only place that chooses by platform; the guards
-inside each strategy only refuse to run on the wrong one.
+Which environment a process needs to start, how to start it, and how to kill
+it with everything it spawned (ADR-0023) all differ by operating system, so
+each way is one strategy that ``NoSandbox`` takes by injection. The host's own
+strategy is the default, and ``host_processes`` is the only place that chooses
+by platform; the guards inside each strategy only refuse the wrong one.
+
+Signals (``handle_signals``) and the Docker transport default (ADR-0012) are
+OS-specific too, but they belong to their own consumers, not here.
 """
 
 from __future__ import annotations
@@ -15,9 +18,26 @@ import os
 import signal
 import subprocess
 import sys
+from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+
+# Keys a process needs to start at all, per OS; a run's own env goes on top.
+_POSIX_BASE_ENV = ("PATH", "HOME", "TMPDIR")
+_WINDOWS_BASE_ENV = (
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "TMP",
+    "TEMP",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+)
 
 logger = logging.getLogger("waystation")
 
@@ -36,8 +56,12 @@ class ProcessTree(Protocol):
 
 
 @runtime_checkable
-class ProcessTreeStrategy(Protocol):
-    """How to start processes so that each one's whole tree can be killed."""
+class ProcessStrategy(Protocol):
+    """How one operating system starts, and stops, a sandbox's processes."""
+
+    def base_env_keys(self) -> Sequence[str]:
+        """Host env keys a process needs to start on this OS."""
+        ...
 
     def spawn_options(self) -> dict[str, Any]:
         """Extra ``asyncio.create_subprocess_exec`` keyword arguments."""
@@ -49,8 +73,11 @@ class ProcessTreeStrategy(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class PosixProcessGroups:
+class PosixProcesses:
     """Each exec leads its own session, so killing its process group kills the tree."""
+
+    def base_env_keys(self) -> Sequence[str]:
+        return _POSIX_BASE_ENV
 
     def spawn_options(self) -> dict[str, Any]:
         return {"start_new_session": True}
@@ -65,7 +92,7 @@ class _ProcessGroup:
 
     def kill(self) -> None:
         if sys.platform == "win32":
-            raise RuntimeError("PosixProcessGroups needs a POSIX host")
+            raise RuntimeError("PosixProcesses needs a POSIX host")
         with suppress(OSError):
             os.killpg(self.process.pid, signal.SIGKILL)
         with suppress(OSError):
@@ -78,12 +105,15 @@ class _ProcessGroup:
 
 
 @dataclass(frozen=True, slots=True)
-class WindowsJobObjects:
+class WindowsProcesses:
     """Each exec joins its own Job Object, so terminating the job kills the tree."""
+
+    def base_env_keys(self) -> Sequence[str]:
+        return _WINDOWS_BASE_ENV
 
     def spawn_options(self) -> dict[str, Any]:
         if sys.platform != "win32":
-            raise RuntimeError("WindowsJobObjects needs a Windows host")
+            raise RuntimeError("WindowsProcesses needs a Windows host")
         return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
 
     def adopt(self, process: asyncio.subprocess.Process) -> ProcessTree:
@@ -119,11 +149,11 @@ class _JobObject:
         self.job = None
 
 
-def host_process_trees() -> ProcessTreeStrategy:
+def host_processes() -> ProcessStrategy:
     """The strategy for the operating system this process is running on."""
     if sys.platform == "win32":
-        return WindowsJobObjects()
-    return PosixProcessGroups()
+        return WindowsProcesses()
+    return PosixProcesses()
 
 
 def _kernel32() -> Any:

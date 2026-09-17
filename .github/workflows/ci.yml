@@ -1,8 +1,17 @@
 name: CI
 
 on:
+  # Unfiltered, `push` and `pull_request` both fire for a branch with an open
+  # PR, running the whole matrix twice for one commit. Branch pushes are
+  # covered by the PR run; `main` still gets a run of its own after a merge.
   push:
+    branches: [main]
   pull_request:
+
+# A new push supersedes the run already in flight for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:

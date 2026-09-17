@@ -19,7 +19,7 @@ from pydantic.json_schema import GenerateJsonSchema
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
-from waystation.collect import CollectResult, collect, preserve_series
+from waystation.collect import CollectResult, collect
 from waystation.errors import PreflightError, StageError
 from waystation.hooks import (
     HookEntry,
@@ -28,7 +28,12 @@ from waystation.hooks import (
     RunContext,
     RunState,
 )
-from waystation.integration import Integration, IntegrationStrategy, integrate
+from waystation.integration import (
+    Integration,
+    IntegrationStrategy,
+    integrate,
+    preserve_series,
+)
 from waystation.results import (
     AgentExit,
     Errored,

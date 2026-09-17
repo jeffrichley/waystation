@@ -76,9 +76,7 @@ async def run_agent[OutcomeT](
         if fired is not None:
             return
         elapsed = clock.monotonic() - t_origin
-        fired = _AgentBound(
-            bound, limit=limit, elapsed=elapsed, hanging=is_hanging
-        )
+        fired = _AgentBound(bound, limit=limit, elapsed=elapsed, hanging=is_hanging)
         bound_event.set()
         if exec_task is not None and not exec_task.done():
             exec_task.cancel()

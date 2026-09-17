@@ -125,13 +125,11 @@ class ScriptedAgent:
             touch = self.linger_touch
             if touch is not None:
                 q = _shell_single_quote(touch)
-                parts.append(
-                    f"( while true; do printf x >> {q}; sleep 0.05; done ) &"
-                )
+                parts.append(f"( while true; do printf x >> {q}; sleep 0.05; done ) &")
             parts.append("( sleep 999 ) &")
-            if payload is None or payload == "":
-                # Block so wall/silence can cancel a still-running exec.
-                parts.append("wait")
+            # Keep the shell alive as process-group leader so cancel can kill
+            # the whole tree (POSIX killpg / Windows Job Object + taskkill /T).
+            parts.append("wait")
         parts.append(f"exit {int(self.exit_code)}")
         script = "\n".join(parts)
         return AgentCommand(

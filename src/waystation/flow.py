@@ -365,9 +365,7 @@ class RunSpec[OutcomeT]:
                     raise
                 finally:
                     if timeouts.teardown is not None:
-                        elapsed.setdefault(
-                            "sandbox", time.perf_counter() - t_td
-                        )
+                        elapsed.setdefault("sandbox", time.perf_counter() - t_td)
         except StageError as err:
             if (
                 preserved is None

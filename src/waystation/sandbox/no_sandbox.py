@@ -88,6 +88,22 @@ def _kill_process_tree(
             process.kill()
 
 
+def _rmtree_retry(path: str | os.PathLike[str], *, attempts: int = 5) -> None:
+    """Remove a workspace dir; retry briefly on Windows file-lock races."""
+    import shutil
+    import time
+
+    last: OSError | None = None
+    for i in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as exc:
+            last = exc
+            time.sleep(0.05 * (i + 1))
+    logger.error("teardown failed while removing workspace %s: %s", path, last)
+
+
 @dataclass(slots=True)
 class _HostSandbox:
     workspace: str
@@ -290,8 +306,6 @@ class NoSandbox:
         env: Mapping[str, str],
         pass_env: Sequence[str],
     ) -> AsyncIterator[Sandbox]:
-        import shutil
-
         merged_literal = {**dict(self.env), **dict(env)}
         merged_pass = (*self.pass_env, *pass_env)
         built = _build_env(literal=merged_literal, pass_env=merged_pass)
@@ -309,9 +323,5 @@ class NoSandbox:
                     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
                     kernel32.TerminateJobObject(sandbox._job, 1)
                     kernel32.CloseHandle(sandbox._job)
-            try:
-                shutil.rmtree(ws.path)
-            except OSError:
-                logger.exception(
-                    "teardown failed while removing workspace %s", ws.path
-                )
+                    sandbox._job = None
+            _rmtree_retry(ws.path)

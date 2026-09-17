@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import subprocess
 import sys
@@ -9,6 +10,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from rich.logging import RichHandler
 
 from waystation import (
@@ -308,3 +310,54 @@ def test_the_console_shows_the_run_name_and_falls_back_to_the_id(
     err = capsys.readouterr().err
     assert "[tests] named" in err
     assert "[0badcafe] unnamed" in err
+
+
+def test_redact_argv_sweeps_a_credential_inside_an_argument() -> None:
+    argv = (
+        "claude",
+        "--api-key=sk-ant-api03-Zm9vYmFyYmF6cXV1eA",
+        "--env=ANTHROPIC_API_KEY=whatever-this-is",
+        "Bearer ghp_0123456789abcdefghijABCDEFGHIJ0123",
+    )
+    assert redact_argv(argv) == (
+        "claude",
+        "--api-key=***",
+        "--env=ANTHROPIC_API_KEY=***",
+        "Bearer ***",
+    )
+
+
+def test_redact_argv_elides_a_token_carried_as_bare_url_userinfo() -> None:
+    argv = ("git", "push", "https://ghp_0123456789abcdefghijABCDEFGHIJ@github.com/a/b")
+    assert redact_argv(argv) == ("git", "push", "https://***@github.com/a/b")
+
+
+def test_configure_logging_leaves_a_host_installed_handler_alone(
+    clean_logging: None,
+) -> None:
+    logger = logging.getLogger("waystation")
+    theirs = RichHandler(console=Console(file=io.StringIO()))
+    logger.addHandler(theirs)
+
+    configure_logging()
+    configure_logging()
+
+    installed = [h for h in logger.handlers if isinstance(h, RichHandler)]
+    assert theirs in installed
+    assert len(installed) == 2
+
+
+@pytest.mark.git
+async def test_a_setup_exec_inside_a_hook_logs_its_output_at_debug(
+    host_repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def setup(ctx: RunContext) -> None:
+        await ctx.sandbox.exec(["git", "--version"])
+
+    with caplog.at_level(logging.DEBUG, logger="waystation"):
+        result = await a_run(host_repo).on_sandbox_ready(setup)
+
+    assert isinstance(result, RunSucceeded)
+    sandbox = [r for r in caplog.records if r.name == "waystation.sandbox"]
+    assert any(r.getMessage().startswith("git version") for r in sandbox)
+    assert {r.levelno for r in sandbox} == {logging.DEBUG}

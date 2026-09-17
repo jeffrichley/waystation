@@ -7,11 +7,9 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from waystation.errors import StageError
-from waystation.observability import get_logger, redact_argv
+from waystation.observability import GIT, log_argv
 from waystation.results import CommandFailed, Stage
 from waystation.tails import bound_tail
-
-logger = get_logger("waystation.git")
 
 
 def decode(output: bytes) -> str:
@@ -39,7 +37,7 @@ def run_git(
 ) -> subprocess.CompletedProcess[str]:
     """Run ``git -C repo *args``; on failure (with ``check``) raise for ``stage``."""
     argv = ["git", "-C", str(repo), *args]
-    logger.debug("%s", " ".join(redact_argv(argv)))
+    log_argv(GIT, argv)
     raw = subprocess.run(
         argv,
         check=False,

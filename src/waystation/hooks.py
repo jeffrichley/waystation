@@ -11,7 +11,7 @@ from typing import Any, get_args
 
 from waystation.agents.protocol import AgentLine
 from waystation.errors import StageError
-from waystation.observability import RunLog, get_logger
+from waystation.observability import RunLog, tagged_logger
 from waystation.results import (
     AgentExit,
     HookName,
@@ -23,7 +23,7 @@ from waystation.results import (
 )
 from waystation.sandbox.protocol import Sandbox
 
-logger = get_logger("waystation")
+logger = tagged_logger("waystation")
 
 HOOK_NAMES: tuple[HookName, ...] = get_args(HookName)
 
@@ -42,6 +42,7 @@ class RunState:
     log: RunLog = field(init=False)
 
     def __post_init__(self) -> None:
+        # One RunLog per run; the orchestrator's record shares this instance.
         self.log = RunLog(self.run_id, self.name)
 
 

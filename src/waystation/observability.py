@@ -12,7 +12,7 @@ script that wants only the agent's chatter can say::
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Iterator, MutableMapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -21,6 +21,8 @@ from typing import Any
 from rich.console import Console
 from rich.logging import RichHandler
 
+# redact_argv lives in its own leaf module because ``results`` needs it and
+# must not import this one; observability is its public home.
 from waystation._redaction import redact_argv
 from waystation.results import (
     AgentExit,
@@ -29,7 +31,7 @@ from waystation.results import (
     RunSucceeded,
 )
 
-__all__ = ["RunLog", "configure_logging", "get_logger", "redact_argv"]
+__all__ = ["configure_logging", "log_argv", "redact_argv", "tagged_logger"]
 
 PACKAGE = "waystation"
 
@@ -62,8 +64,12 @@ class _RunTag(logging.Filter):
 _RUN_TAG = _RunTag()
 
 
-def get_logger(name: str) -> logging.Logger:
-    """A ``waystation`` logger whose records carry the run they belong to."""
+def tagged_logger(name: str) -> logging.Logger:
+    """A ``waystation`` logger that stamps the running run onto its records.
+
+    Not a plain lookup: it installs the filter that does the stamping, which
+    ``logging`` applies only to the logger the call was made on.
+    """
     logger = logging.getLogger(name)
     logger.addFilter(_RUN_TAG)
     return logger
@@ -71,14 +77,25 @@ def get_logger(name: str) -> logging.Logger:
 
 logging.getLogger(PACKAGE).addHandler(logging.NullHandler())
 
-RUN = get_logger(f"{PACKAGE}.run")
+RUN = tagged_logger(f"{PACKAGE}.run")
 """One INFO line per lifecycle event of a run."""
 
-AGENT_OUTPUT = get_logger(f"{PACKAGE}.agent.output")
+AGENT_OUTPUT = tagged_logger(f"{PACKAGE}.agent.output")
 """Every line the agent emits, at DEBUG: an N-way fan-out is unreadable at INFO."""
 
-HOOK = get_logger(f"{PACKAGE}.hook")
+HOOK = tagged_logger(f"{PACKAGE}.hook")
 """Where ``ctx.log`` writes, so a hook author's lines are separable from ours."""
+
+GIT = tagged_logger(f"{PACKAGE}.git")
+"""Host git command lines, at DEBUG."""
+
+SANDBOX = tagged_logger(f"{PACKAGE}.sandbox")
+"""Sandbox lifecycle and the command lines it execs, at DEBUG."""
+
+
+def log_argv(logger: logging.Logger, argv: Sequence[str]) -> None:
+    """Log one command line at DEBUG, with its credentials elided."""
+    logger.debug("%s", " ".join(redact_argv(argv)))
 
 
 class RunLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
@@ -104,7 +121,14 @@ def _head(prompt: str) -> str:
 
 
 class RunLog:
-    """One run's lifecycle lines, written to the loggers every run shares."""
+    """One run's lifecycle lines, written to the loggers every run shares.
+
+    ``hooks`` is what ``ctx.log`` hands a hook author: their lines, already
+    tagged with the run. The adapters tag explicitly rather than leaning on
+    ``bound()``, so a line still carries its run when it is logged from
+    somewhere the run's context never reached — a hook that kept ``ctx.log``
+    and writes from a task of its own.
+    """
 
     __slots__ = ("_bound", "_output", "_run", "hooks")
 
@@ -114,7 +138,6 @@ class RunLog:
         self._run = RunLoggerAdapter(RUN, extra)
         self._output = RunLoggerAdapter(AGENT_OUTPUT, extra)
         self.hooks = RunLoggerAdapter(HOOK, extra)
-        """``ctx.log``: a hook author's lines, already tagged with the run."""
 
     @contextmanager
     def bound(self) -> Iterator[None]:
@@ -176,24 +199,35 @@ class _RunTagFormatter(logging.Formatter):
         return f"[{tag}] {message}" if tag else message
 
 
+class _WaystationHandler(RichHandler):
+    """The one handler ``configure_logging`` owns, and the only one it replaces."""
+
+
 def configure_logging(
     level: int | str = "INFO", *, console: Console | None = None
 ) -> Console:
     """Install the one ``RichHandler`` waystation logs through, and return its console.
 
     Writes to **stderr**: stdout is the agent's Outcome channel. Calling this
-    again replaces the handler rather than stacking a second one, and returns
-    the same console unless a new one is passed. The level lands on the
-    ``waystation`` logger, so per-logger levels still win.
+    again replaces the handler it installed before rather than stacking a
+    second one, and returns the same console unless a new one is passed. A
+    handler the host application attached itself is left alone. The level lands
+    on the ``waystation`` logger, so per-logger levels still win.
+
+    Records keep propagating to the root logger, as a library's should: a host
+    that collects waystation's logs still gets them, and where that host's own
+    handler writes is the host's business.
     """
     logger = logging.getLogger(PACKAGE)
-    installed = [h for h in logger.handlers if isinstance(h, RichHandler)]
+    ours = [h for h in logger.handlers if isinstance(h, _WaystationHandler)]
     if console is None:
-        console = installed[0].console if installed else Console(stderr=True)
-    for handler in installed:
+        console = ours[0].console if ours else Console(stderr=True)
+    for handler in ours:
         logger.removeHandler(handler)
-    rich = RichHandler(console=console, show_path=False, rich_tracebacks=True)
-    rich.setFormatter(_RunTagFormatter("%(message)s"))
-    logger.addHandler(rich)
+    installed = _WaystationHandler(
+        console=console, show_path=False, rich_tracebacks=True
+    )
+    installed.setFormatter(_RunTagFormatter("%(message)s"))
+    logger.addHandler(installed)
     logger.setLevel(level)
     return console

@@ -33,7 +33,7 @@ from waystation.integration import (
     integrate,
     preserve_series,
 )
-from waystation.observability import get_logger
+from waystation.observability import RunLog, tagged_logger
 from waystation.results import (
     AgentExit,
     Errored,
@@ -50,7 +50,7 @@ from waystation.results import (
 from waystation.sandbox.protocol import Sandbox, SandboxBackend
 from waystation.workspace import Workspace, prepare_workspace, remove_workspace
 
-logger = get_logger("waystation")
+logger = tagged_logger("waystation")
 
 
 def _assert_object_outcome(outcome_type: type[Any]) -> None:
@@ -88,6 +88,7 @@ class _RunRecord:
     """What a run has gathered so far, and the one failure it will report."""
 
     run_id: str
+    log: RunLog
     stage: Stage = "workspace"
     base_sha: str | None = None
     elapsed: dict[Stage, float] = field(default_factory=dict)
@@ -383,9 +384,9 @@ class RunSpec[OutcomeT]:
     async def _execute(self) -> RunSucceeded[OutcomeT] | RunFailed:
         state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
         ctx = RunContext(state)
-        record = _RunRecord(run_id=state.run_id)
-        with state.log.bound():
-            state.log.run_start(self.repo)
+        record = _RunRecord(run_id=state.run_id, log=state.log)
+        with record.log.bound():
+            record.log.run_start(self.repo)
             result = await self._lifecycle(ctx, state, record)
             end_stage = result.stage if isinstance(result, RunFailed) else record.stage
             try:
@@ -396,7 +397,7 @@ class RunSpec[OutcomeT]:
             except StageError as err:
                 record.fail(err)
                 result = record.failed()
-            state.log.run_end(result)
+            record.log.run_end(result)
             return result
 
     async def _lifecycle(
@@ -412,7 +413,7 @@ class RunSpec[OutcomeT]:
                 self._preserve(record)
                 return record.failed()
             assert outcome is not None
-            return await self._land(ctx, state, record, outcome)
+            return await self._land(ctx, record, outcome)
         except PreflightError as err:
             failure = err.failure if err.failure is not None else Errored(err)
             record.fail(StageError(record.stage, failure))
@@ -444,7 +445,7 @@ class RunSpec[OutcomeT]:
                 "workspace", "workspace", self.timeouts.workspace, _workspace
             )
         record.base_sha = state.base_sha = workspace.base_sha
-        state.log.workspace_ready(workspace.base_sha)
+        record.log.workspace_ready(workspace.base_sha)
         try:
             await self.hook_registry.fire("workspace_ready", "workspace", ctx)
         except BaseException:
@@ -478,9 +479,9 @@ class RunSpec[OutcomeT]:
                 raise
         try:
             state.sandbox = sandbox
-            state.log.sandbox_ready()
+            record.log.sandbox_ready()
             await self.hook_registry.fire("sandbox_ready", "sandbox", ctx)
-            outcome = await self._run_agent(ctx, state, record, sandbox)
+            outcome = await self._run_agent(ctx, record, sandbox)
             await self._collect(record, sandbox, workspace)
             return outcome
         finally:
@@ -488,11 +489,7 @@ class RunSpec[OutcomeT]:
             await self._teardown(cm, record)
 
     async def _run_agent(
-        self,
-        ctx: RunContext,
-        state: RunState,
-        record: _RunRecord,
-        sandbox: Sandbox,
+        self, ctx: RunContext, record: _RunRecord, sandbox: Sandbox
     ) -> OutcomeT | None:
         """Agent stage: exec the provider's command, then ``agent_end``."""
         record.stage = "agent"
@@ -506,10 +503,10 @@ class RunSpec[OutcomeT]:
         except Exception as exc:
             raise StageError("agent", Errored(exception=exc)) from exc
 
-        state.log.agent_start(prompt_text)
+        record.log.agent_start(prompt_text)
 
         async def _on_output(line: AgentLine) -> None:
-            state.log.agent_output(line.stream, line.raw)
+            record.log.agent_output(line.stream, line.raw)
             await self.hook_registry.fire("agent_output", "agent", ctx, line)
 
         outcome: OutcomeT | None = None
@@ -530,7 +527,7 @@ class RunSpec[OutcomeT]:
             record.agent = AgentExit(
                 exit_code=-1, elapsed=record.elapsed["agent"], hanging=False
             )
-        state.log.agent_end(record.agent)
+        record.log.agent_end(record.agent)
         try:
             await self.hook_registry.fire("agent_end", "agent", ctx, record.agent)
         except StageError as err:
@@ -572,11 +569,7 @@ class RunSpec[OutcomeT]:
             )
 
     async def _land(
-        self,
-        ctx: RunContext,
-        state: RunState,
-        record: _RunRecord,
-        outcome: OutcomeT,
+        self, ctx: RunContext, record: _RunRecord, outcome: OutcomeT
     ) -> RunSucceeded[OutcomeT] | RunFailed:
         """Integrate stage, or preservation when the run integrates nowhere."""
         patches, strategy = record.patches, self.integration
@@ -600,7 +593,7 @@ class RunSpec[OutcomeT]:
         if record.failure is not None:
             self._preserve(record)
             return record.failed()
-        state.log.integrated(report)
+        record.log.integrated(report)
         try:
             await self.hook_registry.fire("integrated", "integrate", ctx, report)
         except StageError as err:

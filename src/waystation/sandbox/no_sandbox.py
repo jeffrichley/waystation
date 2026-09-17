@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 
-from waystation.observability import get_logger, redact_argv
+from waystation.observability import SANDBOX, log_argv
 from waystation.sandbox.processes import (
     ProcessStrategy,
     ProcessTree,
@@ -17,8 +17,6 @@ from waystation.sandbox.processes import (
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.tails import TailBuffer
 from waystation.workspace import Workspace, remove_workspace
-
-logger = get_logger("waystation.sandbox")
 
 
 def _build_env(
@@ -48,7 +46,7 @@ def _rmtree_retry(path: str | os.PathLike[str], *, attempts: int = 5) -> None:
         except OSError as exc:
             last = exc
             time.sleep(0.05 * (i + 1))
-    logger.error("teardown failed while removing workspace %s: %s", path, last)
+    SANDBOX.error("teardown failed while removing workspace %s: %s", path, last)
 
 
 @dataclass(slots=True)
@@ -71,7 +69,7 @@ class _HostSandbox:
         merged = dict(self._env)
         if env:
             merged.update(env)
-        logger.debug("exec: %s", " ".join(redact_argv(argv)))
+        log_argv(SANDBOX, argv)
 
         popen_kwargs: dict[str, object] = {
             "stdin": asyncio.subprocess.PIPE,
@@ -102,10 +100,15 @@ class _HostSandbox:
                     full.append(text)
                 if tail is not None:
                     tail.append(text)
-                if callback is not None:
-                    maybe = callback(text.rstrip("\r\n"))
-                    if asyncio.iscoroutine(maybe):
-                        await maybe
+                if callback is None:
+                    # Nobody asked to watch this exec, so it is setup rather
+                    # than the agent: its output belongs at DEBUG (issue #6).
+                    # The agent's lines are logged by whoever asked for them.
+                    SANDBOX.debug("%s", text.rstrip("\r\n"))
+                    continue
+                maybe = callback(text.rstrip("\r\n"))
+                if asyncio.iscoroutine(maybe):
+                    await maybe
 
         stdout_full: list[str] | None = [] if capture else None
         stderr_full: list[str] | None = [] if capture else None

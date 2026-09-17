@@ -4,20 +4,29 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import get_args
+from typing import Any, get_args
 
+from waystation.agents.protocol import AgentLine
 from waystation.errors import StageError
-from waystation.results import HookName, HookRaised, Stage
+from waystation.results import (
+    AgentExit,
+    HookName,
+    HookRaised,
+    IntegrationReport,
+    RunFailed,
+    RunSucceeded,
+    Stage,
+)
 from waystation.sandbox.protocol import Sandbox
 
 logger = logging.getLogger("waystation")
 
 HOOK_NAMES: tuple[HookName, ...] = get_args(HookName)
 
-__all__ = ["HookName", "RunContext"]
+__all__ = ["HookBundle", "HookName", "RunContext"]
 
 
 @dataclass(slots=True)
@@ -75,6 +84,50 @@ class RunContext:
 
     def __repr__(self) -> str:
         return f"RunContext(run_id={self.run_id!r}, name={self.name!r})"
+
+
+class HookBundle:
+    """Optional base for hook bundles: every hook is a no-op until overridden.
+
+    Any object with some of the ``on_<hook>`` methods is already a bundle.
+    Subclassing adds signature checking, and marking each override with
+    ``typing.override`` lets a type checker catch a misspelled hook name.
+    Overrides may be sync or async.
+    """
+
+    def on_run_start(self, ctx: RunContext) -> Awaitable[None] | None:
+        """Fired as a run starts, before the workspace stage."""
+        return None
+
+    def on_workspace_ready(self, ctx: RunContext) -> Awaitable[None] | None:
+        """Fired once the workspace is prepared."""
+        return None
+
+    def on_sandbox_ready(self, ctx: RunContext) -> Awaitable[None] | None:
+        """Fired once the sandbox is up, before the agent starts."""
+        return None
+
+    def on_agent_output(
+        self, ctx: RunContext, line: AgentLine
+    ) -> Awaitable[None] | None:
+        """Fired for each line the agent emits."""
+        return None
+
+    def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> Awaitable[None] | None:
+        """Fired when the agent exec ends; ``exit.exit_code`` is -1 if stopped."""
+        return None
+
+    def on_integrated(
+        self, ctx: RunContext, report: IntegrationReport
+    ) -> Awaitable[None] | None:
+        """Fired when integration lands."""
+        return None
+
+    def on_run_end(
+        self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
+    ) -> Awaitable[None] | None:
+        """Fired for every result a run returns."""
+        return None
 
 
 @dataclass(frozen=True, slots=True)

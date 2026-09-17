@@ -9,7 +9,7 @@ import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 from pydantic import BaseModel
@@ -18,6 +18,7 @@ from waystation import (
     AgentExit,
     AgentExited,
     Flow,
+    HookBundle,
     HookRaised,
     Integration,
     IntegrationReport,
@@ -844,3 +845,39 @@ async def test_hook_raising_after_a_failure_is_logged_not_reported(
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "agent_end bug" in logged
     assert "run_end bug" in logged
+
+
+class EndOnly(HookBundle):
+    """A bundle that overrides one hook and inherits no-ops for the rest."""
+
+    def __init__(self) -> None:
+        self.results: list[RunSucceeded[Any] | RunFailed] = []
+
+    @override
+    async def on_run_end(
+        self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
+    ) -> None:
+        self.results.append(result)
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_hook_bundle_subclass_overrides_only_what_it_needs(
+    host_repo: Path,
+) -> None:
+    bundle = EndOnly()
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(
+            commits=(ScriptedCommit(message="feat", files={"f.txt": "x\n"}),),
+            outcome=Answer(summary="ok"),
+        ),
+        sandbox=NoSandbox(),
+        integration=Integration("agents/bundle"),
+        hooks=[bundle, HookBundle()],
+    )
+
+    result = await flow.run("bundle", outcome=Answer)
+
+    assert isinstance(result, RunSucceeded)
+    assert bundle.results == [result]

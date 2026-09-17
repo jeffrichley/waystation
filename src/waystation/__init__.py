@@ -15,6 +15,7 @@ from waystation.agents import (
 from waystation.collect import PatchSeries, collect
 from waystation.errors import PreflightError, StageError, WaystationError
 from waystation.flow import Flow, RunSpec
+from waystation.hooks import HookBundle, RunContext
 from waystation.integration import (
     GitRepo,
     Integration,
@@ -28,6 +29,7 @@ from waystation.results import (
     CommandFailed,
     Errored,
     Failure,
+    HookName,
     HookRaised,
     IntegrationReport,
     OutcomeInvalid,
@@ -56,6 +58,8 @@ __all__ = [
     "Failure",
     "Flow",
     "GitRepo",
+    "HookBundle",
+    "HookName",
     "HookRaised",
     "Integration",
     "IntegrationReport",
@@ -67,6 +71,7 @@ __all__ = [
     "PatchSeries",
     "PreflightError",
     "Refused",
+    "RunContext",
     "RunFailed",
     "RunSpec",
     "RunSucceeded",

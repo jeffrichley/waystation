@@ -4,8 +4,19 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
+from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Give each test its own temp dir, so workspaces never land in the host's."""
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    return temp
 
 
 def _docker_daemon_reachable() -> bool:

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import secrets
 import shutil
+import stat
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +26,21 @@ class Workspace:
     run_id: str
     base_sha: str
     host_repo: Path
+
+
+def _writable_and_retry(
+    function: Callable[[str], object], path: str, error: BaseException
+) -> None:
+    # Git writes objects read-only, and Windows refuses to unlink those.
+    if not isinstance(error, PermissionError):
+        raise error
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
+
+
+def remove_workspace(path: str | os.PathLike[str]) -> None:
+    """Delete a workspace dir, read-only git objects included."""
+    shutil.rmtree(path, onexc=_writable_and_retry)
 
 
 def _git(
@@ -107,7 +126,8 @@ def prepare_workspace(
         _git(tmp, "config", "user.name", name.stdout.strip())
         _git(tmp, "config", "user.email", email.stdout.strip())
     except Exception:
-        shutil.rmtree(tmp, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            remove_workspace(tmp)
         raise
 
     return Workspace(path=tmp, run_id=rid, base_sha=base_sha, host_repo=host)

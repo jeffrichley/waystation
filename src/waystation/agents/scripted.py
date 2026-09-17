@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,20 +26,12 @@ def _find_sh() -> str:
     found = shutil.which("sh")
     if found:
         return found
-    if sys.platform == "win32":
-        candidates: list[Path] = []
-        git = shutil.which("git")
-        if git is not None:
-            git_path = Path(git).resolve()
-            # .../Git/cmd/git.exe → .../Git/bin/sh.exe
-            root = git_path.parent.parent
-            candidates.extend(
-                (
-                    root / "bin" / "sh.exe",
-                    root / "usr" / "bin" / "sh.exe",
-                )
-            )
-        for candidate in candidates:
+    # Not on PATH: look beside git, where Git for Windows ships its sh
+    # (.../Git/cmd/git.exe → .../Git/bin/sh.exe).
+    git = shutil.which("git")
+    if git is not None:
+        root = Path(git).resolve().parent.parent
+        for candidate in (root / "bin" / "sh.exe", root / "usr" / "bin" / "sh.exe"):
             if candidate.is_file():
                 return str(candidate)
     msg = "POSIX sh not found (install Git Bash on Windows)"

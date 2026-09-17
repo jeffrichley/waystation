@@ -1,17 +1,18 @@
-"""Integration: land a PatchSeries onto a named branch without a worktree."""
+"""Integration: land a PatchSeries on the host repo without a worktree."""
 
 from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
+import re
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-from waystation.collect import PatchSeries, _commit_patch, _host_git
+from waystation._git import decode, encode, run_git
+from waystation.collect import PatchSeries
 from waystation.errors import PreflightError, StageError
 from waystation.results import CommandFailed, IntegrationReport, Refused
 from waystation.tails import bound_tail
@@ -39,33 +40,11 @@ class GitRepo:
         return cls(path=path, common_dir=common)
 
     def git(self, *args: str, env: Mapping[str, str] | None = None) -> str:
-        return _repo_git(self.path, *args, env=dict(env) if env else None)
+        return _repo_git(self.path, *args, env=env)
 
 
-def _repo_git(
-    repo: Path,
-    *args: str,
-    check: bool = True,
-    env: dict[str, str] | None = None,
-) -> str:
-    argv = ["git", "-C", str(repo), *args]
-    result = subprocess.run(
-        argv,
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    if check and result.returncode != 0:
-        raise StageError(
-            "integrate",
-            CommandFailed(
-                argv=tuple(argv),
-                exit_code=result.returncode,
-                stderr_tail=bound_tail(result.stderr),
-            ),
-        )
-    return result.stdout.strip()
+def _repo_git(repo: Path, *args: str, env: Mapping[str, str] | None = None) -> str:
+    return run_git(repo, *args, stage="integrate", env=env).stdout.strip()
 
 
 @runtime_checkable
@@ -94,6 +73,24 @@ async def integrate(
     _require_git_240(git_repo)
     async with _lock_for(git_repo.common_dir):
         return await strategy.integrate(git_repo, series)
+
+
+def preserve_series(
+    repo: Path | str | GitRepo,
+    *,
+    branch: str,
+    series: PatchSeries,
+) -> str:
+    """Keep ``series`` on ``branch``, created at the series' base.
+
+    Landing at the base can never conflict. Leaves the host working tree,
+    index, and HEAD untouched. Returns ``branch``.
+    """
+    if series.patches:
+        git_repo = repo if isinstance(repo, GitRepo) else GitRepo.open(repo)
+        commits = _materialize_at_base(git_repo, series)
+        git_repo.git("update-ref", f"refs/heads/{branch}", commits[-1])
+    return branch
 
 
 def _require_git_240(repo: GitRepo) -> None:
@@ -174,12 +171,16 @@ class Integration:
 
 
 def _ref_exists(repo: GitRepo, ref: str) -> bool:
-    result = subprocess.run(
-        ["git", "-C", str(repo.path), "show-ref", "--verify", "--quiet", ref],
+    shown = run_git(
+        repo.path,
+        "show-ref",
+        "--verify",
+        "--quiet",
+        ref,
+        stage="integrate",
         check=False,
-        capture_output=True,
     )
-    return result.returncode == 0
+    return shown.returncode == 0
 
 
 def _committer(repo: GitRepo) -> tuple[str, str]:
@@ -213,23 +214,100 @@ def _materialize_at_base(repo: GitRepo, series: PatchSeries) -> list[str]:
     index = Path(index_path)
     try:
         env = {**os.environ, "GIT_INDEX_FILE": str(index)}
-        _host_git(repo.path, "read-tree", series.base_sha, env=env, stage="integrate")
+        repo.git("read-tree", series.base_sha, env=env)
         parent = series.base_sha
         commits: list[str] = []
         for patch_text in series.patches:
             parent = _commit_patch(
-                repo.path,
+                repo,
                 patch_text=patch_text,
                 parent=parent,
                 committer_name=name,
                 committer_email=email,
                 env=env,
-                stage="integrate",
             )
             commits.append(parent)
         return commits
     finally:
         index.unlink(missing_ok=True)
+
+
+_SUBJECT_PATCH_PREFIX = re.compile(r"^\[PATCH(?:\s+\d+/\d+)?\]\s*")
+
+
+def _commit_patch(
+    repo: GitRepo,
+    *,
+    patch_text: str,
+    parent: str,
+    committer_name: str,
+    committer_email: str,
+    env: dict[str, str],
+) -> str:
+    with tempfile.TemporaryDirectory(prefix="waystation-patch-") as tmp:
+        msg_file = Path(tmp) / "MSG"
+        diff_file = Path(tmp) / "DIFF"
+        mail = run_git(
+            repo.path,
+            "mailinfo",
+            str(msg_file),
+            str(diff_file),
+            stage="integrate",
+            stdin=encode(patch_text),
+        )
+        author_name, author_email, subject = _parse_mailinfo(mail.stdout)
+        subject = _SUBJECT_PATCH_PREFIX.sub("", subject).strip() or "commit"
+        body = decode(msg_file.read_bytes())
+        message = subject if not body.strip() else f"{subject}\n\n{body}"
+        msg_file.write_bytes(encode(message))
+
+        author_date = _parse_date(patch_text)
+        if diff_file.stat().st_size > 0:
+            repo.git("apply", "--cached", str(diff_file), env=env)
+
+        tree = repo.git("write-tree", env=env)
+        commit_env = {
+            **env,
+            "GIT_AUTHOR_NAME": author_name or committer_name,
+            "GIT_AUTHOR_EMAIL": author_email or committer_email,
+            "GIT_COMMITTER_NAME": committer_name,
+            "GIT_COMMITTER_EMAIL": committer_email,
+        }
+        if author_date:
+            commit_env["GIT_AUTHOR_DATE"] = author_date
+        return repo.git(
+            "commit-tree", tree, "-p", parent, "-F", str(msg_file), env=commit_env
+        )
+
+
+def _parse_mailinfo(stdout: str) -> tuple[str, str, str]:
+    author = ""
+    email = ""
+    subject = ""
+    for line in stdout.splitlines():
+        if line.startswith("Author: "):
+            author = line[len("Author: ") :].strip()
+        elif line.startswith("Email: "):
+            email = line[len("Email: ") :].strip()
+        elif line.startswith("Subject: "):
+            subject = line[len("Subject: ") :].strip()
+    return author, email, subject
+
+
+def _parse_date(patch_text: str) -> str | None:
+    for line in patch_text.splitlines():
+        if line.startswith("Date: "):
+            return line[len("Date: ") :].strip()
+        if line.startswith("---"):
+            break
+    return None
+
+
+def _message_file(message: str) -> str:
+    """Write a commit message to a temp file, bytes as-is (no CRLF on Windows)."""
+    with tempfile.NamedTemporaryFile(delete=False, prefix="waystation-msg-") as fh:
+        fh.write(encode(message))
+        return fh.name
 
 
 def _commit_meta(repo: GitRepo, sha: str) -> tuple[str, str, str, str]:
@@ -277,11 +355,7 @@ def _apply_onto(
         }
         if author_date:
             env["GIT_AUTHOR_DATE"] = author_date
-        with tempfile.NamedTemporaryFile(
-            "w", delete=False, prefix="waystation-msg-", encoding="utf-8"
-        ) as fh:
-            fh.write(message)
-            msg_path = fh.name
+        msg_path = _message_file(message)
         try:
             new = repo.git(
                 "commit-tree",
@@ -329,11 +403,7 @@ def _merge_onto(
     }
     if author_date:
         env["GIT_AUTHOR_DATE"] = author_date
-    with tempfile.NamedTemporaryFile(
-        "w", delete=False, prefix="waystation-msg-", encoding="utf-8"
-    ) as fh:
-        fh.write(message)
-        msg_path = fh.name
+    msg_path = _message_file(message)
     try:
         new = repo.git(
             "commit-tree",
@@ -354,15 +424,14 @@ def _merge_onto(
 def _merge_tree(
     repo: GitRepo, *, merge_base: str, tip: str, other: str
 ) -> tuple[str, int, str]:
-    argv = [
-        "git",
-        "-C",
-        str(repo.path),
+    merged = run_git(
+        repo.path,
         "merge-tree",
         "--write-tree",
         f"--merge-base={merge_base}",
         tip,
         other,
-    ]
-    result = subprocess.run(argv, check=False, capture_output=True, text=True)
-    return result.stdout, result.returncode, result.stderr
+        stage="integrate",
+        check=False,
+    )
+    return merged.stdout, merged.returncode, merged.stderr

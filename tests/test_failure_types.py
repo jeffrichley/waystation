@@ -39,7 +39,7 @@ def test_failure_union_members_are_matchable() -> None:
         OutcomeMissing(stdout_tail=""),
         OutcomeInvalid(raw={"x": "no"}, error=_validation_error()),
         HookRaised(
-            hook="on_agent_end",
+            hook="agent_end",
             function="user_hook",
             exception=RuntimeError("h"),
         ),

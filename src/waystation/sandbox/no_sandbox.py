@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import signal
-import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 
+from waystation.sandbox.process_tree import (
+    ProcessTree,
+    ProcessTreeStrategy,
+    host_process_trees,
+)
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.tails import TailBuffer
 from waystation.workspace import Workspace, remove_workspace
@@ -52,42 +55,6 @@ def _build_env(
     return env
 
 
-def _kill_process_tree(
-    process: asyncio.subprocess.Process,
-    *,
-    job: object | None = None,
-) -> None:
-    """Kill ``process`` and every descendant before cancellation completes."""
-    pid = process.pid
-    if pid is None and job is None:
-        return
-    if sys.platform == "win32":
-        if job is not None:
-            with suppress(OSError):
-                import ctypes
-
-                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-                kernel32.TerminateJobObject(job, 1)
-        if pid is not None:
-            import subprocess as sp
-
-            with suppress(OSError):
-                sp.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    check=False,
-                    capture_output=True,
-                )
-            with suppress(ProcessLookupError, OSError):
-                process.kill()
-        return
-    # POSIX: started in its own session / process group.
-    if pid is not None:  # pragma: no cover
-        with suppress(ProcessLookupError, OSError, PermissionError):
-            os.killpg(pid, signal.SIGKILL)
-        with suppress(ProcessLookupError, OSError):
-            process.kill()
-
-
 def _rmtree_retry(path: str | os.PathLike[str], *, attempts: int = 5) -> None:
     """Remove a workspace dir; retry briefly on Windows file-lock races."""
     import time
@@ -107,7 +74,8 @@ def _rmtree_retry(path: str | os.PathLike[str], *, attempts: int = 5) -> None:
 class _HostSandbox:
     workspace: str
     _env: dict[str, str]
-    _job: object | None = None
+    _strategy: ProcessTreeStrategy
+    _trees: list[ProcessTree] = field(default_factory=list)
 
     async def exec(
         self,
@@ -129,19 +97,11 @@ class _HostSandbox:
             "stderr": asyncio.subprocess.PIPE,
             "cwd": self.workspace,
             "env": merged,
+            **self._strategy.spawn_options(),
         }
-        if sys.platform != "win32":  # pragma: no cover
-            popen_kwargs["start_new_session"] = True
-        else:
-            # CREATE_NEW_PROCESS_GROUP; Job Object + taskkill /T on cancel.
-            popen_kwargs["creationflags"] = getattr(
-                __import__("subprocess"), "CREATE_NEW_PROCESS_GROUP", 0
-            )
-
         process = await asyncio.create_subprocess_exec(*argv, **popen_kwargs)  # type: ignore[arg-type]
-
-        if sys.platform == "win32":
-            self._assign_windows_job(process)
+        tree = self._strategy.adopt(process)
+        self._trees.append(tree)
 
         async def _pump(
             stream: asyncio.StreamReader | None,
@@ -189,7 +149,7 @@ class _HostSandbox:
             exit_code = await process.wait()
             await asyncio.gather(pump_out, pump_err)
         except asyncio.CancelledError:
-            _kill_process_tree(process, job=self._job)
+            tree.kill()
             with suppress(asyncio.CancelledError):
                 await process.wait()
             pump_out.cancel()
@@ -214,77 +174,10 @@ class _HostSandbox:
             stderr=stderr_tail.text(),
         )
 
-    def _assign_windows_job(self, process: asyncio.subprocess.Process) -> None:
-        """Place the process in a Job Object so tree kill is reliable."""
-        if sys.platform != "win32" or process.pid is None:  # pragma: no cover
-            return
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
-            ProcessExtendLimitInformation = 9
-
-            class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
-                _fields_ = [
-                    ("PerProcessUserTimeLimit", wintypes.LARGE_INTEGER),
-                    ("PerJobUserTimeLimit", wintypes.LARGE_INTEGER),
-                    ("LimitFlags", wintypes.DWORD),
-                    ("MinimumWorkingSetSize", ctypes.c_size_t),
-                    ("MaximumWorkingSetSize", ctypes.c_size_t),
-                    ("ActiveProcessLimit", wintypes.DWORD),
-                    ("Affinity", ctypes.c_size_t),
-                    ("PriorityClass", wintypes.DWORD),
-                    ("SchedulingClass", wintypes.DWORD),
-                ]
-
-            class IO_COUNTERS(ctypes.Structure):
-                _fields_ = [
-                    ("ReadOperationCount", ctypes.c_ulonglong),
-                    ("WriteOperationCount", ctypes.c_ulonglong),
-                    ("OtherOperationCount", ctypes.c_ulonglong),
-                    ("ReadTransferCount", ctypes.c_ulonglong),
-                    ("WriteTransferCount", ctypes.c_ulonglong),
-                    ("OtherTransferCount", ctypes.c_ulonglong),
-                ]
-
-            class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
-                _fields_ = [
-                    ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
-                    ("IoInfo", IO_COUNTERS),
-                    ("ProcessMemoryLimit", ctypes.c_size_t),
-                    ("JobMemoryLimit", ctypes.c_size_t),
-                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                    ("PeakJobMemoryUsed", ctypes.c_size_t),
-                ]
-
-            job = kernel32.CreateJobObjectW(None, None)
-            if not job:
-                return
-            info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            if not kernel32.SetInformationJobObject(
-                job,
-                ProcessExtendLimitInformation,
-                ctypes.byref(info),
-                ctypes.sizeof(info),
-            ):
-                kernel32.CloseHandle(job)
-                return
-            PROCESS_ALL_ACCESS = 0x1F0FFF
-            handle = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, process.pid)
-            if not handle:
-                kernel32.CloseHandle(job)
-                return
-            ok = kernel32.AssignProcessToJobObject(job, handle)
-            kernel32.CloseHandle(handle)
-            if not ok:
-                kernel32.CloseHandle(job)
-                return
-            self._job = job
-        except OSError:
-            logger.exception("failed to assign process to Windows Job Object")
+    def release_trees(self) -> None:
+        for tree in self._trees:
+            tree.release()
+        self._trees.clear()
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,6 +186,7 @@ class NoSandbox:
 
     env: Mapping[str, str] = field(default_factory=dict)
     pass_env: Sequence[str] = ()
+    process_trees: ProcessTreeStrategy = field(default_factory=host_process_trees)
 
     async def preflight(self) -> None:
         return None
@@ -311,16 +205,10 @@ class NoSandbox:
         sandbox = _HostSandbox(
             workspace=str(ws.path),
             _env=built,
+            _strategy=self.process_trees,
         )
         try:
             yield sandbox
         finally:
-            if sandbox._job is not None and sys.platform == "win32":
-                with suppress(OSError):
-                    import ctypes
-
-                    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-                    kernel32.TerminateJobObject(sandbox._job, 1)
-                    kernel32.CloseHandle(sandbox._job)
-                    sandbox._job = None
+            sandbox.release_trees()
             _rmtree_retry(ws.path)

@@ -55,6 +55,17 @@ def _split_format_patch(stdout: str) -> tuple[str, ...]:
     return tuple(patches)
 
 
+def _decode(output: bytes) -> str:
+    # Never use text-mode pipes for git: on Windows they rewrite "\n" as "\r\n"
+    # (and back), which changes every line of a patch. surrogateescape keeps
+    # bytes that are not UTF-8.
+    return output.decode("utf-8", errors="surrogateescape")
+
+
+def _encode(text: str) -> bytes:
+    return text.encode("utf-8", errors="surrogateescape")
+
+
 def _host_git(
     repo: Path,
     *args: str,
@@ -63,12 +74,9 @@ def _host_git(
     stage: str = "collect",
 ) -> subprocess.CompletedProcess[str]:
     argv = ["git", "-C", str(repo), *args]
-    result = subprocess.run(
-        argv,
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
+    raw = subprocess.run(argv, check=False, capture_output=True, env=env)
+    result = subprocess.CompletedProcess(
+        argv, raw.returncode, _decode(raw.stdout), _decode(raw.stderr)
     )
     if check and result.returncode != 0:
         raise StageError(
@@ -291,10 +299,9 @@ def _commit_patch(
         diff_file = tmp_path / "DIFF"
         mail = subprocess.run(
             ["git", "mailinfo", str(msg_file), str(diff_file)],
-            input=patch_text,
+            input=_encode(patch_text),
             check=False,
             capture_output=True,
-            text=True,
             cwd=host,
         )
         if mail.returncode != 0:
@@ -303,14 +310,14 @@ def _commit_patch(
                 CommandFailed(
                     argv=("git", "mailinfo"),
                     exit_code=mail.returncode,
-                    stderr_tail=bound_tail(mail.stderr),
+                    stderr_tail=bound_tail(_decode(mail.stderr)),
                 ),
             )
-        author_name, author_email, subject = _parse_mailinfo(mail.stdout)
+        author_name, author_email, subject = _parse_mailinfo(_decode(mail.stdout))
         subject = _SUBJECT_PATCH_PREFIX.sub("", subject).strip() or "commit"
-        body = msg_file.read_text(encoding="utf-8", errors="replace")
+        body = _decode(msg_file.read_bytes())
         message = subject if not body.strip() else f"{subject}\n\n{body}"
-        msg_file.write_text(message, encoding="utf-8")
+        msg_file.write_bytes(_encode(message))
 
         author_date = _parse_date(patch_text)
         if diff_file.stat().st_size > 0:
@@ -318,7 +325,6 @@ def _commit_patch(
                 ["git", "-C", str(host), "apply", "--cached", str(diff_file)],
                 check=False,
                 capture_output=True,
-                text=True,
                 env=env,
             )
             if apply.returncode != 0:
@@ -327,7 +333,7 @@ def _commit_patch(
                     CommandFailed(
                         argv=("git", "apply", "--cached"),
                         exit_code=apply.returncode,
-                        stderr_tail=bound_tail(apply.stderr),
+                        stderr_tail=bound_tail(_decode(apply.stderr)),
                     ),
                 )
 

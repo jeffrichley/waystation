@@ -11,7 +11,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-from waystation.collect import PatchSeries, _commit_patch, _host_git
+from waystation.collect import (
+    PatchSeries,
+    _commit_patch,
+    _decode,
+    _encode,
+    _host_git,
+)
 from waystation.errors import PreflightError, StageError
 from waystation.results import CommandFailed, IntegrationReport, Refused
 from waystation.tails import bound_tail
@@ -49,23 +55,17 @@ def _repo_git(
     env: dict[str, str] | None = None,
 ) -> str:
     argv = ["git", "-C", str(repo), *args]
-    result = subprocess.run(
-        argv,
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    result = subprocess.run(argv, check=False, capture_output=True, env=env)
     if check and result.returncode != 0:
         raise StageError(
             "integrate",
             CommandFailed(
                 argv=tuple(argv),
                 exit_code=result.returncode,
-                stderr_tail=bound_tail(result.stderr),
+                stderr_tail=bound_tail(_decode(result.stderr)),
             ),
         )
-    return result.stdout.strip()
+    return _decode(result.stdout).strip()
 
 
 @runtime_checkable
@@ -232,6 +232,13 @@ def _materialize_at_base(repo: GitRepo, series: PatchSeries) -> list[str]:
         index.unlink(missing_ok=True)
 
 
+def _message_file(message: str) -> str:
+    """Write a commit message to a temp file, bytes as-is (no CRLF on Windows)."""
+    with tempfile.NamedTemporaryFile(delete=False, prefix="waystation-msg-") as fh:
+        fh.write(_encode(message))
+        return fh.name
+
+
 def _commit_meta(repo: GitRepo, sha: str) -> tuple[str, str, str, str]:
     raw = repo.git("log", "-1", "--format=%an%n%ae%n%aI%n%B", sha)
     lines = raw.splitlines()
@@ -277,11 +284,7 @@ def _apply_onto(
         }
         if author_date:
             env["GIT_AUTHOR_DATE"] = author_date
-        with tempfile.NamedTemporaryFile(
-            "w", delete=False, prefix="waystation-msg-", encoding="utf-8"
-        ) as fh:
-            fh.write(message)
-            msg_path = fh.name
+        msg_path = _message_file(message)
         try:
             new = repo.git(
                 "commit-tree",
@@ -329,11 +332,7 @@ def _merge_onto(
     }
     if author_date:
         env["GIT_AUTHOR_DATE"] = author_date
-    with tempfile.NamedTemporaryFile(
-        "w", delete=False, prefix="waystation-msg-", encoding="utf-8"
-    ) as fh:
-        fh.write(message)
-        msg_path = fh.name
+    msg_path = _message_file(message)
     try:
         new = repo.git(
             "commit-tree",
@@ -364,5 +363,5 @@ def _merge_tree(
         tip,
         other,
     ]
-    result = subprocess.run(argv, check=False, capture_output=True, text=True)
-    return result.stdout, result.returncode, result.stderr
+    result = subprocess.run(argv, check=False, capture_output=True)
+    return _decode(result.stdout), result.returncode, _decode(result.stderr)

@@ -15,6 +15,31 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 
 `--strict-markers` is on, so a typo fails collection rather than silently matching nothing. `addopts` carries `-m "not live"`.
 
+## Reach for these before writing your own
+
+`host_repo` was copy-pasted into thirteen modules before anyone noticed. Check this table first; if what you need is close but not exact, widen the shared one rather than forking it.
+
+**Fixtures — `conftest.py`:**
+
+| Fixture | Gives you |
+| --- | --- |
+| `host_repo` | a throwaway host repo: git identity, one commit on HEAD |
+| `isolated_tempdir` | autouse — every test's temp dir is its own, so a workspace never lands in the host's |
+| `tmp_path` | pytest's own; the root the two above are built on |
+
+**Helpers — `helpers.py`** (plain functions, callable from a fixture or a test body):
+
+| Helper | Gives you |
+| --- | --- |
+| `git(repo, *args)` | run git in `repo`, stdout stripped, raises on non-zero |
+| `init_host_repo(root)` | what `host_repo` is built from — call it directly only for a *second* repo, or one outside `tmp_path` |
+| `sh()` | the POSIX sh on this host (Git Bash on Windows) |
+| `OK_OUTCOME` | the Outcome a scripted agent reports when the test doesn't care |
+
+Test modules import helpers as a top-level module — `from helpers import git` — because pytest puts the test file's directory on `sys.path`. `mypy_path` in `pyproject.toml` includes `tests` so the type checker resolves it the same way.
+
+A fixture used by one module stays in that module. It moves to `conftest.py` the second time it's needed — not the third.
+
 ## Idiom
 
 - **Test through the public surface.** Import from `waystation`, not from a private module, unless the seam under test *is* internal. A test that reaches into internals breaks on refactors that changed no behaviour — that's the tell.

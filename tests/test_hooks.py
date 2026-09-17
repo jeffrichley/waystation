@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +13,7 @@ from typing import Any, override
 import pytest
 from pydantic import BaseModel
 
+from helpers import git
 from waystation import (
     AgentExit,
     AgentExited,
@@ -46,30 +46,6 @@ OK_OUTCOME_LINE = OUTCOME + '{"summary": "ok"}'
 
 class Answer(BaseModel):
     summary: str
-
-
-@pytest.fixture
-def host_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "host"
-    repo.mkdir()
-    _git(repo, "init")
-    _git(repo, "config", "user.name", "Waystation Test")
-    _git(repo, "config", "user.email", "test@waystation.example")
-    (repo / "README").write_text("committed\n", encoding="utf-8")
-    _git(repo, "add", "README")
-    _git(repo, "commit", "-m", "init")
-    return repo
-
-
-def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
 
 
 @dataclass(frozen=True)
@@ -437,7 +413,7 @@ async def test_run_context_is_read_only_and_sandbox_is_scoped(
     result = await flow.run("probe", outcome=Answer)
 
     assert isinstance(result, RunSucceeded)
-    head = _git(host_repo, "rev-parse", "HEAD")
+    head = git(host_repo, "rev-parse", "HEAD")
     assert result.base_sha == head
     assert facts == {
         "start": (None, False),
@@ -546,7 +522,7 @@ async def test_raising_hook_past_agent_start_preserves_the_series(
     assert result.stage == "agent"
     assert isinstance(result.failure, HookRaised)
     assert result.preserved == f"waystation/{result.run_id}"
-    assert _git(host_repo, "log", "-1", "--format=%s", result.preserved) == "keep me"
+    assert git(host_repo, "log", "-1", "--format=%s", result.preserved) == "keep me"
 
 
 @pytest.mark.git
@@ -594,19 +570,19 @@ async def test_raising_integrated_hook_keeps_landed_series_unpreserved(
     assert isinstance(result, RunFailed)
     assert result.stage == "integrate"
     assert result.preserved is None
-    assert _git(host_repo, "log", "-1", "--format=%s", "agents/landed") == "landed"
-    refs = _git(host_repo, "for-each-ref", "--format=%(refname:short)").splitlines()
+    assert git(host_repo, "log", "-1", "--format=%s", "agents/landed") == "landed"
+    refs = git(host_repo, "for-each-ref", "--format=%(refname:short)").splitlines()
     assert f"waystation/{result.run_id}" not in refs
 
 
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_integrated_fires_only_when_integration_lands(host_repo: Path) -> None:
-    _git(host_repo, "switch", "-q", "-c", "agents/taken")
+    git(host_repo, "switch", "-q", "-c", "agents/taken")
     (host_repo / "clash.txt").write_bytes(b"theirs\n")
-    _git(host_repo, "add", "clash.txt")
-    _git(host_repo, "commit", "-qm", "theirs")
-    _git(host_repo, "switch", "-q", "-")
+    git(host_repo, "add", "clash.txt")
+    git(host_repo, "commit", "-qm", "theirs")
+    git(host_repo, "switch", "-q", "-")
     agent = ScriptedAgent(
         commits=(ScriptedCommit(message="ours", files={"clash.txt": "ours\n"}),),
         outcome=Answer(summary="ok"),

@@ -5,12 +5,13 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, get_args
 
 from waystation.agents.protocol import AgentLine
 from waystation.errors import StageError
+from waystation.observability import HOOK, RunLoggerAdapter, tag, tagged_logger
 from waystation.results import (
     AgentExit,
     HookName,
@@ -22,7 +23,7 @@ from waystation.results import (
 )
 from waystation.sandbox.protocol import Sandbox
 
-logger = logging.getLogger("waystation")
+logger = tagged_logger("waystation")
 
 HOOK_NAMES: tuple[HookName, ...] = get_args(HookName)
 
@@ -38,6 +39,10 @@ class RunState:
     repo: Path
     base_sha: str | None = None
     sandbox: Sandbox | None = None
+    log: RunLoggerAdapter = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.log = tag(HOOK, self.run_id, self.name)
 
 
 class RunContext:
@@ -81,6 +86,11 @@ class RunContext:
             msg = "ctx.sandbox is available from sandbox_ready until teardown"
             raise RuntimeError(msg)
         return sandbox
+
+    @property
+    def log(self) -> logging.LoggerAdapter[logging.Logger]:
+        """A logger already tagged with this run, for a hook's own lines."""
+        return self._state.log
 
     def __repr__(self) -> str:
         return f"RunContext(run_id={self.run_id!r}, name={self.name!r})"

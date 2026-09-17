@@ -13,7 +13,6 @@ OS-specific too, but they belong to their own consumers, not here.
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import signal
 import subprocess
@@ -22,6 +21,8 @@ from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+
+from waystation.observability import tagged_logger
 
 # Keys a process needs to start at all, per OS; a run's own env goes on top.
 _POSIX_BASE_ENV = ("PATH", "HOME", "TMPDIR")
@@ -39,7 +40,7 @@ _WINDOWS_BASE_ENV = (
     "HOMEPATH",
 )
 
-logger = logging.getLogger("waystation")
+logger = tagged_logger("waystation")
 
 
 @runtime_checkable

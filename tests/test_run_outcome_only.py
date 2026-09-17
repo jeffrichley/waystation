@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
@@ -10,6 +9,7 @@ from typing import TypedDict
 import pytest
 from pydantic import BaseModel
 
+from helpers import git
 from waystation import (
     Flow,
     NoSandbox,
@@ -18,30 +18,6 @@ from waystation import (
     Summary,
     prepare_workspace,
 )
-
-
-@pytest.fixture
-def host_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "host"
-    repo.mkdir()
-    _git(repo, "init")
-    _git(repo, "config", "user.name", "Waystation Test")
-    _git(repo, "config", "user.email", "test@waystation.example")
-    (repo / "README").write_text("committed\n", encoding="utf-8")
-    _git(repo, "add", "README")
-    _git(repo, "commit", "-m", "init")
-    return repo
-
-
-def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
 
 
 class Answer(BaseModel):
@@ -188,9 +164,9 @@ async def test_base_ref_resolved_when_await_starts(host_repo: Path) -> None:
     )
     spec = flow.run("deferred", outcome=Answer)
     (host_repo / "README").write_text("committed\nupdated\n", encoding="utf-8")
-    _git(host_repo, "add", "README")
-    _git(host_repo, "commit", "-m", "after run built")
-    new_sha = _git(host_repo, "rev-parse", "HEAD")
+    git(host_repo, "add", "README")
+    git(host_repo, "commit", "-m", "after run built")
+    new_sha = git(host_repo, "rev-parse", "HEAD")
 
     result = await spec
     assert result.base_sha == new_sha
@@ -200,7 +176,7 @@ async def test_base_ref_resolved_when_await_starts(host_repo: Path) -> None:
 def test_prepare_workspace_checks_out_waystation_branch(host_repo: Path) -> None:
     ws = prepare_workspace(host_repo)
     try:
-        branch = _git(ws.path, "branch", "--show-current")
+        branch = git(ws.path, "branch", "--show-current")
         assert branch == f"waystation/{ws.run_id}"
         assert (ws.path / "README").read_text(encoding="utf-8") == "committed\n"
         assert not (ws.path / "SECRET").exists()

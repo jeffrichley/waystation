@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import subprocess
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -35,30 +34,6 @@ from waystation.workspace import Workspace
 
 class Answer(BaseModel):
     summary: str
-
-
-@pytest.fixture
-def host_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "host"
-    repo.mkdir()
-    _git(repo, "init")
-    _git(repo, "config", "user.name", "Waystation Test")
-    _git(repo, "config", "user.email", "test@waystation.example")
-    (repo / "README").write_text("committed\n", encoding="utf-8")
-    _git(repo, "add", "README")
-    _git(repo, "commit", "-m", "init")
-    return repo
-
-
-def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
 
 
 async def _await_spec(spec: Any) -> Any:

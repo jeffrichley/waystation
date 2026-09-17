@@ -31,6 +31,7 @@ from waystation import (
     RunSucceeded,
     ScriptedAgent,
     ScriptedCommit,
+    configure_logging,
 )
 
 
@@ -62,8 +63,11 @@ def _init_host(root: Path) -> Path:
 
 
 async def main() -> None:
-    # Windows often logs teardown PermissionError; result kind is unchanged.
-    logging.getLogger("waystation").setLevel(logging.CRITICAL)
+    # One rich handler on stderr, so this demo's own prints keep stdout.
+    configure_logging("INFO")
+    # Windows often cannot unlink git's read-only objects at teardown. The
+    # run's result is unchanged, so keep that one line out of the demo.
+    logging.getLogger("waystation.sandbox").setLevel(logging.CRITICAL)
     root = Path(tempfile.mkdtemp(prefix="waystation-smoke-"))
     try:
         host = _init_host(root)

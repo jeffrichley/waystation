@@ -6,7 +6,8 @@ How the engineering skills should consume this repo's domain documentation when 
 
 - **`CONTEXT.md`** at the repo root, or
 - **`CONTEXT-MAP.md`** at the repo root if it exists — it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
-- **`docs/adr/`** — read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
+- **`docs/adr/README.md`** — the decision index. Start here, not with the directory listing: every ADR has a *read it when you're…* line, so you can scan one table and open only the two or three that touch your change. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
+- **`docs/agents/architecture.md`** — the standing design lens, which is not a decision and so is not an ADR: deep modules, the patterns this codebase already runs on, and the bar a new seam has to clear. Read it before proposing a structural change or reviewing one.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 

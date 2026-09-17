@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 
+from waystation.observability import get_logger, redact_argv
 from waystation.sandbox.processes import (
     ProcessStrategy,
     ProcessTree,
@@ -18,7 +18,7 @@ from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.tails import TailBuffer
 from waystation.workspace import Workspace, remove_workspace
 
-logger = logging.getLogger("waystation")
+logger = get_logger("waystation.sandbox")
 
 
 def _build_env(
@@ -71,6 +71,7 @@ class _HostSandbox:
         merged = dict(self._env)
         if env:
             merged.update(env)
+        logger.debug("exec: %s", " ".join(redact_argv(argv)))
 
         popen_kwargs: dict[str, object] = {
             "stdin": asyncio.subprocess.PIPE,

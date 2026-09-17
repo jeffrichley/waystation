@@ -22,6 +22,7 @@ from waystation.integration import (
     IntegrationStrategy,
     integrate,
 )
+from waystation.observability import configure_logging, redact_argv
 from waystation.results import (
     AgentExit,
     AgentExited,
@@ -88,9 +89,11 @@ __all__ = [
     "WaystationError",
     "Workspace",
     "collect",
+    "configure_logging",
     "find_outcome",
     "integrate",
     "outcome_instructions",
     "prepare_workspace",
+    "redact_argv",
     "run_agent",
 ]

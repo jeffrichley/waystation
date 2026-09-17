@@ -14,8 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from waystation.errors import StageError
+from waystation.observability import get_logger, redact_argv
 from waystation.results import CommandFailed, Refused
 from waystation.tails import bound_tail
+
+logger = get_logger("waystation.git")
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +50,7 @@ def _git(
     repo: Path, *args: str, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
     argv = ["git", "-C", str(repo), *args]
+    logger.debug("%s", " ".join(redact_argv(argv)))
     result = subprocess.run(
         argv,
         check=False,
@@ -106,6 +110,7 @@ def prepare_workspace(
             str(host),
             str(tmp),
         ]
+        logger.debug("%s", " ".join(redact_argv(clone_argv)))
         clone = subprocess.run(
             clone_argv,
             check=False,

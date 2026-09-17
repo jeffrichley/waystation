@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import secrets
 import shutil
 import time
@@ -45,6 +46,8 @@ from waystation.results import (
 from waystation.sandbox.protocol import Sandbox, SandboxBackend
 from waystation.workspace import Workspace, prepare_workspace
 
+logger = logging.getLogger("waystation")
+
 
 def _assert_object_outcome(outcome_type: type[Any]) -> None:
     adapter = TypeAdapter(outcome_type)
@@ -58,6 +61,18 @@ def _assert_object_outcome(outcome_type: type[Any]) -> None:
     if schema_type != "object" and "properties" not in schema:
         msg = f"outcome type must be an object-shaped type, got {outcome_type!r}"
         raise TypeError(msg)
+
+
+def _log_later_failure(run_id: str, err: StageError) -> None:
+    """Log a failure met after the run already failed; never report it (ADR-0024)."""
+    exception = getattr(err.failure, "exception", None)
+    logger.error(
+        "run %s: %s failed after the run had already failed: %r",
+        run_id,
+        err.stage,
+        err.failure,
+        exc_info=exception,
+    )
 
 
 def _run_failed(
@@ -333,6 +348,9 @@ class RunSpec[OutcomeT]:
                 "run_end", end_stage, ctx, result, stop_on_raise=False
             )
         except StageError as err:
+            if isinstance(result, RunFailed):
+                _log_later_failure(result.run_id, err)
+                return result
             return _run_failed(
                 run_id=result.run_id,
                 base_sha=result.base_sha,
@@ -459,7 +477,10 @@ class RunSpec[OutcomeT]:
                 try:
                     await hooks.fire("agent_end", "agent", ctx, agent_exit)
                 except StageError as err:
-                    agent_failure = err
+                    if agent_failure is None:
+                        agent_failure = err
+                    else:
+                        _log_later_failure(run_id, err)
 
                 stage = "collect"
                 t3 = time.perf_counter()

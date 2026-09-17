@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import get_args
 from waystation.errors import StageError
 from waystation.results import HookName, HookRaised, Stage
 from waystation.sandbox.protocol import Sandbox
+
+logger = logging.getLogger("waystation")
 
 HOOK_NAMES: tuple[HookName, ...] = get_args(HookName)
 
@@ -129,7 +132,8 @@ class HookRegistry:
 
         A raising function raises ``StageError(stage, HookRaised(...))`` at
         once, or with ``stop_on_raise=False`` for the first one raised after
-        every other function at ``hook`` has run.
+        every other function at ``hook`` has run; later ones are logged
+        (ADR-0024).
         """
         first: StageError | None = None
         for entry in self.entries:
@@ -153,5 +157,14 @@ class HookRegistry:
                 if first is None:
                     error.__cause__ = exc
                     first = error
+                else:
+                    logger.error(
+                        "run %s: %s hook %s raised after another did: %r",
+                        ctx.run_id,
+                        hook,
+                        _describe(entry.function),
+                        exc,
+                        exc_info=exc,
+                    )
         if first is not None:
             raise first

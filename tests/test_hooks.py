@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 
 from waystation import (
     AgentExit,
+    AgentExited,
     Flow,
     HookRaised,
     Integration,
@@ -749,7 +751,7 @@ async def test_time_spent_in_agent_output_hooks_is_not_agent_silence(
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_every_run_end_hook_fires_even_after_one_raises(
-    host_repo: Path,
+    host_repo: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     seen: list[Any] = []
     error = RuntimeError("run_end bug")
@@ -757,17 +759,22 @@ async def test_every_run_end_hook_fires_even_after_one_raises(
     def boom(ctx: RunContext, result: Any) -> None:
         raise error
 
+    def records_then_raises(ctx: RunContext, result: Any) -> None:
+        seen.append(result)
+        raise RuntimeError("second run_end bug")
+
     flow = Flow(
         host_repo,
         agent=ScriptedAgent(outcome=Answer(summary="ok")),
         sandbox=NoSandbox(),
     )
 
-    result = await (
-        flow.run("end", outcome=Answer)
-        .on_run_end(boom)
-        .on_run_end(lambda ctx, ended: seen.append(ended))
-    )
+    with caplog.at_level(logging.ERROR, logger="waystation"):
+        result = await (
+            flow.run("end", outcome=Answer)
+            .on_run_end(boom)
+            .on_run_end(records_then_raises)
+        )
 
     assert isinstance(result, RunFailed)
     assert isinstance(result.failure, HookRaised)
@@ -775,6 +782,8 @@ async def test_every_run_end_hook_fires_even_after_one_raises(
     assert len(seen) == 1
     assert isinstance(seen[0], RunSucceeded)
     assert seen[0].run_id == result.run_id
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "second run_end bug" in logged
 
 
 @pytest.mark.git
@@ -805,3 +814,33 @@ async def test_agent_end_fires_when_the_agent_is_stopped(host_repo: Path) -> Non
     assert result.agent is not None
     assert result.agent.exit_code == -1
     assert recorder.args("agent_end") == [result.agent]
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_hook_raising_after_a_failure_is_logged_not_reported(
+    host_repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(outcome=Answer(summary="ok"), exit_code=3),
+        sandbox=NoSandbox(),
+    )
+
+    def broken_end(ctx: RunContext, exit: AgentExit) -> None:
+        raise RuntimeError("agent_end bug")
+
+    def broken_run_end(ctx: RunContext, result: Any) -> None:
+        raise RuntimeError("run_end bug")
+
+    spec = flow.run("fail", outcome=Answer)
+    with caplog.at_level(logging.ERROR, logger="waystation"):
+        result = await spec.on_agent_end(broken_end).on_run_end(broken_run_end)
+
+    assert isinstance(result, RunFailed)
+    assert result.stage == "agent"
+    assert isinstance(result.failure, AgentExited)
+    assert result.failure.exit_code == 3
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "agent_end bug" in logged
+    assert "run_end bug" in logged

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 from collections.abc import Sequence
@@ -14,7 +15,8 @@ from pydantic.json_schema import GenerateJsonSchema
 
 from waystation.agents.protocol import AgentProvider
 from waystation.agents.run_agent import run_agent
-from waystation.collect import collect, preserve_series
+from waystation.clock import get_clock, race_timeout
+from waystation.collect import CollectResult, collect, preserve_series
 from waystation.errors import PreflightError, StageError
 from waystation.integration import Integration, IntegrationStrategy, integrate
 from waystation.results import (
@@ -28,10 +30,11 @@ from waystation.results import (
     Series,
     Stage,
     Summary,
+    TimedOut,
     Timeouts,
 )
-from waystation.sandbox.protocol import SandboxBackend
-from waystation.workspace import prepare_workspace
+from waystation.sandbox.protocol import Sandbox, SandboxBackend
+from waystation.workspace import Workspace, prepare_workspace
 
 
 def _assert_object_outcome(outcome_type: type[Any]) -> None:
@@ -134,8 +137,37 @@ class RunSpec[OutcomeT]:
             strategy = target
         return replace(self, integration=strategy)
 
+    def with_timeouts(self, timeouts: Timeouts) -> RunSpec[OutcomeT]:
+        """Replace this run's timeouts (does not merge with the Flow default).
+
+        Named ``with_timeouts`` rather than ``timeouts`` so it does not shadow
+        the ``timeouts`` field (issue #26's ``.timeouts(...)`` spelling).
+        """
+        return replace(self, timeouts=timeouts)
+
     def __await__(self):  # type: ignore[no-untyped-def]
         return self._execute().__await__()
+
+    async def _bounded[T](
+        self,
+        stage: Stage,
+        bound: str,
+        seconds: float | None,
+        factory: Any,
+    ) -> T:
+        """Run an awaitable factory under a stage bound; raise StageError on expiry."""
+        clock = get_clock()
+        t0 = clock.monotonic()
+        task: asyncio.Task[T] = asyncio.create_task(factory())
+        try:
+            return await race_timeout(task, seconds)
+        except TimeoutError as exc:
+            elapsed = clock.monotonic() - t0
+            assert seconds is not None
+            raise StageError(
+                stage,
+                TimedOut(bound=bound, limit=seconds, elapsed=elapsed),
+            ) from exc
 
     async def _execute(self) -> RunSucceeded[OutcomeT] | RunFailed:
         run_id = ""
@@ -147,6 +179,7 @@ class RunSpec[OutcomeT]:
         report: IntegrationReport | None = None
         patch_series = None
         stage: Stage = "workspace"
+        timeouts = self.timeouts
 
         try:
             try:
@@ -159,16 +192,38 @@ class RunSpec[OutcomeT]:
 
             stage = "workspace"
             t0 = time.perf_counter()
-            workspace = prepare_workspace(self.repo, base=self.base)
+
+            async def _workspace() -> Workspace:
+                return await asyncio.to_thread(
+                    prepare_workspace, self.repo, base=self.base
+                )
+
+            workspace: Workspace = await self._bounded(
+                "workspace", "workspace", timeouts.workspace, _workspace
+            )
             elapsed["workspace"] = time.perf_counter() - t0
             run_id = workspace.run_id
             base_sha = workspace.base_sha
 
             stage = "sandbox"
             t1 = time.perf_counter()
-            async with self.sandbox.start(workspace, env={}, pass_env=()) as sandbox:
-                elapsed["sandbox"] = time.perf_counter() - t1
 
+            # start() is an async context manager — bound covers enter only.
+            cm = self.sandbox.start(workspace, env={}, pass_env=())
+
+            async def _enter_sandbox() -> Sandbox:
+                return await cm.__aenter__()
+
+            try:
+                sandbox: Sandbox = await self._bounded(
+                    "sandbox", "sandbox", timeouts.sandbox, _enter_sandbox
+                )
+            except BaseException as exc:
+                await cm.__aexit__(type(exc), exc, exc.__traceback__)
+                raise
+            elapsed["sandbox"] = time.perf_counter() - t1
+
+            try:
                 stage = "agent"
                 if isinstance(self.prompt, Path):
                     prompt_text = self.prompt.read_text(encoding="utf-8")
@@ -190,6 +245,7 @@ class RunSpec[OutcomeT]:
                         self.agent,
                         command,
                         self.outcome_type,
+                        timeouts=timeouts,
                     )
                 except StageError as err:
                     elapsed["agent"] = time.perf_counter() - t2
@@ -204,7 +260,13 @@ class RunSpec[OutcomeT]:
 
                 stage = "collect"
                 t3 = time.perf_counter()
-                collected = await collect(sandbox, workspace, salvage=self.salvage)
+
+                async def _collect() -> CollectResult:
+                    return await collect(sandbox, workspace, salvage=self.salvage)
+
+                collected: CollectResult = await self._bounded(
+                    "collect", "collect", timeouts.collect, _collect
+                )
                 elapsed["collect"] = time.perf_counter() - t3
                 series = collected.series_meta
                 patch_series = collected.patch_series
@@ -260,7 +322,14 @@ class RunSpec[OutcomeT]:
                 if self.integration is not None:
                     stage = "integrate"
                     t4 = time.perf_counter()
-                    report = await integrate(self.repo, patch_series, self.integration)
+                    strategy = self.integration
+
+                    async def _integrate() -> IntegrationReport:
+                        return await integrate(self.repo, patch_series, strategy)
+
+                    report = await self._bounded(
+                        "integrate", "integrate", timeouts.integrate, _integrate
+                    )
                     elapsed["integrate"] = time.perf_counter() - t4
                     preserved = None
                 elif patch_series.commits > 0:
@@ -281,6 +350,22 @@ class RunSpec[OutcomeT]:
                     outcome=outcome,
                     report=report,
                 )
+            finally:
+                # Teardown bound (optional); hooks are never bounded here.
+                async def _leave() -> None:
+                    await cm.__aexit__(None, None, None)
+
+                t_td = time.perf_counter()
+                try:
+                    await self._bounded(
+                        "sandbox", "teardown", timeouts.teardown, _leave
+                    )
+                except StageError:
+                    # Teardown timeout still surfaces as RunFailed if nothing else.
+                    raise
+                finally:
+                    if timeouts.teardown is not None:
+                        elapsed.setdefault("sandbox", time.perf_counter() - t_td)
         except StageError as err:
             if (
                 preserved is None

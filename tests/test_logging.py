@@ -25,8 +25,9 @@ from waystation import (
     configure_logging,
 )
 from waystation.agents.outcome import OUTCOME_MARKER
-from waystation.hooks import RunContext
+from waystation.hooks import HOOK_NAMES, HookRegistry, RunContext
 from waystation.observability import redact_argv
+from waystation.observers import RunLog
 
 
 def test_redact_argv_elides_environment_values_by_key() -> None:
@@ -361,3 +362,10 @@ async def test_a_setup_exec_inside_a_hook_logs_its_output_at_debug(
     sandbox = [r for r in caplog.records if r.name == "waystation.sandbox"]
     assert any(r.getMessage().startswith("git version") for r in sandbox)
     assert {r.levelno for r in sandbox} == {logging.DEBUG}
+
+
+def test_the_built_in_run_log_is_an_ordinary_hook_bundle() -> None:
+    """ADR-0001: nothing waystation watches with is privileged over a user's."""
+    registry = HookRegistry().with_bundles(RunLog("0badcafe", None))
+
+    assert {entry.hook for entry in registry.entries} == set(HOOK_NAMES)

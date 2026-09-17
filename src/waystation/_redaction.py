@@ -37,6 +37,16 @@ _URL_PASSWORD = re.compile(r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]*://[^/\s:@]+):[^/\
 _URL_USERINFO = re.compile(r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]*://)[^/\s:@]+@")
 
 
+# Every rule, in the order each argument passes through them. Teaching the
+# redactor a new credential shape is one pattern and one line here.
+_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (_ASSIGNMENT, rf"\1={ELIDED}"),
+    (_URL_PASSWORD, rf"\g<head>:{ELIDED}@"),
+    (_URL_USERINFO, rf"\g<head>{ELIDED}@"),
+    (_TOKEN, ELIDED),
+)
+
+
 def redact_argv(argv: Sequence[str]) -> tuple[str, ...]:
     """Return ``argv`` with every credential it can name replaced by ``***``.
 
@@ -48,7 +58,6 @@ def redact_argv(argv: Sequence[str]) -> tuple[str, ...]:
 
 
 def _redact(arg: str) -> str:
-    arg = _ASSIGNMENT.sub(rf"\1={ELIDED}", arg)
-    arg = _URL_PASSWORD.sub(rf"\g<head>:{ELIDED}@", arg)
-    arg = _URL_USERINFO.sub(rf"\g<head>{ELIDED}@", arg)
-    return _TOKEN.sub(ELIDED, arg)
+    for pattern, replacement in _RULES:
+        arg = pattern.sub(replacement, arg)
+    return arg

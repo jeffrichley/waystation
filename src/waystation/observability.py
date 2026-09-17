@@ -15,7 +15,6 @@ import logging
 from collections.abc import Iterator, MutableMapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -24,20 +23,15 @@ from rich.logging import RichHandler
 # redact_argv lives in its own leaf module because ``results`` needs it and
 # must not import this one; observability is its public home.
 from waystation._redaction import redact_argv
-from waystation.results import (
-    AgentExit,
-    IntegrationReport,
-    RunFailed,
-    RunSucceeded,
-)
 
 __all__ = ["configure_logging", "log_argv", "redact_argv", "tagged_logger"]
 
-PACKAGE = "waystation"
+# One run reaches a record three ways, and each does a different job: ``tag``
+# binds it explicitly, so the record carries the run even when logged from a
+# task the run never entered; ``bind_run`` fills it in for code too deep to be
+# handed a run; and ``_RunTagFormatter`` renders whichever arrived.
 
-# How much of a prompt's first line an INFO line may carry. The rest of the
-# prompt never reaches a log record at all.
-PROMPT_HEAD = 80
+PACKAGE = "waystation"
 
 # The run whose stages are executing on this task, for records logged too deep
 # to be handed one — git and sandbox argv. asyncio copies the context into
@@ -98,6 +92,21 @@ def log_argv(logger: logging.Logger, argv: Sequence[str]) -> None:
     logger.debug("%s", " ".join(redact_argv(argv)))
 
 
+def tag(logger: logging.Logger, run_id: str, name: str | None) -> RunLoggerAdapter:
+    """Bind ``logger`` to one run, so its records carry the run wherever logged."""
+    return RunLoggerAdapter(logger, {"run_id": run_id, "run_name": name})
+
+
+@contextmanager
+def bind_run(run_id: str, name: str | None) -> Iterator[None]:
+    """Tag records logged too deep to be handed the run — git and sandbox argv."""
+    token = _current_run.set((run_id, name))
+    try:
+        yield
+    finally:
+        _current_run.reset(token)
+
+
 class RunLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
     """Tags records with the run, keeping whatever extras the caller passed.
 
@@ -112,82 +121,6 @@ class RunLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
         extra.update(kwargs.get("extra") or {})
         kwargs["extra"] = extra
         return msg, kwargs
-
-
-def _head(prompt: str) -> str:
-    """The prompt's first line, bounded; never more of it than that."""
-    first = prompt.splitlines()[0] if prompt else ""
-    return first if len(first) <= PROMPT_HEAD else f"{first[: PROMPT_HEAD - 1]}…"
-
-
-class RunLog:
-    """One run's lifecycle lines, written to the loggers every run shares.
-
-    ``hooks`` is what ``ctx.log`` hands a hook author: their lines, already
-    tagged with the run. The adapters tag explicitly rather than leaning on
-    ``bound()``, so a line still carries its run when it is logged from
-    somewhere the run's context never reached — a hook that kept ``ctx.log``
-    and writes from a task of its own.
-    """
-
-    __slots__ = ("_bound", "_output", "_run", "hooks")
-
-    def __init__(self, run_id: str, name: str | None) -> None:
-        extra = {"run_id": run_id, "run_name": name}
-        self._bound = (run_id, name)
-        self._run = RunLoggerAdapter(RUN, extra)
-        self._output = RunLoggerAdapter(AGENT_OUTPUT, extra)
-        self.hooks = RunLoggerAdapter(HOOK, extra)
-
-    @contextmanager
-    def bound(self) -> Iterator[None]:
-        """Tag records logged too deep to be handed the run — git, sandbox argv."""
-        token = _current_run.set(self._bound)
-        try:
-            yield
-        finally:
-            _current_run.reset(token)
-
-    def run_start(self, repo: Path) -> None:
-        self._run.info("run start: %s", repo)
-
-    def workspace_ready(self, base_sha: str) -> None:
-        self._run.info("workspace ready: base %s", base_sha[:12])
-
-    def sandbox_ready(self) -> None:
-        self._run.info("sandbox up")
-
-    def agent_start(self, prompt: str) -> None:
-        self._run.info(
-            "agent start: prompt %d chars, first line %r", len(prompt), _head(prompt)
-        )
-
-    def agent_end(self, exit: AgentExit) -> None:
-        self._run.info("agent end: exit %d in %.1fs", exit.exit_code, exit.elapsed)
-
-    def agent_output(self, stream: str, raw: str) -> None:
-        self._output.debug("%s%s", "[stderr] " if stream == "stderr" else "", raw)
-
-    def integrated(self, report: IntegrationReport) -> None:
-        landed = len(report.landed)
-        self._run.info(
-            "integrated: %d commit%s onto %s",
-            landed,
-            "" if landed == 1 else "s",
-            report.target,
-        )
-
-    def run_end(self, result: RunSucceeded[Any] | RunFailed) -> None:
-        elapsed = sum(result.elapsed.values())
-        if isinstance(result, RunFailed):
-            self._run.info(
-                "run end: failed at %s (%s) in %.1fs",
-                result.stage,
-                type(result.failure).__name__,
-                elapsed,
-            )
-            return
-        self._run.info("run end: succeeded in %.1fs", elapsed)
 
 
 class _RunTagFormatter(logging.Formatter):

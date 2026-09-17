@@ -33,7 +33,8 @@ from waystation.integration import (
     integrate,
     preserve_series,
 )
-from waystation.observability import RunLog, tagged_logger
+from waystation.observability import bind_run, tagged_logger
+from waystation.observers import RunLog
 from waystation.results import (
     AgentExit,
     Errored,
@@ -384,9 +385,9 @@ class RunSpec[OutcomeT]:
     async def _execute(self) -> RunSucceeded[OutcomeT] | RunFailed:
         state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
         ctx = RunContext(state)
-        record = _RunRecord(run_id=state.run_id, log=state.log)
-        with record.log.bound():
-            record.log.run_start(self.repo)
+        record = _RunRecord(run_id=state.run_id, log=RunLog(state.run_id, state.name))
+        with bind_run(state.run_id, state.name):
+            record.log.on_run_start(ctx)
             result = await self._lifecycle(ctx, state, record)
             end_stage = result.stage if isinstance(result, RunFailed) else record.stage
             try:
@@ -397,7 +398,7 @@ class RunSpec[OutcomeT]:
             except StageError as err:
                 record.fail(err)
                 result = record.failed()
-            record.log.run_end(result)
+            record.log.on_run_end(ctx, result)
             return result
 
     async def _lifecycle(
@@ -445,7 +446,7 @@ class RunSpec[OutcomeT]:
                 "workspace", "workspace", self.timeouts.workspace, _workspace
             )
         record.base_sha = state.base_sha = workspace.base_sha
-        record.log.workspace_ready(workspace.base_sha)
+        record.log.on_workspace_ready(ctx)
         try:
             await self.hook_registry.fire("workspace_ready", "workspace", ctx)
         except BaseException:
@@ -479,7 +480,7 @@ class RunSpec[OutcomeT]:
                 raise
         try:
             state.sandbox = sandbox
-            record.log.sandbox_ready()
+            record.log.on_sandbox_ready(ctx)
             await self.hook_registry.fire("sandbox_ready", "sandbox", ctx)
             outcome = await self._run_agent(ctx, record, sandbox)
             await self._collect(record, sandbox, workspace)
@@ -506,7 +507,7 @@ class RunSpec[OutcomeT]:
         record.log.agent_start(prompt_text)
 
         async def _on_output(line: AgentLine) -> None:
-            record.log.agent_output(line.stream, line.raw)
+            record.log.on_agent_output(ctx, line)
             await self.hook_registry.fire("agent_output", "agent", ctx, line)
 
         outcome: OutcomeT | None = None
@@ -527,7 +528,7 @@ class RunSpec[OutcomeT]:
             record.agent = AgentExit(
                 exit_code=-1, elapsed=record.elapsed["agent"], hanging=False
             )
-        record.log.agent_end(record.agent)
+        record.log.on_agent_end(ctx, record.agent)
         try:
             await self.hook_registry.fire("agent_end", "agent", ctx, record.agent)
         except StageError as err:
@@ -593,7 +594,7 @@ class RunSpec[OutcomeT]:
         if record.failure is not None:
             self._preserve(record)
             return record.failed()
-        record.log.integrated(report)
+        record.log.on_integrated(ctx, report)
         try:
             await self.hook_registry.fire("integrated", "integrate", ctx, report)
         except StageError as err:

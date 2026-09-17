@@ -8,6 +8,7 @@ import logging
 import secrets
 import time
 from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -336,6 +337,19 @@ class RunSpec[OutcomeT]:
                 TimedOut(bound=bound, limit=seconds, elapsed=elapsed),
             ) from exc
 
+    async def _teardown(
+        self, cm: AbstractAsyncContextManager[Sandbox], run_id: str
+    ) -> None:
+        """Leave the sandbox; a failure is logged, never reported (ADR-0016)."""
+
+        async def _leave() -> None:
+            await cm.__aexit__(None, None, None)
+
+        try:
+            await self._bounded("sandbox", "teardown", self.timeouts.teardown, _leave)
+        except Exception as exc:
+            _log_later_failure(run_id, _as_stage_error("sandbox", exc))
+
     async def _execute(self) -> RunSucceeded[OutcomeT] | RunFailed:
         state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
         ctx = RunContext(state)
@@ -431,6 +445,9 @@ class RunSpec[OutcomeT]:
                 raise
             elapsed["sandbox"] = time.perf_counter() - t1
 
+            agent_failure: StageError | None = None
+            outcome: OutcomeT | None = None
+            collected: CollectResult | None = None
             try:
                 state.sandbox = sandbox
                 await hooks.fire("sandbox_ready", "sandbox", ctx)
@@ -450,8 +467,6 @@ class RunSpec[OutcomeT]:
                 async def _on_output(line: AgentLine) -> None:
                     await hooks.fire("agent_output", "agent", ctx, line)
 
-                agent_failure: StageError | None = None
-                outcome: OutcomeT | None = None
                 t2 = time.perf_counter()
                 try:
                     agent_exit, outcome = await run_agent(
@@ -493,125 +508,112 @@ class RunSpec[OutcomeT]:
                     return await collect(sandbox, workspace, salvage=self.salvage)
 
                 try:
-                    collected: CollectResult = await self._bounded(
+                    collected = await self._bounded(
                         "collect", "collect", timeouts.collect, _collect
                     )
                 except Exception as exc:
                     if agent_failure is None:
                         raise
                     # Best-effort after an agent failure (ADR-0024).
-                    elapsed["collect"] = time.perf_counter() - t3
                     _log_later_failure(run_id, _as_stage_error("collect", exc))
-                    return _run_failed(
-                        run_id=run_id,
-                        base_sha=base_sha,
-                        elapsed=elapsed,
-                        agent=agent_exit,
-                        stage=agent_failure.stage,
-                        failure=agent_failure.failure,
-                    )
                 elapsed["collect"] = time.perf_counter() - t3
-                series = collected.series_meta
-                patch_series = collected.patch_series
-                # The run is done with its sandbox; hooks lose it here (#28).
+            finally:
                 state.sandbox = None
+                await self._teardown(cm, run_id)
 
-                if agent_failure is None and collected.squashed:
-                    agent_failure = StageError(
-                        "collect",
-                        Refused(
-                            reason="nonlinear_series",
-                            detail=(
-                                "series contains merge commits or "
-                                "HEAD does not descend from base"
-                            ),
-                        ),
-                    )
-                if agent_failure is not None:
-                    if patch_series.commits > 0:
-                        try:
-                            preserved = preserve_series(
-                                self.repo,
-                                branch=f"waystation/{run_id}",
-                                series=patch_series,
-                            )
-                        except Exception as exc:
-                            _log_later_failure(run_id, _as_stage_error("collect", exc))
-                    return _run_failed(
-                        run_id=run_id,
-                        base_sha=base_sha,
-                        elapsed=elapsed,
-                        agent=agent_exit,
-                        stage=agent_failure.stage,
-                        failure=agent_failure.failure,
-                        series=series,
-                        preserved=preserved,
-                    )
-
-                assert outcome is not None
-
-                if self.integration is not None:
-                    stage = "integrate"
-                    t4 = time.perf_counter()
-                    strategy = self.integration
-
-                    async def _integrate() -> IntegrationReport:
-                        return await integrate(self.repo, patch_series, strategy)
-
-                    report = await self._bounded(
-                        "integrate", "integrate", timeouts.integrate, _integrate
-                    )
-                    elapsed["integrate"] = time.perf_counter() - t4
-                    preserved = None
-                    try:
-                        await hooks.fire("integrated", "integrate", ctx, report)
-                    except StageError as err:
-                        # The series landed; a hook failure must not preserve it.
-                        return _run_failed(
-                            run_id=run_id,
-                            base_sha=base_sha,
-                            elapsed=elapsed,
-                            agent=agent_exit,
-                            stage=err.stage,
-                            failure=err.failure,
-                            series=series,
-                        )
-                elif patch_series.commits > 0:
-                    preserved = preserve_series(
-                        self.repo,
-                        branch=f"waystation/{run_id}",
-                        series=patch_series,
-                    )
-
-                return RunSucceeded(
+            # The sandbox is gone; everything below works on the host repo.
+            if collected is None:
+                assert agent_failure is not None
+                return _run_failed(
                     run_id=run_id,
-                    name=None,
                     base_sha=base_sha,
                     elapsed=elapsed,
                     agent=agent_exit,
+                    stage=agent_failure.stage,
+                    failure=agent_failure.failure,
+                )
+            series = collected.series_meta
+            patch_series = collected.patch_series
+
+            if agent_failure is None and collected.squashed:
+                agent_failure = StageError(
+                    "collect",
+                    Refused(
+                        reason="nonlinear_series",
+                        detail=(
+                            "series contains merge commits or "
+                            "HEAD does not descend from base"
+                        ),
+                    ),
+                )
+            if agent_failure is not None:
+                if patch_series.commits > 0:
+                    try:
+                        preserved = preserve_series(
+                            self.repo,
+                            branch=f"waystation/{run_id}",
+                            series=patch_series,
+                        )
+                    except Exception as exc:
+                        _log_later_failure(run_id, _as_stage_error("collect", exc))
+                return _run_failed(
+                    run_id=run_id,
+                    base_sha=base_sha,
+                    elapsed=elapsed,
+                    agent=agent_exit,
+                    stage=agent_failure.stage,
+                    failure=agent_failure.failure,
                     series=series,
                     preserved=preserved,
-                    outcome=outcome,
-                    report=report,
                 )
-            finally:
-                state.sandbox = None
 
-                # Teardown bound (optional); hooks are never bounded here.
-                async def _leave() -> None:
-                    await cm.__aexit__(None, None, None)
+            assert outcome is not None
 
-                t_td = time.perf_counter()
+            if self.integration is not None:
+                stage = "integrate"
+                t4 = time.perf_counter()
+                strategy = self.integration
+                landing = patch_series
+
+                async def _integrate() -> IntegrationReport:
+                    return await integrate(self.repo, landing, strategy)
+
+                report = await self._bounded(
+                    "integrate", "integrate", timeouts.integrate, _integrate
+                )
+                elapsed["integrate"] = time.perf_counter() - t4
+                preserved = None
                 try:
-                    await self._bounded(
-                        "sandbox", "teardown", timeouts.teardown, _leave
+                    await hooks.fire("integrated", "integrate", ctx, report)
+                except StageError as err:
+                    # The series landed; a hook failure must not preserve it.
+                    return _run_failed(
+                        run_id=run_id,
+                        base_sha=base_sha,
+                        elapsed=elapsed,
+                        agent=agent_exit,
+                        stage=err.stage,
+                        failure=err.failure,
+                        series=series,
                     )
-                except StageError:
-                    # Teardown timeout still surfaces as RunFailed if nothing else.
-                    raise
-                finally:
-                    if timeouts.teardown is not None:
-                        elapsed.setdefault("sandbox", time.perf_counter() - t_td)
+            elif patch_series.commits > 0:
+                preserved = preserve_series(
+                    self.repo,
+                    branch=f"waystation/{run_id}",
+                    series=patch_series,
+                )
+
+            return RunSucceeded(
+                run_id=run_id,
+                name=None,
+                base_sha=base_sha,
+                elapsed=elapsed,
+                agent=agent_exit,
+                series=series,
+                preserved=preserved,
+                outcome=outcome,
+                report=report,
+            )
         except StageError as err:
             if (
                 preserved is None

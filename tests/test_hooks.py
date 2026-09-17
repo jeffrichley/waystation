@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from waystation import (
     RunSucceeded,
     ScriptedAgent,
     ScriptedCommit,
+    TimedOut,
+    Timeouts,
 )
 from waystation.agents import (
     AgentCommand,
@@ -32,8 +35,10 @@ from waystation.agents import (
     AgentText,
     OutcomeReported,
 )
-from waystation.agents.outcome import OUTCOME_MARKER
-from waystation.agents.scripted import _find_sh
+from waystation.clock import ManualClock, use_clock
+
+OUTCOME = "OUTCOME "
+OK_OUTCOME_LINE = OUTCOME + '{"summary": "ok"}'
 
 
 class Answer(BaseModel):
@@ -66,7 +71,7 @@ def _git(repo: Path, *args: str) -> str:
 
 @dataclass(frozen=True)
 class ShellAgent:
-    """An agent that is a shell script; its output parses like ScriptedAgent's."""
+    """An agent that is a shell script; an ``OUTCOME <json>`` line reports."""
 
     script: str
 
@@ -74,10 +79,26 @@ class ShellAgent:
         return None
 
     def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
-        return AgentCommand(argv=(_find_sh(), "-c", self.script))
+        return AgentCommand(argv=(sh(), "-c", self.script))
 
     def parse(self, line: str) -> Sequence[AgentEvent]:
-        return ScriptedAgent().parse(line)
+        if line.startswith(OUTCOME):
+            return (OutcomeReported(json.loads(line.removeprefix(OUTCOME))),)
+        return (AgentText(line),) if line else ()
+
+
+async def elapse(clock: ManualClock, seconds: float) -> None:
+    """Let armed timers park on ``clock``, pass ``seconds``, and let them react."""
+    for _ in range(5):
+        await asyncio.sleep(0)
+    clock.advance(seconds)
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+def sh() -> str:
+    """The POSIX sh ScriptedAgent found on this host."""
+    return str(ScriptedAgent().command("", {}).argv[0])
 
 
 def committed_then_reports(message: str) -> ShellAgent:
@@ -86,7 +107,6 @@ def committed_then_reports(message: str) -> ShellAgent:
     Git finishes before the first output line, so a hook that stops the agent
     on that line never kills git mid-write.
     """
-    outcome_line = f'{OUTCOME_MARKER} {{"summary": "ok"}}'
     return ShellAgent(
         " && ".join(
             [
@@ -94,7 +114,7 @@ def committed_then_reports(message: str) -> ShellAgent:
                 "git add -A >/dev/null 2>&1",
                 f"git commit -qm '{message}' >/dev/null 2>&1",
                 "echo working",
-                f"echo '{outcome_line}'",
+                f"echo '{OK_OUTCOME_LINE}'",
             ]
         )
     )
@@ -199,12 +219,11 @@ async def test_hook_points_fire_in_lifecycle_order(host_repo: Path) -> None:
 @pytest.mark.asyncio
 async def test_agent_output_carries_stream_raw_and_events(host_repo: Path) -> None:
     recorder = Recorder()
-    outcome_line = f'{OUTCOME_MARKER} {{"summary": "ok"}}'
     script = "; ".join(
         [
             "echo hello",
             "echo warned >&2",
-            f"echo '{outcome_line}'",
+            f"echo '{OK_OUTCOME_LINE}'",
         ]
     )
     flow = Flow(
@@ -220,7 +239,7 @@ async def test_agent_output_carries_stream_raw_and_events(host_repo: Path) -> No
     lines: list[AgentLine] = recorder.args("agent_output")
     assert [line for line in lines if line.stream == "stdout"] == [
         AgentLine("stdout", "hello", (AgentText("hello"),)),
-        AgentLine("stdout", outcome_line, (OutcomeReported({"summary": "ok"}),)),
+        AgentLine("stdout", OK_OUTCOME_LINE, (OutcomeReported({"summary": "ok"}),)),
     ]
     assert [line for line in lines if line.stream == "stderr"] == [
         AgentLine("stderr", "warned", ()),
@@ -398,6 +417,9 @@ async def test_run_context_is_read_only_and_sandbox_is_scoped(
             probe = await ctx.sandbox.exec(["git", "rev-parse", "HEAD"])
             facts["sandbox"] = (ctx.base_sha, probe.stdout.strip())
 
+        def on_integrated(self, ctx: RunContext, report: IntegrationReport) -> None:
+            facts["integrated"] = sandbox_usable(ctx)
+
         def on_run_end(self, ctx: RunContext, result: Any) -> None:
             facts["end"] = (ctx.run_id, ctx.name, ctx.repo, sandbox_usable(ctx))
 
@@ -405,6 +427,7 @@ async def test_run_context_is_read_only_and_sandbox_is_scoped(
         host_repo,
         agent=ScriptedAgent(outcome=Answer(summary="ok")),
         sandbox=NoSandbox(),
+        integration=Integration("agents/probe"),
         hooks=[Probe()],
     )
 
@@ -417,6 +440,7 @@ async def test_run_context_is_read_only_and_sandbox_is_scoped(
         "start": (None, False),
         "workspace": (head, False),
         "sandbox": (head, head),
+        "integrated": False,
         "end": (result.run_id, None, host_repo, False),
     }
 
@@ -429,7 +453,7 @@ async def test_sandbox_ready_hook_sets_up_what_the_agent_sees(
     recorder = Recorder()
     flow = Flow(
         host_repo,
-        agent=ShellAgent(f"printf '{OUTCOME_MARKER} '; cat setup.json; echo"),
+        agent=ShellAgent(f"printf '{OUTCOME}'; cat setup.json; echo"),
         sandbox=NoSandbox(),
         hooks=[recorder],
     )
@@ -438,7 +462,7 @@ async def test_sandbox_ready_hook_sets_up_what_the_agent_sees(
     async def setup(ctx: RunContext) -> None:
         done = await ctx.sandbox.exec(
             [
-                _find_sh(),
+                sh(),
                 "-c",
                 'echo setup-noise; printf "%s" "$0" > setup.json',
                 '{"summary": "set up"}',
@@ -641,6 +665,7 @@ async def test_failures_ride_run_end_with_no_failed_or_conflicted_hook(
         assert not hasattr(owner, "on_conflicted")
 
 
+@pytest.mark.git
 def test_a_bundle_without_hook_methods_is_rejected(host_repo: Path) -> None:
     def not_a_bundle(ctx: RunContext) -> None:
         return None
@@ -655,3 +680,128 @@ def test_a_bundle_without_hook_methods_is_rejected(host_repo: Path) -> None:
     flow = Flow(host_repo, agent=ScriptedAgent(), sandbox=NoSandbox())
     with pytest.raises(TypeError, match="on_run_start"):
         flow.run("x").hooks(object())
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_agent_output_hooks_never_overlap_across_streams(
+    host_repo: Path,
+) -> None:
+    active = 0
+    peak = 0
+
+    async def slow(ctx: RunContext, line: AgentLine) -> None:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.05)
+        active -= 1
+
+    flow = Flow(
+        host_repo,
+        agent=ShellAgent(
+            "; ".join(
+                [
+                    "echo out-1",
+                    "echo err-1 >&2",
+                    "echo out-2",
+                    "echo err-2 >&2",
+                    f"echo '{OK_OUTCOME_LINE}'",
+                ]
+            )
+        ),
+        sandbox=NoSandbox(),
+    )
+
+    result = await flow.run("both streams", outcome=Answer).on_agent_output(slow)
+
+    assert isinstance(result, RunSucceeded)
+    assert peak == 1
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_time_spent_in_agent_output_hooks_is_not_agent_silence(
+    host_repo: Path,
+) -> None:
+    clock = ManualClock()
+
+    async def slower_than_the_bound(ctx: RunContext, line: AgentLine) -> None:
+        await elapse(clock, 60)
+
+    flow = Flow(
+        host_repo,
+        agent=ShellAgent(f"echo first; echo second; echo '{OK_OUTCOME_LINE}'"),
+        sandbox=NoSandbox(),
+        timeouts=Timeouts(agent_silence=5, completion_grace=5),
+    )
+
+    with use_clock(clock):
+        result = await flow.run("slow hooks", outcome=Answer).on_agent_output(
+            slower_than_the_bound
+        )
+
+    assert isinstance(result, RunSucceeded)
+    assert result.agent is not None
+    assert result.agent.hanging is False
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_every_run_end_hook_fires_even_after_one_raises(
+    host_repo: Path,
+) -> None:
+    seen: list[Any] = []
+    error = RuntimeError("run_end bug")
+
+    def boom(ctx: RunContext, result: Any) -> None:
+        raise error
+
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(outcome=Answer(summary="ok")),
+        sandbox=NoSandbox(),
+    )
+
+    result = await (
+        flow.run("end", outcome=Answer)
+        .on_run_end(boom)
+        .on_run_end(lambda ctx, ended: seen.append(ended))
+    )
+
+    assert isinstance(result, RunFailed)
+    assert isinstance(result.failure, HookRaised)
+    assert result.failure.exception is error
+    assert len(seen) == 1
+    assert isinstance(seen[0], RunSucceeded)
+    assert seen[0].run_id == result.run_id
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_agent_end_fires_when_the_agent_is_stopped(host_repo: Path) -> None:
+    clock = ManualClock()
+    recorder = Recorder()
+
+    async def past_the_wall(ctx: RunContext, line: AgentLine) -> None:
+        await elapse(clock, 60)
+
+    flow = Flow(
+        host_repo,
+        agent=ShellAgent("echo tick; sleep 30"),
+        sandbox=NoSandbox(),
+        timeouts=Timeouts(agent_wall=5),
+        hooks=[recorder],
+    )
+
+    with use_clock(clock):
+        result = await flow.run("stopped", outcome=Answer).on_agent_output(
+            past_the_wall
+        )
+
+    assert isinstance(result, RunFailed)
+    assert isinstance(result.failure, TimedOut)
+    assert result.failure.bound == "agent_wall"
+    assert result.agent is not None
+    assert result.agent.exit_code == -1
+    assert recorder.args("agent_end") == [result.agent]

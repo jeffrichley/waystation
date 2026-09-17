@@ -77,11 +77,21 @@ async def run_agent[OutcomeT](
     clock = get_clock()
     silence_task: asyncio.Task[None] | None = None
     grace_task: asyncio.Task[None] | None = None
+    # Grace still owed once an Outcome is reported (None until then). Timers
+    # pause while a line is delivered, so hook time is never agent silence.
+    grace_left: float | None = None
+    grace_since = 0.0
     exec_task: asyncio.Task[ExecResult] | None = None
     bound_event = asyncio.Event()
     fired: _AgentBound | None = None
     line_error: Exception | None = None
+    # stdout and stderr are read concurrently; lines are delivered one at a time.
+    delivering = asyncio.Lock()
     t_origin = clock.monotonic()
+
+    def _cancel(task: asyncio.Task[Any] | None) -> None:
+        if task is not None and not task.done():
+            task.cancel()
 
     def _fire(bound: BoundName, limit: float, *, is_hanging: bool = False) -> None:
         nonlocal fired
@@ -90,48 +100,63 @@ async def run_agent[OutcomeT](
         elapsed = clock.monotonic() - t_origin
         fired = _AgentBound(bound, limit=limit, elapsed=elapsed, hanging=is_hanging)
         bound_event.set()
-        if exec_task is not None and not exec_task.done():
-            exec_task.cancel()
+        _cancel(exec_task)
 
     def _arm_silence() -> None:
         nonlocal silence_task
+        _cancel(silence_task)
         if bounds.agent_silence is None:
             return
-        if silence_task is not None and not silence_task.done():
-            silence_task.cancel()
+        limit = bounds.agent_silence
 
         async def _silence() -> None:
-            assert bounds.agent_silence is not None
-            await clock.sleep(bounds.agent_silence)
-            _fire("agent_silence", bounds.agent_silence)
+            await clock.sleep(limit)
+            _fire("agent_silence", limit)
 
         silence_task = asyncio.create_task(_silence(), name="agent-silence")
 
-    def _arm_grace() -> None:
-        nonlocal grace_task
-        if grace_task is not None:
-            return
+    def _arm_grace(seconds: float) -> None:
+        nonlocal grace_task, grace_since
+        grace_since = clock.monotonic()
         limit = bounds.completion_grace
 
         async def _grace() -> None:
-            await clock.sleep(limit)
+            await clock.sleep(seconds)
             _fire("completion_grace", limit, is_hanging=True)
 
         grace_task = asyncio.create_task(_grace(), name="completion-grace")
 
-    async def _handle_line(handler: Callable[[], Awaitable[None]]) -> None:
-        # A raising parser or output callback stops the agent: cancel the exec
+    def _pause_timers() -> None:
+        nonlocal grace_task, grace_left
+        _cancel(silence_task)
+        if grace_task is not None and grace_left is not None:
+            grace_task.cancel()
+            grace_task = None
+            grace_left -= clock.monotonic() - grace_since
+
+    def _resume_timers() -> None:
+        # After an Outcome, only completion_grace runs — silence stays off.
+        if grace_left is None:
+            _arm_silence()
+        else:
+            _arm_grace(max(grace_left, 0.0))
+
+    async def _deliver(handler: Callable[[], Awaitable[None]]) -> None:
+        # A raising parser or on_output stops the agent: cancel the exec
         # instead of letting the error strand the pipe readers.
         nonlocal line_error
-        if fired is not None or line_error is not None:
-            return
-        try:
-            await handler()
-        except Exception as exc:
-            line_error = exc
-            bound_event.set()
-            if exec_task is not None and not exec_task.done():
-                exec_task.cancel()
+        async with delivering:
+            if fired is not None or line_error is not None:
+                return
+            _pause_timers()
+            try:
+                await handler()
+            except Exception as exc:
+                line_error = exc
+                bound_event.set()
+                _cancel(exec_task)
+                return
+            _resume_timers()
 
     async def _emit(line: AgentLine) -> None:
         if on_output is None:
@@ -141,10 +166,7 @@ async def run_agent[OutcomeT](
             await returned
 
     async def _stdout_line(line: str) -> None:
-        nonlocal last_valid, last_invalid
-        # After Outcome, only completion_grace runs — do not re-arm silence.
-        if grace_task is None:
-            _arm_silence()
+        nonlocal last_valid, last_invalid, grace_left
         events = tuple(provider.parse(line))
         for event in events:
             if isinstance(event, OutcomeReported):
@@ -154,16 +176,15 @@ async def run_agent[OutcomeT](
                 except ValidationError as exc:
                     last_invalid = (event.raw, exc)
                 else:
-                    if silence_task is not None and not silence_task.done():
-                        silence_task.cancel()
-                    _arm_grace()
+                    if grace_left is None:
+                        grace_left = bounds.completion_grace
         await _emit(AgentLine("stdout", line, events))
 
     async def on_stdout(line: str) -> None:
-        await _handle_line(lambda: _stdout_line(line))
+        await _deliver(lambda: _stdout_line(line))
 
     async def on_stderr(line: str) -> None:
-        await _handle_line(lambda: _emit(AgentLine("stderr", line)))
+        await _deliver(lambda: _emit(AgentLine("stderr", line)))
 
     exec_env = dict(command.env)
     for key in command.pass_env:

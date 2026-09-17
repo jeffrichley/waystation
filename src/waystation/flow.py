@@ -108,28 +108,56 @@ class Flow:
     # afterwards never reaches a spec that already exists (ADR-0008).
 
     def on_run_start[F: Callable[[RunContext], object]](self, fn: F) -> F:
+        """Fire ``fn(ctx)`` as a run starts.
+
+        Returns ``fn``; runs built afterwards get it.
+        """
         return self._register("run_start", fn)
 
     def on_workspace_ready[F: Callable[[RunContext], object]](self, fn: F) -> F:
+        """Fire ``fn(ctx)`` once the workspace is prepared.
+
+        Returns ``fn``; runs built afterwards get it.
+        """
         return self._register("workspace_ready", fn)
 
     def on_sandbox_ready[F: Callable[[RunContext], object]](self, fn: F) -> F:
+        """Fire ``fn(ctx)`` once the sandbox is up, before the agent.
+
+        Returns ``fn``; runs built afterwards get it.
+        """
         return self._register("sandbox_ready", fn)
 
     def on_agent_output[F: Callable[[RunContext, AgentLine], object]](self, fn: F) -> F:
+        """Fire ``fn(ctx, line)`` for each line the agent emits.
+
+        Returns ``fn``; runs built afterwards get it.
+        """
         return self._register("agent_output", fn)
 
     def on_agent_end[F: Callable[[RunContext, AgentExit], object]](self, fn: F) -> F:
+        """Fire ``fn(ctx, exit)`` when the agent exec ends.
+
+        Returns ``fn``; runs built afterwards get it.
+        """
         return self._register("agent_end", fn)
 
     def on_integrated[F: Callable[[RunContext, IntegrationReport], object]](
         self, fn: F
     ) -> F:
+        """Fire ``fn(ctx, report)`` when integration lands.
+
+        Returns ``fn``; runs built afterwards get it.
+        """
         return self._register("integrated", fn)
 
     def on_run_end[F: Callable[[RunContext, RunSucceeded[Any] | RunFailed], object]](
         self, fn: F
     ) -> F:
+        """Fire ``fn(ctx, result)`` for every result a run returns.
+
+        Returns ``fn``; runs built afterwards get it.
+        """
         return self._register("run_end", fn)
 
     def _register[F: Callable[..., object]](self, hook: HookName, fn: F) -> F:
@@ -199,37 +227,66 @@ class RunSpec[OutcomeT]:
     # flow's. Bundles are any objects with a subset of the ``on_<hook>`` methods.
 
     def hooks(self, *bundles: object) -> RunSpec[OutcomeT]:
+        """Add each bundle's ``on_<hook>`` methods; returns a new spec."""
         return replace(self, hook_registry=self.hook_registry.with_bundles(*bundles))
 
     def on_run_start(self, fn: Callable[[RunContext], object]) -> RunSpec[OutcomeT]:
+        """Fire ``fn(ctx)`` as a run starts.
+
+        Returns a new spec.
+        """
         return self._with_hook("run_start", fn)
 
     def on_workspace_ready(
         self, fn: Callable[[RunContext], object]
     ) -> RunSpec[OutcomeT]:
+        """Fire ``fn(ctx)`` once the workspace is prepared.
+
+        Returns a new spec.
+        """
         return self._with_hook("workspace_ready", fn)
 
     def on_sandbox_ready(self, fn: Callable[[RunContext], object]) -> RunSpec[OutcomeT]:
+        """Fire ``fn(ctx)`` once the sandbox is up, before the agent.
+
+        Returns a new spec.
+        """
         return self._with_hook("sandbox_ready", fn)
 
     def on_agent_output(
         self, fn: Callable[[RunContext, AgentLine], object]
     ) -> RunSpec[OutcomeT]:
+        """Fire ``fn(ctx, line)`` for each line the agent emits.
+
+        Returns a new spec.
+        """
         return self._with_hook("agent_output", fn)
 
     def on_agent_end(
         self, fn: Callable[[RunContext, AgentExit], object]
     ) -> RunSpec[OutcomeT]:
+        """Fire ``fn(ctx, exit)`` when the agent exec ends.
+
+        Returns a new spec.
+        """
         return self._with_hook("agent_end", fn)
 
     def on_integrated(
         self, fn: Callable[[RunContext, IntegrationReport], object]
     ) -> RunSpec[OutcomeT]:
+        """Fire ``fn(ctx, report)`` when integration lands.
+
+        Returns a new spec.
+        """
         return self._with_hook("integrated", fn)
 
     def on_run_end(
         self, fn: Callable[[RunContext, RunSucceeded[OutcomeT] | RunFailed], object]
     ) -> RunSpec[OutcomeT]:
+        """Fire ``fn(ctx, result)`` for every result a run returns.
+
+        Returns a new spec.
+        """
         return self._with_hook("run_end", fn)
 
     def _with_hook(
@@ -271,7 +328,10 @@ class RunSpec[OutcomeT]:
         else:
             end_stage = "integrate" if result.report is not None else "collect"
         try:
-            await self.hook_registry.fire("run_end", end_stage, ctx, result)
+            # Every run_end hook sees the result, even after one raises.
+            await self.hook_registry.fire(
+                "run_end", end_stage, ctx, result, stop_on_raise=False
+            )
         except StageError as err:
             return _run_failed(
                 run_id=result.run_id,
@@ -391,11 +451,15 @@ class RunSpec[OutcomeT]:
                 else:
                     elapsed["agent"] = time.perf_counter() - t2
 
-                if agent_exit is not None:
-                    try:
-                        await hooks.fire("agent_end", "agent", ctx, agent_exit)
-                    except StageError as err:
-                        agent_failure = err
+                if agent_exit is None:
+                    # Stopped (a bound fired, or a line raised): no exit code.
+                    agent_exit = AgentExit(
+                        exit_code=-1, elapsed=elapsed["agent"], hanging=False
+                    )
+                try:
+                    await hooks.fire("agent_end", "agent", ctx, agent_exit)
+                except StageError as err:
+                    agent_failure = err
 
                 stage = "collect"
                 t3 = time.perf_counter()
@@ -409,6 +473,8 @@ class RunSpec[OutcomeT]:
                 elapsed["collect"] = time.perf_counter() - t3
                 series = collected.series_meta
                 patch_series = collected.patch_series
+                # The run is done with its sandbox; hooks lose it here (#28).
+                state.sandbox = None
 
                 if collected.squashed:
                     if patch_series.commits > 0:

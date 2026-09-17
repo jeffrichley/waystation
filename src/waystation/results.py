@@ -10,6 +10,16 @@ from pydantic import ValidationError
 
 Stage = Literal["workspace", "sandbox", "agent", "collect", "integrate"]
 
+HookName = Literal[
+    "run_start",
+    "workspace_ready",
+    "sandbox_ready",
+    "agent_output",
+    "agent_end",
+    "integrated",
+    "run_end",
+]
+
 RefusalReason = Literal[
     "dirty_tree",
     "target_checked_out",
@@ -107,7 +117,7 @@ class OutcomeInvalid:
 
 @dataclass(frozen=True, slots=True)
 class HookRaised:
-    hook: str
+    hook: HookName
     function: str
     exception: BaseException
 

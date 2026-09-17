@@ -6,21 +6,11 @@ import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, get_args
+from typing import get_args
 
 from waystation.errors import StageError
-from waystation.results import HookRaised, Stage
+from waystation.results import HookName, HookRaised, Stage
 from waystation.sandbox.protocol import Sandbox
-
-HookName = Literal[
-    "run_start",
-    "workspace_ready",
-    "sandbox_ready",
-    "agent_output",
-    "agent_end",
-    "integrated",
-    "run_end",
-]
 
 HOOK_NAMES: tuple[HookName, ...] = get_args(HookName)
 
@@ -53,22 +43,27 @@ class RunContext:
 
     @property
     def run_id(self) -> str:
+        """The run's id, minted before ``run_start``."""
         return self._state.run_id
 
     @property
     def name(self) -> str | None:
+        """The run's display name, or ``None`` when unnamed."""
         return self._state.name
 
     @property
     def repo(self) -> Path:
+        """The host repo the run targets."""
         return self._state.repo
 
     @property
     def base_sha(self) -> str | None:
+        """The resolved base ref; ``None`` until ``workspace_ready``."""
         return self._state.base_sha
 
     @property
     def sandbox(self) -> Sandbox:
+        """The live sandbox, from ``sandbox_ready`` until teardown."""
         sandbox = self._state.sandbox
         if sandbox is None:
             msg = "ctx.sandbox is available from sandbox_ready until teardown"
@@ -128,12 +123,15 @@ class HookRegistry:
         stage: Stage,
         ctx: RunContext,
         *args: object,
+        stop_on_raise: bool = True,
     ) -> None:
         """Call each function at ``hook`` in order, awaiting async ones.
 
-        A raising function stops the rest and raises
-        ``StageError(stage, HookRaised(...))``.
+        A raising function raises ``StageError(stage, HookRaised(...))`` at
+        once, or with ``stop_on_raise=False`` for the first one raised after
+        every other function at ``hook`` has run.
         """
+        first: StageError | None = None
         for entry in self.entries:
             if entry.hook != hook:
                 continue
@@ -142,11 +140,18 @@ class HookRegistry:
                 if inspect.isawaitable(returned):
                     await returned
             except Exception as exc:
-                raise StageError(
+                error = StageError(
                     stage,
                     HookRaised(
                         hook=hook,
                         function=_describe(entry.function),
                         exception=exc,
                     ),
-                ) from exc
+                )
+                if stop_on_raise:
+                    raise error from exc
+                if first is None:
+                    error.__cause__ = exc
+                    first = error
+        if first is not None:
+            raise first

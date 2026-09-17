@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import secrets
+import shutil
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -13,11 +15,18 @@ from typing import Any, Literal
 from pydantic import TypeAdapter
 from pydantic.json_schema import GenerateJsonSchema
 
-from waystation.agents.protocol import AgentProvider
+from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
 from waystation.collect import CollectResult, collect, preserve_series
 from waystation.errors import PreflightError, StageError
+from waystation.hooks import (
+    HookEntry,
+    HookName,
+    HookRegistry,
+    RunContext,
+    RunState,
+)
 from waystation.integration import Integration, IntegrationStrategy, integrate
 from waystation.results import (
     AgentExit,
@@ -86,7 +95,46 @@ class Flow:
     integration: IntegrationStrategy | None = field(default=None, kw_only=True)
     timeouts: Timeouts = field(default_factory=Timeouts, kw_only=True)
     salvage: bool = field(default=True, kw_only=True)
-    hooks: Sequence[Any] = field(default=(), kw_only=True)
+    hooks: Sequence[object] = field(default=(), kw_only=True)
+    _hook_entries: list[HookEntry] = field(
+        init=False, default_factory=list, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        self._hook_entries.extend(HookRegistry().with_bundles(*self.hooks).entries)
+
+    # Decorators: each registers at the flow level and returns ``fn`` unchanged.
+    # A run spec snapshots the flow's hooks at ``flow.run()``, so a hook added
+    # afterwards never reaches a spec that already exists (ADR-0008).
+
+    def on_run_start[F: Callable[[RunContext], object]](self, fn: F) -> F:
+        return self._register("run_start", fn)
+
+    def on_workspace_ready[F: Callable[[RunContext], object]](self, fn: F) -> F:
+        return self._register("workspace_ready", fn)
+
+    def on_sandbox_ready[F: Callable[[RunContext], object]](self, fn: F) -> F:
+        return self._register("sandbox_ready", fn)
+
+    def on_agent_output[F: Callable[[RunContext, AgentLine], object]](self, fn: F) -> F:
+        return self._register("agent_output", fn)
+
+    def on_agent_end[F: Callable[[RunContext, AgentExit], object]](self, fn: F) -> F:
+        return self._register("agent_end", fn)
+
+    def on_integrated[F: Callable[[RunContext, IntegrationReport], object]](
+        self, fn: F
+    ) -> F:
+        return self._register("integrated", fn)
+
+    def on_run_end[F: Callable[[RunContext, RunSucceeded[Any] | RunFailed], object]](
+        self, fn: F
+    ) -> F:
+        return self._register("run_end", fn)
+
+    def _register[F: Callable[..., object]](self, hook: HookName, fn: F) -> F:
+        self._hook_entries.append(HookEntry(hook, fn))
+        return fn
 
     def run[OutcomeT](
         self,
@@ -105,6 +153,7 @@ class Flow:
             timeouts=self.timeouts,
             salvage=self.salvage,
             integration=self.integration,
+            hook_registry=HookRegistry(tuple(self._hook_entries)),
         )
 
 
@@ -121,6 +170,7 @@ class RunSpec[OutcomeT]:
     timeouts: Timeouts
     salvage: bool = True
     integration: IntegrationStrategy | None = None
+    hook_registry: HookRegistry = field(default_factory=HookRegistry)
 
     def integrate(
         self,
@@ -144,6 +194,48 @@ class RunSpec[OutcomeT]:
         the ``timeouts`` field (issue #26's ``.timeouts(...)`` spelling).
         """
         return replace(self, timeouts=timeouts)
+
+    # Per-run hooks: each returns a new RunSpec whose hooks fire after the
+    # flow's. Bundles are any objects with a subset of the ``on_<hook>`` methods.
+
+    def hooks(self, *bundles: object) -> RunSpec[OutcomeT]:
+        return replace(self, hook_registry=self.hook_registry.with_bundles(*bundles))
+
+    def on_run_start(self, fn: Callable[[RunContext], object]) -> RunSpec[OutcomeT]:
+        return self._with_hook("run_start", fn)
+
+    def on_workspace_ready(
+        self, fn: Callable[[RunContext], object]
+    ) -> RunSpec[OutcomeT]:
+        return self._with_hook("workspace_ready", fn)
+
+    def on_sandbox_ready(self, fn: Callable[[RunContext], object]) -> RunSpec[OutcomeT]:
+        return self._with_hook("sandbox_ready", fn)
+
+    def on_agent_output(
+        self, fn: Callable[[RunContext, AgentLine], object]
+    ) -> RunSpec[OutcomeT]:
+        return self._with_hook("agent_output", fn)
+
+    def on_agent_end(
+        self, fn: Callable[[RunContext, AgentExit], object]
+    ) -> RunSpec[OutcomeT]:
+        return self._with_hook("agent_end", fn)
+
+    def on_integrated(
+        self, fn: Callable[[RunContext, IntegrationReport], object]
+    ) -> RunSpec[OutcomeT]:
+        return self._with_hook("integrated", fn)
+
+    def on_run_end(
+        self, fn: Callable[[RunContext, RunSucceeded[OutcomeT] | RunFailed], object]
+    ) -> RunSpec[OutcomeT]:
+        return self._with_hook("run_end", fn)
+
+    def _with_hook(
+        self, hook: HookName, fn: Callable[..., object]
+    ) -> RunSpec[OutcomeT]:
+        return replace(self, hook_registry=self.hook_registry.with_function(hook, fn))
 
     def __await__(self):  # type: ignore[no-untyped-def]
         return self._execute().__await__()
@@ -170,7 +262,34 @@ class RunSpec[OutcomeT]:
             ) from exc
 
     async def _execute(self) -> RunSucceeded[OutcomeT] | RunFailed:
-        run_id = ""
+        state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
+        ctx = RunContext(state)
+        result = await self._lifecycle(ctx, state)
+        end_stage: Stage
+        if isinstance(result, RunFailed):
+            end_stage = result.stage
+        else:
+            end_stage = "integrate" if result.report is not None else "collect"
+        try:
+            await self.hook_registry.fire("run_end", end_stage, ctx, result)
+        except StageError as err:
+            return _run_failed(
+                run_id=result.run_id,
+                base_sha=result.base_sha,
+                elapsed=dict(result.elapsed),
+                agent=result.agent,
+                stage=err.stage,
+                failure=err.failure,
+                series=result.series,
+                preserved=result.preserved,
+            )
+        return result
+
+    async def _lifecycle(
+        self, ctx: RunContext, state: RunState
+    ) -> RunSucceeded[OutcomeT] | RunFailed:
+        hooks = self.hook_registry
+        run_id = state.run_id
         base_sha: str | None = None
         elapsed: dict[Stage, float] = {}
         agent_exit: AgentExit | None = None
@@ -182,6 +301,7 @@ class RunSpec[OutcomeT]:
         timeouts = self.timeouts
 
         try:
+            await hooks.fire("run_start", "workspace", ctx)
             try:
                 self.agent.preflight()
                 await self.sandbox.preflight()
@@ -195,15 +315,21 @@ class RunSpec[OutcomeT]:
 
             async def _workspace() -> Workspace:
                 return await asyncio.to_thread(
-                    prepare_workspace, self.repo, base=self.base
+                    prepare_workspace, self.repo, base=self.base, run_id=run_id
                 )
 
             workspace: Workspace = await self._bounded(
                 "workspace", "workspace", timeouts.workspace, _workspace
             )
             elapsed["workspace"] = time.perf_counter() - t0
-            run_id = workspace.run_id
             base_sha = workspace.base_sha
+            state.base_sha = base_sha
+            try:
+                await hooks.fire("workspace_ready", "workspace", ctx)
+            except BaseException:
+                # No sandbox owns the workspace yet, so nothing else removes it.
+                shutil.rmtree(workspace.path, ignore_errors=True)
+                raise
 
             stage = "sandbox"
             t1 = time.perf_counter()
@@ -224,6 +350,9 @@ class RunSpec[OutcomeT]:
             elapsed["sandbox"] = time.perf_counter() - t1
 
             try:
+                state.sandbox = sandbox
+                await hooks.fire("sandbox_ready", "sandbox", ctx)
+
                 stage = "agent"
                 if isinstance(self.prompt, Path):
                     prompt_text = self.prompt.read_text(encoding="utf-8")
@@ -236,6 +365,9 @@ class RunSpec[OutcomeT]:
                 except Exception as exc:
                     raise StageError("agent", Errored(exception=exc)) from exc
 
+                async def _on_output(line: AgentLine) -> None:
+                    await hooks.fire("agent_output", "agent", ctx, line)
+
                 agent_failure: StageError | None = None
                 outcome: OutcomeT | None = None
                 t2 = time.perf_counter()
@@ -246,6 +378,7 @@ class RunSpec[OutcomeT]:
                         command,
                         self.outcome_type,
                         timeouts=timeouts,
+                        on_output=_on_output,
                     )
                 except StageError as err:
                     elapsed["agent"] = time.perf_counter() - t2
@@ -257,6 +390,12 @@ class RunSpec[OutcomeT]:
                     agent_failure = StageError("agent", Errored(exception=exc))
                 else:
                     elapsed["agent"] = time.perf_counter() - t2
+
+                if agent_exit is not None:
+                    try:
+                        await hooks.fire("agent_end", "agent", ctx, agent_exit)
+                    except StageError as err:
+                        agent_failure = err
 
                 stage = "collect"
                 t3 = time.perf_counter()
@@ -332,6 +471,19 @@ class RunSpec[OutcomeT]:
                     )
                     elapsed["integrate"] = time.perf_counter() - t4
                     preserved = None
+                    try:
+                        await hooks.fire("integrated", "integrate", ctx, report)
+                    except StageError as err:
+                        # The series landed; a hook failure must not preserve it.
+                        return _run_failed(
+                            run_id=run_id,
+                            base_sha=base_sha,
+                            elapsed=elapsed,
+                            agent=agent_exit,
+                            stage=err.stage,
+                            failure=err.failure,
+                            series=series,
+                        )
                 elif patch_series.commits > 0:
                     preserved = preserve_series(
                         self.repo,
@@ -351,6 +503,8 @@ class RunSpec[OutcomeT]:
                     report=report,
                 )
             finally:
+                state.sandbox = None
+
                 # Teardown bound (optional); hooks are never bounded here.
                 async def _leave() -> None:
                     await cm.__aexit__(None, None, None)

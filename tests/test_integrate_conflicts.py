@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -101,7 +102,10 @@ def host_state(repo: Path) -> dict[str, object]:
     }
 
 
-async def test_a_conflict_leaves_the_host_as_it_was(host_repo: Path) -> None:
+@pytest.mark.parametrize("mechanism", ["apply", "merge"])
+async def test_a_conflict_leaves_the_host_as_it_was(
+    host_repo: Path, mechanism: Literal["apply", "merge"]
+) -> None:
     commit_on(host_repo, TARGET, {"shared.txt": "target\n"})
     # A host mid-edit, so an index or tree that was touched can't look clean.
     (host_repo / "staged.txt").write_bytes(b"staged\n")
@@ -110,7 +114,9 @@ async def test_a_conflict_leaves_the_host_as_it_was(host_repo: Path) -> None:
     (host_repo / "scratch.log").write_bytes(b"untracked\n")
     before = host_state(host_repo)
 
-    result = await a_run(host_repo, commits=CLAIMS_SHARED).integrate(TARGET)
+    result = await a_run(host_repo, commits=CLAIMS_SHARED).integrate(
+        TARGET, mechanism=mechanism
+    )
 
     assert isinstance(result, RunConflicted)
     after = host_state(host_repo)
@@ -158,9 +164,11 @@ async def test_a_conflict_is_logged_as_one_and_names_the_kept_branch(
         result = await a_run(host_repo, commits=CLAIMS_SHARED).integrate(TARGET)
 
     assert isinstance(result, RunConflicted)
-    lifecycle = [r.getMessage() for r in caplog.records if r.name == "waystation.run"]
-    assert "integrated" not in [message.split(":")[0] for message in lifecycle]
-    end = lifecycle[-1]
+    lifecycle = [r for r in caplog.records if r.name == "waystation.run"]
+    events = [record.getMessage().split(":")[0] for record in lifecycle]
+    assert "integrated" not in events
+    assert lifecycle[-1].levelno == logging.INFO
+    end = lifecycle[-1].getMessage()
     assert end.startswith("run end: conflicted")
     assert TARGET in end
     assert f"{result.preserved}" in end
@@ -257,14 +265,17 @@ class MovesOnSwap(GitRepo):
 
 @dataclass(frozen=True)
 class Raced:
-    """Wraps a strategy, handing it a host that moves the target mid-landing."""
+    """Wraps a strategy, handing it a host that moves the target mid-landing.
+
+    ``moved`` collects the outside commit, so a test can see it still stands.
+    """
 
     inner: IntegrationStrategy
-    repo: list[MovesOnSwap] = field(default_factory=list)
+    moved: list[str] = field(default_factory=list)
 
     async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
-        self.repo.append(MovesOnSwap(repo.path, repo.common_dir))
-        return await self.inner.integrate(self.repo[0], series)
+        racing = MovesOnSwap(repo.path, repo.common_dir, moved=self.moved)
+        return await self.inner.integrate(racing, series)
 
 
 async def test_a_target_moved_before_the_swap_is_refused_and_stays_moved(
@@ -276,7 +287,7 @@ async def test_a_target_moved_before_the_swap_is_refused_and_stays_moved(
     result = await a_run(host_repo).integrate(raced)
 
     assert_refused(result, "target_moved", host_repo)
-    (outside,) = raced.repo[0].moved
+    (outside,) = raced.moved
     assert git(host_repo, "rev-parse", TARGET) == outside, "their commit stands"
 
 

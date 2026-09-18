@@ -17,7 +17,16 @@ from typing import Any, Literal
 
 import pytest
 
-from helpers import OK_OUTCOME, ShellAgent, a_run, awaited, git, workspaces
+from helpers import (
+    OK_OUTCOME,
+    ShellAgent,
+    a_run,
+    awaited,
+    git,
+    lifecycle,
+    subjects,
+    workspaces,
+)
 from waystation import (
     ExecResult,
     Flow,
@@ -119,8 +128,8 @@ class GatedIntegration:
         return await Integration(self.target).integrate(repo, series)
 
 
-def _lifecycle(caplog: pytest.LogCaptureFixture) -> list[str]:
-    return [r.getMessage() for r in caplog.records if r.name == "waystation.run"]
+def _said(caplog: pytest.LogCaptureFixture, line: str) -> bool:
+    return line in [record.getMessage() for record in lifecycle(caplog)]
 
 
 def _branches(repo: Path, pattern: str) -> list[str]:
@@ -198,11 +207,11 @@ async def test_cancelling_a_run_mid_agent_keeps_what_the_agent_left(
             await task
 
     branch = f"waystation/{run_ids[0]}"
-    kept = git(host_repo, "log", "--format=%s", f"HEAD..{branch}").splitlines()
+    kept = subjects(host_repo, f"HEAD..{branch}")
     assert kept == ["WIP: salvaged uncommitted work", "first"]
     assert workspaces(isolated_tempdir) == []
     assert ended == []
-    assert f"run cancelled during agent; series kept on {branch}" in _lifecycle(caplog)
+    assert _said(caplog, f"run cancelled during agent; series kept on {branch}")
     # The agent's whole tree died with it: nothing is still writing.
     before = pulse.stat().st_size if pulse.exists() else 0
     await asyncio.sleep(0.2)
@@ -220,13 +229,11 @@ async def test_a_cancellation_during_collect_waits_for_the_series_and_never_inte
         run_id = await _cancel_at(gate, spec.integrate("feature"))
 
     branch = f"waystation/{run_id}"
-    kept = git(host_repo, "log", "--format=%s", f"HEAD..{branch}").splitlines()
+    kept = subjects(host_repo, f"HEAD..{branch}")
     assert kept == ["add a file"]
     assert _branches(host_repo, "feature") == []
     assert workspaces(isolated_tempdir) == []
-    assert f"run cancelled during collect; series kept on {branch}" in _lifecycle(
-        caplog
-    )
+    assert _said(caplog, f"run cancelled during collect; series kept on {branch}")
 
 
 @pytest.mark.git
@@ -239,13 +246,11 @@ async def test_a_cancellation_during_integrate_lets_the_landing_finish(
     with caplog.at_level(logging.INFO, logger="waystation"):
         await _cancel_at(gate, spec)
 
-    landed = git(host_repo, "log", "--format=%s", "HEAD..feature").splitlines()
+    landed = subjects(host_repo, "HEAD..feature")
     assert landed == ["add a file"]
     assert _branches(host_repo, "waystation/*") == []
     assert workspaces(isolated_tempdir) == []
-    assert "run cancelled during integrate; series landed on feature" in _lifecycle(
-        caplog
-    )
+    assert _said(caplog, "run cancelled during integrate; series landed on feature")
 
 
 @pytest.mark.git
@@ -264,9 +269,7 @@ async def test_a_cancellation_during_teardown_lets_the_teardown_finish(
     assert _branches(host_repo, "feature") == []
     branch = f"waystation/{run_id}"
     assert _branches(host_repo, "waystation/*") == [branch]
-    assert f"run cancelled during sandbox; series kept on {branch}" in _lifecycle(
-        caplog
-    )
+    assert _said(caplog, f"run cancelled during sandbox; series kept on {branch}")
 
 
 @pytest.mark.git
@@ -330,3 +333,37 @@ async def test_a_failure_a_cancelled_run_can_no_longer_report_is_logged(
         f"run {run_id}: agent failed in a run that was cancelled: AgentExited("
     )
     assert _branches(host_repo, "waystation/*") == [f"waystation/{run_id}"]
+
+
+@pytest.mark.git
+async def test_a_landing_refused_under_cancellation_keeps_the_series(
+    host_repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    gate = Gate()
+    checked_out = git(host_repo, "symbolic-ref", "--short", "HEAD")
+    tip = git(host_repo, "rev-parse", checked_out)
+    spec = a_run(host_repo).integrate(GatedIntegration(gate, checked_out))
+
+    with caplog.at_level(logging.INFO, logger="waystation"):
+        run_id = await _cancel_at(gate, spec)
+
+    assert git(host_repo, "rev-parse", checked_out) == tip
+    branch = f"waystation/{run_id}"
+    assert subjects(host_repo, f"HEAD..{branch}") == ["add a file"]
+    assert _said(caplog, f"run cancelled during integrate; series kept on {branch}")
+
+
+@pytest.mark.git
+async def test_a_cancellation_inside_a_hook_is_still_said(
+    host_repo: Path, isolated_tempdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    gate = Gate()
+    spec = a_run(host_repo).on_sandbox_ready(lambda ctx: gate.hold())
+
+    with caplog.at_level(logging.INFO, logger="waystation"):
+        await _cancel_at(gate, spec)
+
+    # Hooks are the user's code: a cancellation interrupts them.
+    assert not gate.passed.is_set()
+    assert workspaces(isolated_tempdir) == []
+    assert _said(caplog, "run cancelled during sandbox")

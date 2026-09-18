@@ -105,10 +105,10 @@ class _RunRecord:
     series: Series | None = None
     patches: PatchSeries | None = None
     preserved: str | None = None
+    landed_on: str | None = None
     failure: StageError | None = None
-    # A cancellation held back until the stage it arrived in has ended.
-    cancelled: asyncio.CancelledError | None = None
-    cancelled_during: Stage | None = None
+    # A cancellation held until the stage it arrived during has done its work.
+    held: tuple[Stage, asyncio.CancelledError] | None = None
 
     @contextlib.contextmanager
     def entering(self, stage: Stage) -> Iterator[None]:
@@ -129,12 +129,12 @@ class _RunRecord:
         if err.agent is not None:
             self.agent = err.agent
 
-    def hold(self, cancel: asyncio.CancelledError, stage: Stage) -> None:
+    def hold(self, stage: Stage, cancel: asyncio.CancelledError) -> None:
         """Keep the first cancellation until ``surface`` lets it go (ADR-0017)."""
-        if self.cancelled is None:
-            self.cancelled, self.cancelled_during = cancel, stage
+        if self.held is None:
+            self.held = (stage, cancel)
 
-    async def finish[T](self, stage: Stage, work: Awaitable[T]) -> T:
+    async def uninterrupted[T](self, stage: Stage, work: Awaitable[T]) -> T:
         """Await ``work`` to its end; a cancellation meanwhile is held, not lost."""
         task = asyncio.ensure_future(work)
         while True:
@@ -143,21 +143,19 @@ class _RunRecord:
             except asyncio.CancelledError as cancel:
                 if task.cancelled():
                     raise  # the work itself was cancelled, not the run
-                self.hold(cancel, stage)
+                self.hold(stage, cancel)
 
-    def surface(self, *, landed_on: str | None = None) -> None:
-        """Raise a held cancellation, saying where the series went.
+    def surface(self) -> None:
+        """Raise the held cancellation, if any: the stage it waited on is done."""
+        if self.held is not None:
+            raise self.held[1]
 
-        Nothing reports a cancelled run, so a failure it met is logged instead.
-        """
-        if self.cancelled is None or self.cancelled_during is None:
-            return
+    def log_cancelled(self) -> None:
+        """Say where a cancelled run's series went: no ``run_end`` will."""
         if self.failure is not None:
             _log_unreported(self.run_id, self.failure, "in a run that was cancelled")
-        self.log.cancelled(
-            self.cancelled_during, kept_on=self.preserved, landed_on=landed_on
-        )
-        raise self.cancelled
+        stage = self.held[0] if self.held is not None else self.stage
+        self.log.cancelled(stage, kept_on=self.preserved, landed_on=self.landed_on)
 
     def failed(self) -> RunFailed:
         assert self.failure is not None
@@ -437,7 +435,7 @@ class RunSpec[OutcomeT]:
         t0 = clock.monotonic()
         task: asyncio.Task[T] = asyncio.create_task(factory())
         try:
-            return await record.finish(stage, race_timeout(task, seconds))
+            return await record.uninterrupted(stage, race_timeout(task, seconds))
         except TimeoutError as exc:
             elapsed = clock.monotonic() - t0
             assert seconds is not None
@@ -454,16 +452,23 @@ class RunSpec[OutcomeT]:
         record = _RunRecord(run_id=state.run_id, log=RunLog(state.run_id, state.name))
         with bind_run(state.run_id, state.name):
             record.log.on_run_start(ctx)
-            result = await self._lifecycle(ctx, state, record)
-            end_stage = result.stage if isinstance(result, RunFailed) else record.stage
             try:
-                # Every run_end hook sees the result, even after one raises.
-                await self.hook_registry.fire(
-                    "run_end", end_stage, ctx, result, stop_on_raise=False
+                result = await self._lifecycle(ctx, state, record)
+                end_stage = (
+                    result.stage if isinstance(result, RunFailed) else record.stage
                 )
-            except StageError as err:
-                record.fail(err)
-                result = record.failed()
+                try:
+                    # Every run_end hook sees the result, even after one raises.
+                    await self.hook_registry.fire(
+                        "run_end", end_stage, ctx, result, stop_on_raise=False
+                    )
+                except StageError as err:
+                    record.fail(err)
+                    result = record.failed()
+            except asyncio.CancelledError:
+                # Logged, never reported: there is no Cancelled result (ADR-0017).
+                record.log_cancelled()
+                raise
             record.log.on_run_end(ctx, result)
             return result
 
@@ -485,7 +490,7 @@ class RunSpec[OutcomeT]:
             await self._preflight()
             workspace = await self._prepare(ctx, state, record)
             outcome = await self._in_sandbox(ctx, state, record, workspace)
-            if record.failure is not None or record.cancelled is not None:
+            if record.failure is not None or record.held is not None:
                 self._preserve(record)
                 record.surface()  # before integrate starts: it never will
                 return record.failed()
@@ -568,7 +573,9 @@ class RunSpec[OutcomeT]:
                     record, "sandbox", "sandbox", self.timeouts.sandbox, _enter
                 )
             except BaseException as exc:
-                await cm.__aexit__(type(exc), exc, exc.__traceback__)
+                await record.uninterrupted(
+                    "sandbox", cm.__aexit__(type(exc), exc, exc.__traceback__)
+                )
                 raise
         try:
             record.surface()  # held while the sandbox started
@@ -581,7 +588,7 @@ class RunSpec[OutcomeT]:
                 # The exec killed the agent's tree before this surfaced
                 # (ADR-0023), so what it left is collected like any stopped
                 # agent's; the cancellation waits for that (ADR-0017).
-                record.hold(cancel, "agent")
+                record.hold("agent", cancel)
                 outcome = None
             await self._collect(record, sandbox, workspace)
             return outcome
@@ -696,10 +703,11 @@ class RunSpec[OutcomeT]:
             # Nothing landed, so the series is kept like any other that
             # reached no target (ADR-0005).
             self._preserve(record)
+        else:
+            record.landed_on = report.target
         # The stage was atomic: a cancellation held meanwhile surfaces only
         # now, with the target moved or left alone, never half-moved.
-        landed = record.failure is None and report.conflict is None
-        record.surface(landed_on=report.target if landed else None)
+        record.surface()
         if record.failure is not None:
             return record.failed()
         if report.conflict is not None:

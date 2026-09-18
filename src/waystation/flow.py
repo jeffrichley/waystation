@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import secrets
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -70,16 +70,22 @@ def _assert_object_outcome(outcome_type: type[Any]) -> None:
         raise TypeError(msg)
 
 
-def _log_later_failure(run_id: str, err: StageError) -> None:
-    """Log a failure met after the run already failed; never report it (ADR-0024)."""
+def _log_unreported(run_id: str, err: StageError, why: str) -> None:
+    """Log a failure no result will carry, saying ``why`` it goes unreported."""
     exception = getattr(err.failure, "exception", None)
     logger.error(
-        "run %s: %s failed after the run had already failed: %r",
+        "run %s: %s failed %s: %r",
         run_id,
         err.stage,
+        why,
         err.failure,
         exc_info=exception,
     )
+
+
+def _log_later_failure(run_id: str, err: StageError) -> None:
+    """Log a failure met after the run already failed; never report it (ADR-0024)."""
+    _log_unreported(run_id, err, "after the run had already failed")
 
 
 def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
@@ -100,6 +106,9 @@ class _RunRecord:
     patches: PatchSeries | None = None
     preserved: str | None = None
     failure: StageError | None = None
+    # A cancellation held back until the stage it arrived in has ended.
+    cancelled: asyncio.CancelledError | None = None
+    cancelled_during: Stage | None = None
 
     @contextlib.contextmanager
     def entering(self, stage: Stage) -> Iterator[None]:
@@ -119,6 +128,36 @@ class _RunRecord:
         self.failure = err
         if err.agent is not None:
             self.agent = err.agent
+
+    def hold(self, cancel: asyncio.CancelledError, stage: Stage) -> None:
+        """Keep the first cancellation until ``surface`` lets it go (ADR-0017)."""
+        if self.cancelled is None:
+            self.cancelled, self.cancelled_during = cancel, stage
+
+    async def finish[T](self, stage: Stage, work: Awaitable[T]) -> T:
+        """Await ``work`` to its end; a cancellation meanwhile is held, not lost."""
+        task = asyncio.ensure_future(work)
+        while True:
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError as cancel:
+                if task.cancelled():
+                    raise  # the work itself was cancelled, not the run
+                self.hold(cancel, stage)
+
+    def surface(self, *, landed_on: str | None = None) -> None:
+        """Raise a held cancellation, saying where the series went.
+
+        Nothing reports a cancelled run, so a failure it met is logged instead.
+        """
+        if self.cancelled is None or self.cancelled_during is None:
+            return
+        if self.failure is not None:
+            _log_unreported(self.run_id, self.failure, "in a run that was cancelled")
+        self.log.cancelled(
+            self.cancelled_during, kept_on=self.preserved, landed_on=landed_on
+        )
+        raise self.cancelled
 
     def failed(self) -> RunFailed:
         assert self.failure is not None
@@ -382,17 +421,23 @@ class RunSpec[OutcomeT]:
 
     async def _bounded[T](
         self,
+        record: _RunRecord,
         stage: Stage,
         bound: str,
         seconds: float | None,
         factory: Any,
     ) -> T:
-        """Run an awaitable factory under a stage bound; raise StageError on expiry."""
+        """Run a stage's own work under its bound; raise StageError on expiry.
+
+        Cancelling the run never interrupts this work — a half-cloned
+        workspace, half-cut series or half-moved target would outlive it — so
+        the cancellation is held on ``record`` until the work ends (ADR-0017).
+        """
         clock = get_clock()
         t0 = clock.monotonic()
         task: asyncio.Task[T] = asyncio.create_task(factory())
         try:
-            return await race_timeout(task, seconds)
+            return await record.finish(stage, race_timeout(task, seconds))
         except TimeoutError as exc:
             elapsed = clock.monotonic() - t0
             assert seconds is not None
@@ -440,8 +485,9 @@ class RunSpec[OutcomeT]:
             await self._preflight()
             workspace = await self._prepare(ctx, state, record)
             outcome = await self._in_sandbox(ctx, state, record, workspace)
-            if record.failure is not None:
+            if record.failure is not None or record.cancelled is not None:
                 self._preserve(record)
+                record.surface()  # before integrate starts: it never will
                 return record.failed()
             assert outcome is not None
             return await self._land(ctx, record, outcome)
@@ -450,6 +496,7 @@ class RunSpec[OutcomeT]:
             record.fail(StageError(record.stage, failure))
         except Exception as exc:
             record.fail(_as_stage_error(record.stage, exc))
+        record.surface()  # a failure never hides a cancellation held meanwhile
         return record.failed()
 
     def _prompt_text(self) -> str:
@@ -487,11 +534,12 @@ class RunSpec[OutcomeT]:
 
         with record.entering("workspace"):
             workspace: Workspace = await self._bounded(
-                "workspace", "workspace", self.timeouts.workspace, _workspace
+                record, "workspace", "workspace", self.timeouts.workspace, _workspace
             )
         record.base_sha = state.base_sha = workspace.base_sha
-        record.log.on_workspace_ready(ctx)
         try:
+            record.surface()  # held while the workspace was cloned
+            record.log.on_workspace_ready(ctx)
             await self.hook_registry.fire("workspace_ready", "workspace", ctx)
         except BaseException:
             # No sandbox owns the workspace yet, so nothing else removes it.
@@ -517,16 +565,24 @@ class RunSpec[OutcomeT]:
         with record.entering("sandbox"):
             try:
                 sandbox: Sandbox = await self._bounded(
-                    "sandbox", "sandbox", self.timeouts.sandbox, _enter
+                    record, "sandbox", "sandbox", self.timeouts.sandbox, _enter
                 )
             except BaseException as exc:
                 await cm.__aexit__(type(exc), exc, exc.__traceback__)
                 raise
         try:
+            record.surface()  # held while the sandbox started
             state.sandbox = sandbox
             record.log.on_sandbox_ready(ctx)
             await self.hook_registry.fire("sandbox_ready", "sandbox", ctx)
-            outcome = await self._run_agent(ctx, record, sandbox)
+            try:
+                outcome = await self._run_agent(ctx, record, sandbox)
+            except asyncio.CancelledError as cancel:
+                # The exec killed the agent's tree before this surfaced
+                # (ADR-0023), so what it left is collected like any stopped
+                # agent's; the cancellation waits for that (ADR-0017).
+                record.hold(cancel, "agent")
+                outcome = None
             await self._collect(record, sandbox, workspace)
             return outcome
         finally:
@@ -587,7 +643,7 @@ class RunSpec[OutcomeT]:
         with record.entering("collect"):
             try:
                 collected: CollectResult = await self._bounded(
-                    "collect", "collect", self.timeouts.collect, _collected
+                    record, "collect", "collect", self.timeouts.collect, _collected
                 )
             except Exception as exc:
                 if record.failure is None:
@@ -628,7 +684,11 @@ class RunSpec[OutcomeT]:
         with record.entering("integrate"):
             try:
                 report: IntegrationReport = await self._bounded(
-                    "integrate", "integrate", self.timeouts.integrate, _integrated
+                    record,
+                    "integrate",
+                    "integrate",
+                    self.timeouts.integrate,
+                    _integrated,
                 )
             except Exception as exc:
                 record.fail(_as_stage_error("integrate", exc))
@@ -636,6 +696,10 @@ class RunSpec[OutcomeT]:
             # Nothing landed, so the series is kept like any other that
             # reached no target (ADR-0005).
             self._preserve(record)
+        # The stage was atomic: a cancellation held meanwhile surfaces only
+        # now, with the target moved or left alone, never half-moved.
+        landed = record.failure is None and report.conflict is None
+        record.surface(landed_on=report.target if landed else None)
         if record.failure is not None:
             return record.failed()
         if report.conflict is not None:
@@ -670,6 +734,8 @@ class RunSpec[OutcomeT]:
             await cm.__aexit__(None, None, None)
 
         try:
-            await self._bounded("sandbox", "teardown", self.timeouts.teardown, _leave)
+            await self._bounded(
+                record, "sandbox", "teardown", self.timeouts.teardown, _leave
+            )
         except Exception as exc:
             _log_later_failure(record.run_id, _as_stage_error("sandbox", exc))

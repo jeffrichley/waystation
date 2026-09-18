@@ -18,6 +18,7 @@ from waystation import (
     NoSandbox,
     RunResult,
     RunSpec,
+    SandboxBackend,
     ScriptedAgent,
     ScriptedCommit,
     Summary,
@@ -124,12 +125,16 @@ def a_run(
     prompt: str | Path = PROMPT,
     *,
     commits: Sequence[ScriptedCommit] = (ScriptedCommit("add a file", {"a.txt": "x"}),),
+    sandbox: SandboxBackend | None = None,
 ) -> RunSpec[Summary]:
-    """A run that says one line, makes ``commits`` (one, by default), and reports."""
+    """A run that says one line, makes ``commits`` (one, by default), and reports.
+
+    It runs on ``NoSandbox`` unless given another ``sandbox``.
+    """
     return Flow(
         repo,
         agent=ScriptedAgent(lines=["working"], outcome=OK_OUTCOME, commits=commits),
-        sandbox=NoSandbox(),
+        sandbox=sandbox if sandbox is not None else NoSandbox(),
     ).run(prompt)
 
 

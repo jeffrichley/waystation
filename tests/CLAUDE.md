@@ -38,7 +38,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `sh()` | the POSIX sh on this host (Git Bash on Windows) |
 | `workspaces(temp)` | the run workspaces left under a temp dir — assert `== []` to prove a run cleaned up |
 | `awaited(spec)` | a coroutine awaiting a `RunSpec`, for `asyncio.create_task` — reach for it when a test cancels or drives a run from outside |
-| `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series |
+| `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series, `sandbox=` your own backend |
 | `ShellAgent(script)` | an agent that *is* a shell script — reach for it over `ScriptedAgent` when the test drives stderr, an exit code, or timing |
 | `PROMPT` | the prompt `a_run` uses; has a second line, so a test can prove the body stayed unlogged |
 | `OK_OUTCOME` | the Outcome a scripted agent reports when the test doesn't care |

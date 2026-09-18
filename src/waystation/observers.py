@@ -32,6 +32,7 @@ from waystation.results import (
     RunConflicted,
     RunFailed,
     RunResult,
+    Stage,
     TimedOut,
 )
 
@@ -119,13 +120,27 @@ class RunLog(HookBundle):
             return
         self._run.info("run end: succeeded in %.1fs", elapsed)
 
-    # The agent's start is the one event with no hook behind it: the agent
-    # stage opens between sandbox_ready and the first output line.
+    # The agent's start and a run's cancellation are the events with no hook
+    # behind them: the agent stage opens between sandbox_ready and the first
+    # output line, and a cancelled run has no result for run_end (ADR-0017).
     def agent_start(self, prompt: str) -> None:
         """Announce the prompt by shape only — its body is never logged."""
         self._run.info(
             "agent start: prompt %d chars, first line %r", len(prompt), _head(prompt)
         )
+
+    def cancelled(
+        self, stage: Stage, *, kept_on: str | None, landed_on: str | None
+    ) -> None:
+        """Say a run was cancelled, and where its series went, if anywhere."""
+        if kept_on is not None:
+            self._run.info("run cancelled during %s; series kept on %s", stage, kept_on)
+        elif landed_on is not None:
+            self._run.info(
+                "run cancelled during %s; series landed on %s", stage, landed_on
+            )
+        else:
+            self._run.info("run cancelled during %s", stage)
 
 
 class _FlushingFile:

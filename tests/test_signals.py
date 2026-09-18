@@ -23,11 +23,11 @@ from helpers import a_run, subjects, workspaces
 from waystation import handle_signals
 
 # What a shell, a CI runner or `docker stop` ends a process with, per platform.
-SHUTDOWN = (
-    (signal.SIGINT, signal.SIGBREAK)
-    if sys.platform == "win32"
-    else (signal.SIGINT, signal.SIGTERM)
-)
+# An `if` statement, not an expression: only that is how mypy narrows platforms.
+if sys.platform == "win32":
+    SHUTDOWN = (signal.SIGINT, signal.SIGBREAK)
+else:
+    SHUTDOWN = (signal.SIGINT, signal.SIGTERM)
 
 
 @pytest.fixture(autouse=True)

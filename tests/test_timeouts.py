@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from helpers import awaited
 from waystation import (
     Flow,
     NoSandbox,
@@ -34,10 +35,6 @@ from waystation.workspace import Workspace
 
 class Answer(BaseModel):
     summary: str
-
-
-async def _await_spec(spec: Any) -> Any:
-    return await spec
 
 
 async def _drive(clock: ManualClock, coro: Any, steps: Sequence[float]) -> Any:
@@ -190,9 +187,7 @@ async def test_agent_silence_fails_when_silent(host_repo: Path) -> None:
         ),
         timeouts=Timeouts(agent_silence=1.0),
     )
-    result = await _drive(
-        clock, _await_spec(flow.run("p", outcome=Answer)), steps=(1.0,)
-    )
+    result = await _drive(clock, awaited(flow.run("p", outcome=Answer)), steps=(1.0,))
     assert isinstance(result, RunFailed)
     assert result.stage == "agent"
     assert isinstance(result.failure, TimedOut)
@@ -215,7 +210,7 @@ async def test_agent_silence_resets_on_output_lines(host_repo: Path) -> None:
     )
     result = await _drive(
         clock,
-        _await_spec(flow.run("p", outcome=Answer)),
+        awaited(flow.run("p", outcome=Answer)),
         steps=(0.8, 0.8, 0.8),
     )
     assert isinstance(result, RunSucceeded)
@@ -236,9 +231,7 @@ async def test_agent_wall_bound_fails(host_repo: Path) -> None:
         ),
         timeouts=Timeouts(agent_wall=2.0),
     )
-    result = await _drive(
-        clock, _await_spec(flow.run("p", outcome=Answer)), steps=(2.0,)
-    )
+    result = await _drive(clock, awaited(flow.run("p", outcome=Answer)), steps=(2.0,))
     assert isinstance(result, RunFailed)
     assert result.stage == "agent"
     assert isinstance(result.failure, TimedOut)
@@ -257,7 +250,7 @@ async def test_completion_grace_succeeds_hanging(host_repo: Path) -> None:
         timeouts=Timeouts(completion_grace=1.0),
     )
     result = await _drive(
-        clock, _await_spec(flow.run("p", outcome=Answer)), steps=(0.0, 1.0)
+        clock, awaited(flow.run("p", outcome=Answer)), steps=(0.0, 1.0)
     )
     assert isinstance(result, RunSucceeded)
     assert result.outcome.summary == "done"
@@ -329,7 +322,7 @@ async def test_collect_bound_times_out(host_repo: Path) -> None:
     # Extra advances: agent/grace park first; collect's 1s race arms next.
     result = await _drive(
         clock,
-        _await_spec(flow.run("p", outcome=Answer)),
+        awaited(flow.run("p", outcome=Answer)),
         steps=(0.0, 1.0, 1.0),
     )
     assert isinstance(result, RunFailed)
@@ -356,7 +349,7 @@ async def test_wall_timeout_preserves_series(host_repo: Path) -> None:
         salvage=True,
     )
     with use_clock(clock):
-        task = asyncio.create_task(_await_spec(flow.run("p", outcome=Answer)))
+        task = asyncio.create_task(awaited(flow.run("p", outcome=Answer)))
         # Wait until the wall sleeper is parked, then let commits finish.
         deadline = asyncio.get_running_loop().time() + 5.0
         while not clock._waiters and not task.done():

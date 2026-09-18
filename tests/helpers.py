@@ -16,6 +16,7 @@ from typing import Any
 from waystation import (
     Flow,
     NoSandbox,
+    RunResult,
     RunSpec,
     ScriptedAgent,
     ScriptedCommit,
@@ -35,10 +36,12 @@ __all__ = [
     "PROMPT",
     "ShellAgent",
     "a_run",
+    "awaited",
     "commit_on",
     "git",
     "init_host_repo",
     "sh",
+    "workspaces",
 ]
 
 OK_OUTCOME = {"summary": "ok"}
@@ -106,6 +109,11 @@ def init_host_repo(root: Path) -> Path:
     return repo
 
 
+def workspaces(temp: Path) -> list[Path]:
+    """The run workspaces under ``temp`` — ``[]`` once every run cleaned up."""
+    return sorted(temp.glob("waystation-*"))
+
+
 def sh() -> str:
     """The POSIX sh ``ScriptedAgent`` found on this host (Git Bash on Windows)."""
     return str(ScriptedAgent().command("", {}).argv[0])
@@ -123,6 +131,12 @@ def a_run(
         agent=ScriptedAgent(lines=["working"], outcome=OK_OUTCOME, commits=commits),
         sandbox=NoSandbox(),
     ).run(prompt)
+
+
+async def awaited(spec: RunSpec[Any]) -> RunResult[Any]:
+    """Await ``spec`` inside a coroutine, which ``asyncio.create_task`` needs."""
+    result: RunResult[Any] = await spec
+    return result
 
 
 @dataclass(frozen=True)

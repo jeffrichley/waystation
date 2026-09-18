@@ -235,3 +235,7 @@ class RunFailed:
     preserved: str | None
     stage: Stage
     failure: Failure
+
+
+type RunResult[OutcomeT] = RunSucceeded[OutcomeT] | RunConflicted[OutcomeT] | RunFailed
+"""What awaiting a run returns; ``match`` on the three kinds, as with ``Failure``."""

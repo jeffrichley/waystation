@@ -31,7 +31,7 @@ from waystation.results import (
     IntegrationReport,
     RunConflicted,
     RunFailed,
-    RunSucceeded,
+    RunResult,
     TimedOut,
 )
 
@@ -98,7 +98,7 @@ class RunLog(HookBundle):
     def on_run_end(
         self,
         ctx: RunContext,
-        result: RunSucceeded[Any] | RunConflicted[Any] | RunFailed,
+        result: RunResult[Any],
     ) -> None:
         elapsed = sum(result.elapsed.values())
         if isinstance(result, RunFailed):
@@ -299,7 +299,7 @@ class RunLogFiles(HookBundle):
     def on_run_end(
         self,
         ctx: RunContext,
-        result: RunSucceeded[Any] | RunConflicted[Any] | RunFailed,
+        result: RunResult[Any],
     ) -> None:
         open_file = self._open.pop(ctx.run_id, None)
         if open_file is None:
@@ -313,7 +313,7 @@ class RunLogFiles(HookBundle):
             file.close()
 
 
-def _footer(result: RunSucceeded[Any] | RunConflicted[Any] | RunFailed) -> str:
+def _footer(result: RunResult[Any]) -> str:
     """The last line of a run file: how the agent ended, or why it didn't."""
     if isinstance(result, RunFailed) and isinstance(result.failure, TimedOut):
         bound = result.failure
@@ -385,7 +385,7 @@ class EventLog(HookBundle):
     def on_run_end(
         self,
         ctx: RunContext,
-        result: RunSucceeded[Any] | RunConflicted[Any] | RunFailed,
+        result: RunResult[Any],
     ) -> None:
         fields = _fields(result)
         if isinstance(result, RunFailed):

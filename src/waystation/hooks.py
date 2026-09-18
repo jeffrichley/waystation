@@ -17,9 +17,7 @@ from waystation.results import (
     HookName,
     HookRaised,
     IntegrationReport,
-    RunConflicted,
-    RunFailed,
-    RunSucceeded,
+    RunResult,
     Stage,
 )
 from waystation.sandbox.protocol import Sandbox
@@ -143,7 +141,7 @@ class HookBundle:
     def on_run_end(
         self,
         ctx: RunContext,
-        result: RunSucceeded[Any] | RunConflicted[Any] | RunFailed,
+        result: RunResult[Any],
     ) -> Awaitable[None] | None:
         """Fired for every result a run returns."""
         return None

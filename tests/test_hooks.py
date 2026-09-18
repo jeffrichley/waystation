@@ -23,6 +23,7 @@ from waystation import (
     RunConflicted,
     RunContext,
     RunFailed,
+    RunResult,
     RunSucceeded,
     ScriptedAgent,
     ScriptedCommit,
@@ -793,13 +794,13 @@ class EndOnly(HookBundle):
     """A bundle that overrides one hook and inherits no-ops for the rest."""
 
     def __init__(self) -> None:
-        self.results: list[RunSucceeded[Any] | RunConflicted[Any] | RunFailed] = []
+        self.results: list[RunResult[Any]] = []
 
     @override
     async def on_run_end(
         self,
         ctx: RunContext,
-        result: RunSucceeded[Any] | RunConflicted[Any] | RunFailed,
+        result: RunResult[Any],
     ) -> None:
         self.results.append(result)
 

@@ -42,6 +42,7 @@ from waystation.results import (
     Refused,
     RunConflicted,
     RunFailed,
+    RunResult,
     RunSucceeded,
     Series,
     Stage,
@@ -231,11 +232,7 @@ class Flow:
         """
         return self._register("integrated", fn)
 
-    def on_run_end[
-        F: Callable[
-            [RunContext, RunSucceeded[Any] | RunConflicted[Any] | RunFailed], object
-        ]
-    ](self, fn: F) -> F:
+    def on_run_end[F: Callable[[RunContext, RunResult[Any]], object]](self, fn: F) -> F:
         """Fire ``fn(ctx, result)`` for every result a run returns.
 
         Returns ``fn``; runs built afterwards get it.
@@ -365,7 +362,7 @@ class RunSpec[OutcomeT]:
     def on_run_end(
         self,
         fn: Callable[
-            [RunContext, RunSucceeded[OutcomeT] | RunConflicted[OutcomeT] | RunFailed],
+            [RunContext, RunResult[OutcomeT]],
             object,
         ],
     ) -> RunSpec[OutcomeT]:
@@ -406,7 +403,7 @@ class RunSpec[OutcomeT]:
 
     async def _execute(
         self,
-    ) -> RunSucceeded[OutcomeT] | RunConflicted[OutcomeT] | RunFailed:
+    ) -> RunResult[OutcomeT]:
         state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
         ctx = RunContext(state)
         record = _RunRecord(run_id=state.run_id, log=RunLog(state.run_id, state.name))
@@ -427,7 +424,7 @@ class RunSpec[OutcomeT]:
 
     async def _lifecycle(
         self, ctx: RunContext, state: RunState, record: _RunRecord
-    ) -> RunSucceeded[OutcomeT] | RunConflicted[OutcomeT] | RunFailed:
+    ) -> RunResult[OutcomeT]:
         """Run the stages in order; each phase below owns its own stages."""
         try:
             # run_start fires for every run, so a prompt file that cannot be
@@ -615,7 +612,7 @@ class RunSpec[OutcomeT]:
 
     async def _land(
         self, ctx: RunContext, record: _RunRecord, outcome: OutcomeT
-    ) -> RunSucceeded[OutcomeT] | RunConflicted[OutcomeT] | RunFailed:
+    ) -> RunResult[OutcomeT]:
         """Integrate stage, or preservation when the run integrates nowhere."""
         patches, strategy = record.patches, self.integration
         assert patches is not None

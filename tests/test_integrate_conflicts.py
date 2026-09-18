@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+import subprocess
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -215,6 +216,44 @@ async def test_a_target_checked_out_in_another_worktree_is_refused(
 
     assert_refused(result, "target_checked_out", host_repo)
     assert git(host_repo, "rev-parse", TARGET) == tip
+
+
+def rebasing(worktree: Path) -> None:
+    """Stop a rebase of the worktree's branch halfway, HEAD detached from it."""
+    stopped = subprocess.run(
+        ["git", "rebase", "--no-ff", "--exec", "false", "HEAD~1"],
+        cwd=worktree,
+        capture_output=True,
+        check=False,
+    )
+    assert stopped.returncode != 0, "the exec stops the rebase"
+
+
+def bisecting(worktree: Path) -> None:
+    """Start a bisect from the worktree's branch, then leave it for a midpoint."""
+    git(worktree, "bisect", "start")
+    git(worktree, "checkout", "--detach")
+
+
+@pytest.mark.parametrize("stop", [rebasing, bisecting], ids=["rebase", "bisect"])
+async def test_a_target_a_worktree_will_return_to_is_refused(
+    host_repo: Path, tmp_path: Path, stop: Callable[[Path], None]
+) -> None:
+    # Detached, but the branch is still that worktree's: finishing the rebase
+    # would write over whatever landed, as `git branch -f` knows (ADR-0020).
+    elsewhere = tmp_path / "elsewhere"
+    git(host_repo, "worktree", "add", "-b", TARGET, str(elsewhere))
+    (elsewhere / "theirs.txt").write_bytes(b"theirs\n")
+    git(elsewhere, "add", "theirs.txt")
+    git(elsewhere, "commit", "-m", "theirs")
+    stop(elsewhere)
+    assert git(elsewhere, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+    tip = git(host_repo, "rev-parse", f"refs/heads/{TARGET}")
+
+    result = await a_run(host_repo).integrate(TARGET)
+
+    assert_refused(result, "target_checked_out", host_repo)
+    assert git(host_repo, "rev-parse", f"refs/heads/{TARGET}") == tip
 
 
 @dataclass(frozen=True)

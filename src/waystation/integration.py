@@ -228,15 +228,60 @@ def _read_ref(repo: GitRepo, ref: str) -> str | None:
 
 
 def _worktree_holding(repo: GitRepo, ref: str) -> str | None:
-    """The worktree with ``ref`` checked out, the main one included, if any."""
+    """The worktree using ``ref``, the main one included, if any.
+
+    Using means what it means to ``git branch -f``: checked out, or the branch
+    a rebase or bisect there will return to. A rebase detaches HEAD, but
+    finishing it writes that branch over whatever landed meanwhile.
+    """
     listing = repo.git("worktree", "list", "--porcelain", "-z")
-    worktree: str | None = None
-    for field in listing.split("\0"):
-        if field.startswith("worktree "):
-            worktree = field.removeprefix("worktree ")
-        elif field == f"branch {ref}":
+    for index, record in enumerate(listing.split("\0\0")):
+        fields = record.strip("\0").split("\0")
+        if not fields[0].startswith("worktree "):
+            continue
+        worktree = fields[0].removeprefix("worktree ")
+        if f"branch {ref}" in fields:
+            return worktree
+        git_dir = repo.common_dir if index == 0 else _linked_git_dir(worktree)
+        if git_dir is not None and ref in _returning_to(git_dir):
             return worktree
     return None
+
+
+def _linked_git_dir(worktree: str) -> Path | None:
+    """A linked worktree's private git dir, read from its ``.git`` file."""
+    try:
+        pointer = decode((Path(worktree) / ".git").read_bytes())
+    except OSError:
+        return None  # a worktree whose directory is gone has nothing in flight
+    git_dir = Path(pointer.removeprefix("gitdir:").strip())
+    return git_dir if git_dir.is_absolute() else Path(worktree) / git_dir
+
+
+# Where a paused rebase or bisect keeps the branch it will go back to: git's
+# own is_worktree_being_rebased / is_worktree_being_bisected read the same.
+_REBASE_HEAD_NAMES = ("rebase-merge/head-name", "rebase-apply/head-name")
+_BISECT_START = "BISECT_START"
+
+
+def _returning_to(git_dir: Path) -> set[str]:
+    """The refs a rebase or bisect paused in ``git_dir`` will return to."""
+    refs: set[str] = set()
+    for name in _REBASE_HEAD_NAMES:
+        head_name = _read_state(git_dir / name)
+        if head_name is not None:
+            refs.add(head_name)
+    bisected_from = _read_state(git_dir / _BISECT_START)
+    if bisected_from is not None:
+        refs.add(f"refs/heads/{bisected_from}")
+    return refs
+
+
+def _read_state(path: Path) -> str | None:
+    try:
+        return decode(path.read_bytes()).strip() or None
+    except OSError:
+        return None
 
 
 def _committer(repo: GitRepo) -> tuple[str, str]:

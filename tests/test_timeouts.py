@@ -319,12 +319,16 @@ async def test_collect_bound_times_out(host_repo: Path) -> None:
         sandbox=ClockSandbox(lines=((0.0, outcome),), hang_git=100.0),
         timeouts=Timeouts(collect=1.0, completion_grace=30.0),
     )
-    # Extra advances: agent/grace park first; collect's 1s race arms next.
-    result = await _drive(
-        clock,
-        awaited(flow.run("p", outcome=Answer)),
-        steps=(0.0, 1.0, 1.0),
-    )
+    with use_clock(clock):
+        task = asyncio.create_task(awaited(flow.run("p", outcome=Answer)))
+        # The agent's completion grace parks and goes again, and collect's
+        # git parks for 100 s: advance only once collect's own bound has
+        # parked, whatever order the others came and went in.
+        while not any(due <= clock.monotonic() + 1.0 for due, _ in clock._waiters):
+            assert not task.done(), task.result()
+            await asyncio.sleep(0.01)
+        clock.advance(1.0)
+        result = await task
     assert isinstance(result, RunFailed)
     assert result.stage == "collect"
     assert isinstance(result.failure, TimedOut)

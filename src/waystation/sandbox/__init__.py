@@ -11,6 +11,7 @@ from waystation.sandbox.processes import (
     host_processes,
 )
 from waystation.sandbox.protocol import ExecResult, Sandbox, SandboxBackend
+from waystation.sandbox.transport import clone_in
 
 __all__ = [
     "ExecResult",
@@ -21,5 +22,6 @@ __all__ = [
     "Sandbox",
     "SandboxBackend",
     "WindowsProcesses",
+    "clone_in",
     "host_processes",
 ]

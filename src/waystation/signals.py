@@ -45,6 +45,10 @@ def handle_signals() -> None:
         raise RuntimeError("handle_signals() must be called inside a task")
     loop = task.get_loop()
 
+    def _cancel(signum: int) -> None:
+        if not task.cancel(f"received {signal.Signals(signum).name}"):
+            signal.raise_signal(signum)  # the task ended first: nothing to cancel
+
     def _on_signal(signum: int, frame: FrameType | None) -> None:
         for sig in _SHUTDOWN:
             signal.signal(sig, signal.SIG_DFL)
@@ -53,8 +57,7 @@ def handle_signals() -> None:
             return
         # A handler runs between bytecodes, maybe inside the loop's own code;
         # the threadsafe call is the one that also wakes a loop parked in select.
-        received = f"received {signal.Signals(signum).name}"
-        loop.call_soon_threadsafe(task.cancel, received)
+        loop.call_soon_threadsafe(_cancel, signum)
 
     for sig in _SHUTDOWN:
         signal.signal(sig, _on_signal)

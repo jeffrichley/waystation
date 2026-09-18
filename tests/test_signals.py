@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from helpers import a_run, git, workspaces
+from helpers import a_run, subjects, workspaces
 from waystation import handle_signals
 
 # What a shell, a CI runner or `docker stop` ends a process with, per platform.
@@ -225,7 +225,7 @@ def test_sigterm_to_a_flow_script_keeps_the_series_and_leaks_no_sandbox(
     assert proc.returncode == 1, err
     assert "CancelledError: received SIGTERM" in err
     branch = f"waystation/{run_id}"
-    kept = git(host_repo, "log", "--format=%s", f"HEAD..{branch}").splitlines()
+    kept = subjects(host_repo, f"HEAD..{branch}")
     assert kept == ["WIP: salvaged uncommitted work", "first"]
     assert workspaces(temp) == []
 

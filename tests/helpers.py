@@ -7,16 +7,21 @@ helper can be called from a fixture, a test body, or another helper.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from waystation import (
     Flow,
     NoSandbox,
+    RunResult,
     RunSpec,
+    SandboxBackend,
     ScriptedAgent,
     ScriptedCommit,
     Summary,
@@ -35,10 +40,14 @@ __all__ = [
     "PROMPT",
     "ShellAgent",
     "a_run",
+    "awaited",
     "commit_on",
     "git",
     "init_host_repo",
+    "lifecycle",
     "sh",
+    "subjects",
+    "workspaces",
 ]
 
 OK_OUTCOME = {"summary": "ok"}
@@ -64,6 +73,11 @@ def git(repo: Path, *args: str) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def subjects(repo: Path, revisions: str) -> list[str]:
+    """The subject of each commit in ``revisions`` (``base..branch``), newest first."""
+    return git(repo, "log", "--format=%s", revisions).splitlines()
 
 
 def commit_on(
@@ -106,6 +120,16 @@ def init_host_repo(root: Path) -> Path:
     return repo
 
 
+def workspaces(temp: Path) -> list[Path]:
+    """The run workspaces under ``temp`` — ``[]`` once every run cleaned up."""
+    return sorted(temp.glob("waystation-*"))
+
+
+def lifecycle(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """The records of the lines a run logs per lifecycle event, in order."""
+    return [r for r in caplog.records if r.name == "waystation.run"]
+
+
 def sh() -> str:
     """The POSIX sh ``ScriptedAgent`` found on this host (Git Bash on Windows)."""
     return str(ScriptedAgent().command("", {}).argv[0])
@@ -116,13 +140,23 @@ def a_run(
     prompt: str | Path = PROMPT,
     *,
     commits: Sequence[ScriptedCommit] = (ScriptedCommit("add a file", {"a.txt": "x"}),),
+    sandbox: SandboxBackend | None = None,
 ) -> RunSpec[Summary]:
-    """A run that says one line, makes ``commits`` (one, by default), and reports."""
+    """A run that says one line, makes ``commits`` (one, by default), and reports.
+
+    It runs on ``NoSandbox`` unless given another ``sandbox``.
+    """
     return Flow(
         repo,
         agent=ScriptedAgent(lines=["working"], outcome=OK_OUTCOME, commits=commits),
-        sandbox=NoSandbox(),
+        sandbox=sandbox if sandbox is not None else NoSandbox(),
     ).run(prompt)
+
+
+async def awaited(spec: RunSpec[Any]) -> RunResult[Any]:
+    """Await ``spec`` inside a coroutine, which ``asyncio.create_task`` needs."""
+    result: RunResult[Any] = await spec
+    return result
 
 
 @dataclass(frozen=True)

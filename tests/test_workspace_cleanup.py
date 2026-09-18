@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
+from helpers import workspaces
 from waystation import (
     Flow,
     NoSandbox,
@@ -20,10 +21,6 @@ from waystation import (
 
 class Answer(BaseModel):
     summary: str
-
-
-def _workspaces(temp: Path) -> list[Path]:
-    return sorted(temp.glob("waystation-*"))
 
 
 @pytest.mark.git
@@ -43,7 +40,7 @@ async def test_finished_run_removes_its_workspace(
     result = await flow.run("work", outcome=Answer)
 
     assert isinstance(result, RunSucceeded)
-    assert _workspaces(isolated_tempdir) == []
+    assert workspaces(isolated_tempdir) == []
 
 
 @pytest.mark.git
@@ -64,4 +61,4 @@ async def test_run_failing_before_its_sandbox_removes_its_workspace(
 
     assert isinstance(result, RunFailed)
     assert result.stage == "workspace"
-    assert _workspaces(isolated_tempdir) == []
+    assert workspaces(isolated_tempdir) == []

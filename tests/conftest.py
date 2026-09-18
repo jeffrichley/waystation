@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,18 @@ def isolated_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def host_repo(tmp_path: Path) -> Path:
     """A throwaway host repo with a git identity and one commit on HEAD."""
     return init_host_repo(tmp_path)
+
+
+@pytest.fixture
+def clean_logging() -> Iterator[None]:
+    """Restore the ``waystation`` logger after a test opts into a console."""
+    logger = logging.getLogger("waystation")
+    handlers, level = list(logger.handlers), logger.level
+    try:
+        yield
+    finally:
+        logger.handlers[:] = handlers
+        logger.setLevel(level)
 
 
 def _docker_daemon_reachable() -> bool:

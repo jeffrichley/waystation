@@ -87,15 +87,16 @@ def sh() -> str:
     return str(ScriptedAgent().command("", {}).argv[0])
 
 
-def a_run(repo: Path, prompt: str | Path = PROMPT) -> RunSpec[Summary]:
-    """A run that says one line, makes one commit, and reports an Outcome."""
+def a_run(
+    repo: Path,
+    prompt: str | Path = PROMPT,
+    *,
+    commits: Sequence[ScriptedCommit] = (ScriptedCommit("add a file", {"a.txt": "x"}),),
+) -> RunSpec[Summary]:
+    """A run that says one line, makes ``commits`` (one, by default), and reports."""
     return Flow(
         repo,
-        agent=ScriptedAgent(
-            lines=["working"],
-            outcome=OK_OUTCOME,
-            commits=[ScriptedCommit("add a file", {"a.txt": "x"})],
-        ),
+        agent=ScriptedAgent(lines=["working"], outcome=OK_OUTCOME, commits=commits),
         sandbox=NoSandbox(),
     ).run(prompt)
 

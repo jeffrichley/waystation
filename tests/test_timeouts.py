@@ -14,11 +14,9 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from helpers import git
 from waystation import (
     Flow,
     NoSandbox,
-    RunContext,
     RunFailed,
     RunSucceeded,
     ScriptedAgent,
@@ -58,6 +56,10 @@ async def _poll_until(
     The ManualClock stands still while this polls, so no bound can fire here:
     that is what separates waiting for a real signal from wall-sleeping a
     guess at how long real work takes (``tests/CLAUDE.md``).
+
+    ``predicate`` has to be cheap and non-blocking — a stat, not a subprocess.
+    It runs on the loop the run needs, and the deadline below is only read
+    between calls, so one that blocks outlives every bound here.
     """
     deadline = asyncio.get_running_loop().time() + _POLL_LIMIT
     while not task.done():
@@ -358,29 +360,22 @@ async def test_collect_bound_times_out(host_repo: Path) -> None:
     assert result.failure.bound == "collect"
 
 
-def _committed(workspace: Path, message: str) -> bool:
-    """True once ``message`` is a commit on the workspace's HEAD."""
-    if not (workspace / ".git").exists():
-        # Teardown removed the workspace: the run is ending, not committing.
-        return False
-    return message in git(workspace, "log", "--format=%s").splitlines()
-
-
 @pytest.mark.git
 @pytest.mark.asyncio
-async def test_wall_timeout_preserves_series(host_repo: Path) -> None:
+async def test_wall_timeout_preserves_series(host_repo: Path, tmp_path: Path) -> None:
     """After a timeout, collect runs and a non-empty series is preserved."""
+    # A scripted agent commits before it lingers, so the first byte of its
+    # linger file says the commit landed. That is the signal the clock waits
+    # for, and asking the filesystem is a stat: a poll that shelled out to git
+    # every tick would starve the very run it is waiting on.
+    committed = tmp_path / "committed"
     agent = ScriptedAgent(
         outcome=None,
         commits=(ScriptedCommit(message="wip", files={"a.txt": "a\n"}),),
         linger=True,
+        linger_touch=str(committed),
     )
     clock = ManualClock()
-    workspaces: list[Path] = []
-
-    def remember_workspace(ctx: RunContext) -> None:
-        workspaces.append(Path(ctx.sandbox.workspace))
-
     flow = Flow(
         host_repo,
         agent=agent,
@@ -388,22 +383,21 @@ async def test_wall_timeout_preserves_series(host_repo: Path) -> None:
         timeouts=Timeouts(agent_wall=1.0),
         salvage=True,
     )
-    spec = flow.run("p", outcome=Answer).on_sandbox_ready(remember_workspace)
     with use_clock(clock):
-        task = asyncio.create_task(_await_spec(spec))
-        # Wait until the wall sleeper is parked, then until the agent's commit
-        # has really landed. Advancing after an elapsed-time guess instead
-        # races git: the bound fires first, the series comes back empty, and
-        # the test fails on a loaded box for a reason it does not test.
+        task = asyncio.create_task(_await_spec(flow.run("p", outcome=Answer)))
+        # Wait until the wall sleeper is parked, then until the commit has
+        # really landed. Advancing after an elapsed-time guess instead races
+        # git: the bound fires first, the series comes back empty, and the
+        # test fails on a loaded box for a reason it does not test.
         await _poll_until(
             lambda: bool(clock._waiters),
             task=task,
             label="wall bound never armed",
         )
         await _poll_until(
-            lambda: bool(workspaces) and _committed(workspaces[0], "wip"),
+            committed.exists,
             task=task,
-            label="agent never committed 'wip' in its workspace",
+            label="agent never got past its commit",
         )
         clock.advance(1.0)
         result = await task

@@ -13,7 +13,7 @@ A wide interface is the smell, not a long file. Before adding a parameter, ask w
 Reach for the one already here before inventing a shape:
 
 - **Strategy** — anything that varies by platform, backend or policy is injected, never branched on inline. `ProcessStrategy` (how a process is spawned and killed, per OS), `SandboxBackend`, `AgentProvider`, `IntegrationStrategy`. A platform `if` inside a method is the signal that a strategy wants to be born.
-- **Observer** — anything that watches a run is a hook bundle: an object with `on_<hook>` methods. Built-ins (`RunLog`, and `RunLogFiles`/`EventLog`/`Dashboard` as they land) are *peers* of a user's bundle, not a privileged path (ADR-0001).
+- **Observer** — anything that watches a run is a hook bundle: an object with `on_<hook>` methods. Built-ins (`RunLog`, `RunLogFiles`, `EventLog`, `Dashboard`) are *peers* of a user's bundle, not a privileged path (ADR-0001).
 - **Null Object** — `HookBundle`'s no-op defaults and the `NullHandler` on the logger hierarchy both mean the caller never checks for absence.
 - **Value Object** — results, `Timeouts` and the `Failure` union are frozen dataclasses that hold data and answer questions, with no behaviour worth mocking (ADR-0021). `CommandFailed` redacting itself is the one documented exception, and it has an ADR (ADR-0025).
 - **Adapter / Facade** — `GitRepo` wraps a git runner, `configure_logging` wraps rich and stdlib logging, `RunLoggerAdapter` wraps a logger. Each is a thin, honest hop, not a Middle Man.

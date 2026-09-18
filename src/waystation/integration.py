@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
 from waystation._cancellation import committed
-from waystation._git import decode, encode, run_git
+from waystation._git import decode, encode, require_host_git, run_git
 from waystation.collect import PatchSeries
-from waystation.errors import PreflightError, StageError
+from waystation.errors import StageError
 from waystation.results import (
     CommandFailed,
     Conflict,
@@ -106,7 +106,7 @@ async def integrate(
     raised (ADR-0027).
     """
     git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
-    await _require_git_240(git_repo)
+    await require_host_git()
     # A bound or cancellation kills the strategy's git before it leaves the
     # lock, so the lock is never free while a landing is still writing (#57).
     async with _lock_for(git_repo.common_dir):
@@ -129,18 +129,6 @@ async def preserve_series(
         commits = await _materialize_at_base(git_repo, series)
         await git_repo.git("update-ref", f"refs/heads/{branch}", commits[-1])
     return branch
-
-
-async def _require_git_240(repo: GitRepo) -> None:
-    raw = await repo.git("--version")  # e.g. "git version 2.43.0.windows.1"
-    parts = raw.replace("git version ", "").split(".")
-    try:
-        major = int(parts[0])
-        minor = int(parts[1])
-    except (IndexError, ValueError) as exc:
-        raise PreflightError(f"could not parse git version: {raw!r}") from exc
-    if (major, minor) < (2, 40):
-        raise PreflightError(f"host git must be ≥ 2.40 (got {raw})")
 
 
 @dataclass(frozen=True, slots=True)

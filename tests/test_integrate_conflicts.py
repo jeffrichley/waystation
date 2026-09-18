@@ -11,7 +11,7 @@ from typing import Literal
 
 import pytest
 
-from helpers import a_run, commit_on, git, lifecycle, subjects
+from helpers import a_run, commit_on, git, host_state, lifecycle, subjects
 from waystation import (
     CommandFailed,
     Integration,
@@ -86,20 +86,6 @@ async def test_a_merge_conflict_names_the_paths_but_no_patch(host_repo: Path) ->
     assert result.report.landed == ()
     assert git(host_repo, "rev-parse", TARGET) == tip
     assert result.preserved == f"waystation/{result.run_id}"
-
-
-def host_state(repo: Path) -> dict[str, object]:
-    """What a landing must never touch: refs, HEAD, the index and the tree."""
-    return {
-        "refs": git(repo, "for-each-ref", "--format=%(refname) %(objectname)"),
-        "head": git(repo, "symbolic-ref", "HEAD"),
-        "index": (repo / ".git" / "index").read_bytes(),
-        "tree": {
-            path.relative_to(repo).as_posix(): path.read_bytes()
-            for path in repo.rglob("*")
-            if path.is_file() and path.relative_to(repo).parts[0] != ".git"
-        },
-    }
 
 
 @pytest.mark.parametrize("mechanism", ["apply", "merge"])

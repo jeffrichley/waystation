@@ -34,6 +34,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | --- | --- |
 | `git(repo, *args)` | run git in `repo`, stdout stripped, raises on non-zero |
 | `commit_on(repo, branch, files)` | a commit on `branch` (made at HEAD if missing) with the checkout put back — a target that moved, or a range for `PatchSeries.from_range`; returns the tip |
+| `host_state(repo)` | the host's refs, HEAD, index and tree in one value — compare before and after to prove something left the host untouched |
 | `init_host_repo(root)` | what `host_repo` is built from — call it directly only for a *second* repo, or one outside `tmp_path` |
 | `sh()` | the POSIX sh on this host (Git Bash on Windows) |
 | `subjects(repo, revisions)` | the commit subjects in a range like `HEAD..waystation/<id>`, newest first — what a preserved or landed series holds |

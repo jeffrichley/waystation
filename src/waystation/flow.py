@@ -527,8 +527,8 @@ class RunSpec[OutcomeT]:
         """Workspace stage: a private clone of the base, then ``workspace_ready``."""
 
         async def _workspace() -> Workspace:
-            return await asyncio.to_thread(
-                prepare_workspace, self.repo, base=self.base, run_id=record.run_id
+            return await prepare_workspace(
+                self.repo, base=self.base, run_id=record.run_id
             )
 
         with record.entering("workspace"):

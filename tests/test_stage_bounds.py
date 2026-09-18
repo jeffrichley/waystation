@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from helpers import a_run, awaited, git, subjects
+from helpers import a_run, awaited, git, subjects, workspaces
 from waystation import (
     GitRepo,
     Integration,
@@ -167,3 +167,33 @@ async def test_a_bound_firing_mid_swap_lets_it_land_and_reports_the_landing(
     assert result.preserved is None
     assert subjects(host_repo, f"HEAD..{TARGET}") == ["add a file"]
     assert list((host_repo / ".git" / "refs" / "heads").glob("*.lock")) == []
+
+
+@pytest.mark.git
+async def test_a_workspace_bound_kills_the_clone_and_leaves_no_workspace(
+    host_repo: Path,
+    tmp_path: Path,
+    isolated_tempdir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pulse = tmp_path / "pulse"
+    hooks = tmp_path / "template" / "hooks"
+    hooks.mkdir(parents=True)
+    # Every clone copies its hooks from the template, so the workspace's own
+    # checkout runs this one: a clone that stalls with a shell under it.
+    hook = hooks / "post-checkout"
+    hook.write_bytes(f"#!/bin/sh\n{_beating(pulse)}\n".encode())
+    hook.chmod(0o755)
+    monkeypatch.setenv("GIT_TEMPLATE_DIR", str(tmp_path / "template"))
+    spec = a_run(host_repo).with_timeouts(Timeouts(workspace=1.0))
+    clock = ManualClock()
+
+    with use_clock(clock):
+        result = await _fire_bound(clock, asyncio.create_task(awaited(spec)), pulse)
+
+    assert isinstance(result, RunFailed)
+    assert result.stage == "workspace"
+    assert isinstance(result.failure, TimedOut)
+    assert result.failure.bound == "workspace"
+    assert workspaces(isolated_tempdir) == []
+    await _still(pulse)

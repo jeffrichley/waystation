@@ -148,9 +148,9 @@ class _FlushingFile:
 
     Both observers want the same thing: a reader — ``tail -f``, or an analysis
     script watching a fan-out — should see a line the moment it happens, not
-    when the run ends. Writes come from whichever thread logged, since
-    ``prepare_workspace`` runs in one while agent lines arrive on the event
-    loop, so they go through a lock and no line lands inside another.
+    when the run ends. Writes come from whichever thread logged — a hook may
+    log from a worker thread while agent lines arrive on the event loop — so
+    they go through a lock and no line lands inside another.
     """
 
     __slots__ = ("_handle", "_lock", "path")

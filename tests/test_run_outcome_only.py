@@ -144,7 +144,7 @@ async def test_path_prompt_is_read_at_agent_stage(
 @pytest.mark.asyncio
 async def test_uncommitted_host_changes_are_invisible(host_repo: Path) -> None:
     (host_repo / "SECRET").write_text("leak\n", encoding="utf-8")
-    ws = prepare_workspace(host_repo)
+    ws = await prepare_workspace(host_repo)
     try:
         assert not (ws.path / "SECRET").exists()
         assert (ws.path / "README").read_text(encoding="utf-8") == "committed\n"
@@ -173,8 +173,8 @@ async def test_base_ref_resolved_when_await_starts(host_repo: Path) -> None:
 
 
 @pytest.mark.git
-def test_prepare_workspace_checks_out_waystation_branch(host_repo: Path) -> None:
-    ws = prepare_workspace(host_repo)
+async def test_prepare_workspace_checks_out_waystation_branch(host_repo: Path) -> None:
+    ws = await prepare_workspace(host_repo)
     try:
         branch = git(ws.path, "branch", "--show-current")
         assert branch == f"waystation/{ws.run_id}"

@@ -32,7 +32,7 @@ async def test_loop_composed_by_hand_lands_the_series(host_repo: Path) -> None:
         outcome=Answer(summary="done"),
     )
 
-    workspace = prepare_workspace(host_repo)
+    workspace = await prepare_workspace(host_repo)
     async with NoSandbox().start(workspace, env={}, pass_env=()) as sandbox:
         exit, outcome = await run_agent(
             sandbox, agent, agent.command("by hand", {}), Answer

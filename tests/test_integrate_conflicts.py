@@ -11,7 +11,7 @@ from typing import Literal
 
 import pytest
 
-from helpers import a_run, commit_on, git
+from helpers import a_run, commit_on, git, lifecycle, subjects
 from waystation import (
     CommandFailed,
     Integration,
@@ -68,8 +68,8 @@ async def test_an_apply_conflict_is_a_conflicted_result_naming_the_patch(
     assert report.landed == ()
     assert git(host_repo, "rev-parse", TARGET) == tip, "nothing landed"
     assert result.preserved == f"waystation/{result.run_id}"
-    preserved = git(host_repo, "log", "--format=%s", f"{base}..{result.preserved}")
-    assert preserved.splitlines() == ["claim shared", "add notes"]
+    preserved = subjects(host_repo, f"{base}..{result.preserved}")
+    assert preserved == ["claim shared", "add notes"]
 
 
 async def test_a_merge_conflict_names_the_paths_but_no_patch(host_repo: Path) -> None:
@@ -164,11 +164,11 @@ async def test_a_conflict_is_logged_as_one_and_names_the_kept_branch(
         result = await a_run(host_repo, commits=CLAIMS_SHARED).integrate(TARGET)
 
     assert isinstance(result, RunConflicted)
-    lifecycle = [r for r in caplog.records if r.name == "waystation.run"]
-    events = [record.getMessage().split(":")[0] for record in lifecycle]
+    lines = lifecycle(caplog)
+    events = [record.getMessage().split(":")[0] for record in lines]
     assert "integrated" not in events
-    assert lifecycle[-1].levelno == logging.INFO
-    end = lifecycle[-1].getMessage()
+    assert lines[-1].levelno == logging.INFO
+    end = lines[-1].getMessage()
     assert end.startswith("run end: conflicted")
     assert TARGET in end
     assert f"{result.preserved}" in end

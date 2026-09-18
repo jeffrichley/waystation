@@ -7,11 +7,14 @@ helper can be called from a fixture, a test body, or another helper.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from waystation import (
     Flow,
@@ -41,7 +44,9 @@ __all__ = [
     "commit_on",
     "git",
     "init_host_repo",
+    "lifecycle",
     "sh",
+    "subjects",
     "workspaces",
 ]
 
@@ -68,6 +73,11 @@ def git(repo: Path, *args: str) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def subjects(repo: Path, revisions: str) -> list[str]:
+    """The subject of each commit in ``revisions`` (``base..branch``), newest first."""
+    return git(repo, "log", "--format=%s", revisions).splitlines()
 
 
 def commit_on(
@@ -113,6 +123,11 @@ def init_host_repo(root: Path) -> Path:
 def workspaces(temp: Path) -> list[Path]:
     """The run workspaces under ``temp`` — ``[]`` once every run cleaned up."""
     return sorted(temp.glob("waystation-*"))
+
+
+def lifecycle(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """The records of the lines a run logs per lifecycle event, in order."""
+    return [r for r in caplog.records if r.name == "waystation.run"]
 
 
 def sh() -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,9 +14,11 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from helpers import git
 from waystation import (
     Flow,
     NoSandbox,
+    RunContext,
     RunFailed,
     RunSucceeded,
     ScriptedAgent,
@@ -40,27 +42,45 @@ async def _await_spec(spec: Any) -> Any:
     return await spec
 
 
+# Only how long a wedged run takes to fail, so it sits under pytest's own
+# --timeout=60 and well above what a loaded CI box needs (ADR-0017).
+_POLL_LIMIT = 20.0
+
+
+async def _poll_until(
+    predicate: Callable[[], bool],
+    *,
+    task: asyncio.Task[Any],
+    label: str,
+) -> None:
+    """Poll real state until ``predicate`` holds, or ``task`` ends first.
+
+    The ManualClock stands still while this polls, so no bound can fire here:
+    that is what separates waiting for a real signal from wall-sleeping a
+    guess at how long real work takes (``tests/CLAUDE.md``).
+    """
+    deadline = asyncio.get_running_loop().time() + _POLL_LIMIT
+    while not task.done():
+        if predicate():
+            return
+        if asyncio.get_running_loop().time() > deadline:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            raise AssertionError(label)
+        await asyncio.sleep(0.01)
+
+
 async def _drive(clock: ManualClock, coro: Any, steps: Sequence[float]) -> Any:
     """Run ``coro`` under ``clock``, advancing through ``steps`` while it runs."""
     with use_clock(clock):
         task = asyncio.create_task(coro)
-
-        async def _wait_for_park(*, label: str) -> None:
-            deadline = asyncio.get_running_loop().time() + 5.0
-            while True:
-                if task.done():
-                    return
-                if clock._waiters:
-                    return
-                if asyncio.get_running_loop().time() > deadline:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
-                    raise AssertionError(f"run never parked on ManualClock ({label})")
-                await asyncio.sleep(0.01)
-
         for i, delta in enumerate(steps):
-            await _wait_for_park(label=f"step {i} before +{delta}")
+            await _poll_until(
+                lambda: bool(clock._waiters),
+                task=task,
+                label=f"run never parked on ManualClock (step {i} before +{delta})",
+            )
             if task.done():
                 break
             clock.advance(delta)
@@ -338,6 +358,14 @@ async def test_collect_bound_times_out(host_repo: Path) -> None:
     assert result.failure.bound == "collect"
 
 
+def _committed(workspace: Path, message: str) -> bool:
+    """True once ``message`` is a commit on the workspace's HEAD."""
+    if not (workspace / ".git").exists():
+        # Teardown removed the workspace: the run is ending, not committing.
+        return False
+    return message in git(workspace, "log", "--format=%s").splitlines()
+
+
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_wall_timeout_preserves_series(host_repo: Path) -> None:
@@ -348,6 +376,11 @@ async def test_wall_timeout_preserves_series(host_repo: Path) -> None:
         linger=True,
     )
     clock = ManualClock()
+    workspaces: list[Path] = []
+
+    def remember_workspace(ctx: RunContext) -> None:
+        workspaces.append(Path(ctx.sandbox.workspace))
+
     flow = Flow(
         host_repo,
         agent=agent,
@@ -355,16 +388,23 @@ async def test_wall_timeout_preserves_series(host_repo: Path) -> None:
         timeouts=Timeouts(agent_wall=1.0),
         salvage=True,
     )
+    spec = flow.run("p", outcome=Answer).on_sandbox_ready(remember_workspace)
     with use_clock(clock):
-        task = asyncio.create_task(_await_spec(flow.run("p", outcome=Answer)))
-        # Wait until the wall sleeper is parked, then let commits finish.
-        deadline = asyncio.get_running_loop().time() + 5.0
-        while not clock._waiters and not task.done():
-            if asyncio.get_running_loop().time() > deadline:
-                task.cancel()
-                raise AssertionError("wall bound never armed")
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.4)
+        task = asyncio.create_task(_await_spec(spec))
+        # Wait until the wall sleeper is parked, then until the agent's commit
+        # has really landed. Advancing after an elapsed-time guess instead
+        # races git: the bound fires first, the series comes back empty, and
+        # the test fails on a loaded box for a reason it does not test.
+        await _poll_until(
+            lambda: bool(clock._waiters),
+            task=task,
+            label="wall bound never armed",
+        )
+        await _poll_until(
+            lambda: bool(workspaces) and _committed(workspaces[0], "wip"),
+            task=task,
+            label="agent never committed 'wip' in its workspace",
+        )
         clock.advance(1.0)
         result = await task
 

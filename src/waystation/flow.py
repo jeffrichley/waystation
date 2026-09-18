@@ -15,7 +15,7 @@ from typing import Any, Literal
 from pydantic import TypeAdapter
 from pydantic.json_schema import GenerateJsonSchema
 
-from waystation._cancellation import run_to_end
+from waystation._cancellation import run_to_end, start_bounded
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
@@ -427,9 +427,10 @@ class RunSpec[OutcomeT]:
         """
         clock = get_clock()
         t0 = clock.monotonic()
-        task: asyncio.Task[T] = asyncio.create_task(factory())
+        task, commits = start_bounded(factory())
+        bounded: Awaitable[T] = race_timeout(task, seconds, commits=commits)
         try:
-            return await record.uninterrupted(stage, race_timeout(task, seconds))
+            return await record.uninterrupted(stage, bounded)
         except TimeoutError as exc:
             elapsed = clock.monotonic() - t0
             assert seconds is not None

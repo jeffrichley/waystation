@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-from waystation._cancellation import run_to_end
+from waystation._cancellation import committed
 from waystation._git import decode, encode, run_git
 from waystation.collect import PatchSeries
 from waystation.errors import PreflightError, StageError
@@ -58,8 +58,17 @@ class GitRepo:
         return cls(path=path, common_dir=common)
 
     async def git(self, *args: str, env: Mapping[str, str] | None = None) -> str:
-        """Run git in this repo; its stdout, stripped. Cancelling it kills it."""
-        return await _repo_git(self.path, *args, env=env)
+        """Run git in this repo; its stdout, stripped.
+
+        Cancelling it kills git and all it started (ADR-0023) — except
+        ``update-ref``, which moves a ref: once started it finishes, and the
+        cancellation is raised after it, while a stage's bound waits for it
+        to end before firing (ADR-0027).
+        """
+        run = _repo_git(self.path, *args, env=env)
+        if args[:1] == ("update-ref",):
+            return await committed(run)
+        return await run
 
 
 async def _repo_git(
@@ -91,10 +100,10 @@ async def integrate(
 ) -> IntegrationReport:
     """Land ``series`` with ``strategy``, serialized per git common dir.
 
-    Cancelling it kills the strategy's git and all it started (ADR-0023) —
-    except a compare-and-swap already under way, which finishes: if the
-    target moved, the landing is returned instead of the cancellation
-    (ADR-0027).
+    Cancelling it kills the strategy's git and all it started (ADR-0023),
+    except an ``update-ref`` already under way: that finishes first, so the
+    target is moved or not, never half-moved, and the cancellation is still
+    raised (ADR-0027).
     """
     git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
     await _require_git_240(git_repo)
@@ -190,7 +199,7 @@ class Integration:
 
         try:
             # Compare-and-swap: only moves the target if it is still `current`.
-            await _swap(repo, ref, tip, current or _ZERO)
+            await repo.git("update-ref", ref, tip, current or _ZERO)
         except StageError as exc:
             # A refusal is only ours to give if we saw the target move; any
             # other failed swap is git's, reported as it came (ADR-0016).
@@ -222,29 +231,6 @@ class Integration:
             landed=landed,
             conflict=conflict,
         )
-
-
-async def _swap(repo: GitRepo, ref: str, new: str, old: str) -> None:
-    """Move ``ref`` from ``old`` to ``new``: a landing's one commit point.
-
-    Killing git here could leave the ref's lock behind, or kill it after the
-    ref moved, so once the swap starts it finishes, whatever cancels it
-    meanwhile (ADR-0027). If it landed, that is what happened: the
-    cancellation is spent and the landing reported. If it did not, the
-    cancellation goes on and nothing moved.
-    """
-    task = asyncio.current_task()
-    assert task is not None
-    before = task.cancelling()
-    waited: list[asyncio.CancelledError] = []
-    try:
-        await run_to_end(repo.git("update-ref", ref, new, old), waited.append)
-    except StageError:
-        if waited:
-            raise waited[0] from None
-        raise
-    while task.cancelling() > before:
-        task.uncancel()
 
 
 async def _read_ref(repo: GitRepo, ref: str) -> str | None:

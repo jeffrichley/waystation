@@ -32,6 +32,7 @@ from waystation import (
     ScriptedAgent,
     ScriptedCommit,
     configure_logging,
+    handle_signals,
 )
 
 
@@ -65,6 +66,8 @@ def _init_host(root: Path) -> Path:
 async def main() -> None:
     # One rich handler on stderr, so this demo's own prints keep stdout.
     configure_logging("INFO")
+    # Ctrl-C or SIGTERM cancels this task; the run still keeps its series.
+    handle_signals()
     # Windows often cannot unlink git's read-only objects at teardown. The
     # run's result is unchanged, so keep that one line out of the demo.
     logging.getLogger("waystation.sandbox").setLevel(logging.CRITICAL)

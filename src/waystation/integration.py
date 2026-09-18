@@ -7,15 +7,32 @@ import os
 import re
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
 from waystation._git import decode, encode, run_git
 from waystation.collect import PatchSeries
 from waystation.errors import PreflightError, StageError
-from waystation.results import CommandFailed, IntegrationReport, Refused
+from waystation.results import (
+    CommandFailed,
+    Conflict,
+    FailedPatch,
+    IntegrationReport,
+    Refused,
+)
 from waystation.tails import bound_tail
+
+__all__ = [
+    "Conflict",
+    "FailedPatch",
+    "GitRepo",
+    "Integration",
+    "IntegrationReport",
+    "IntegrationStrategy",
+    "PatchSeries",
+    "integrate",
+]
 
 Mechanism = Literal["apply", "merge"]
 
@@ -130,22 +147,21 @@ class Integration:
         target_before = repo.git("rev-parse", self.target) if exists else base
 
         if not series.patches:
-            return IntegrationReport(
-                strategy="Integration",
-                target=self.target,
-                mechanism=self.mechanism,
-                target_before=target_before,
-                target_after=target_before if exists else None,
-                landed=(),
-            )
+            return self._report(target_before, target_before if exists else None)
 
         commits = _materialize_at_base(repo, series)
+        # One attempt with the configured mechanism: an apply that conflicts
+        # never falls back to merge (ADR-0015).
         if self.mechanism == "apply":
-            tip, landed = _apply_onto(repo, tip=target_before, commits=commits)
+            landing = _apply_onto(repo, tip=target_before, commits=commits)
         else:
-            tip, landed = _merge_onto(
+            landing = _merge_onto(
                 repo, tip=target_before, base=base, series_tip=commits[-1]
             )
+        if isinstance(landing, Conflict):
+            # Nothing but unreferenced objects was written (ADR-0020).
+            return self._report(target_before, None, conflict=landing)
+        tip, landed = landing
 
         old = target_before if exists else _ZERO
         try:
@@ -160,13 +176,24 @@ class Integration:
                     ),
                 ) from exc
             raise
+        return self._report(target_before, tip, landed)
+
+    def _report(
+        self,
+        before: str,
+        after: str | None,
+        landed: tuple[str, ...] = (),
+        *,
+        conflict: Conflict | None = None,
+    ) -> IntegrationReport:
         return IntegrationReport(
             strategy="Integration",
             target=self.target,
             mechanism=self.mechanism,
-            target_before=target_before,
-            target_after=tip,
-            landed=tuple(landed),
+            target_before=before,
+            target_after=after,
+            landed=landed,
+            conflict=conflict,
         )
 
 
@@ -322,26 +349,19 @@ def _commit_meta(repo: GitRepo, sha: str) -> tuple[str, str, str, str]:
     return author, email, date, message
 
 
-def _apply_onto(
-    repo: GitRepo, *, tip: str, commits: list[str]
-) -> tuple[str, list[str]]:
+type _Landing = tuple[str, tuple[str, ...]] | Conflict
+"""The new tip and the commits that landed on it, or where the replay stopped."""
+
+
+def _apply_onto(repo: GitRepo, *, tip: str, commits: list[str]) -> _Landing:
     name, email = _committer(repo)
     landed: list[str] = []
-    for commit in commits:
+    for index, commit in enumerate(commits):
         parent = repo.git("rev-parse", f"{commit}^")
-        tree_out, code, err = _merge_tree(
-            repo, merge_base=parent, tip=tip, other=commit
-        )
-        if code != 0:
-            raise StageError(
-                "integrate",
-                CommandFailed(
-                    argv=("git", "merge-tree", "--write-tree"),
-                    exit_code=code,
-                    stderr_tail=bound_tail(err or tree_out),
-                ),
-            )
-        tree = tree_out.splitlines()[0].strip()
+        tree = _merge_tree(repo, merge_base=parent, tip=tip, other=commit)
+        if isinstance(tree, Conflict):
+            subject = repo.git("log", "-1", "--format=%s", commit)
+            return replace(tree, failed_patch=FailedPatch(index, subject))
         tip_tree = repo.git("rev-parse", f"{tip}^{{tree}}")
         if tree == tip_tree:
             continue
@@ -370,27 +390,17 @@ def _apply_onto(
             Path(msg_path).unlink(missing_ok=True)
         tip = new
         landed.append(new)
-    return tip, landed
+    return tip, tuple(landed)
 
 
-def _merge_onto(
-    repo: GitRepo, *, tip: str, base: str, series_tip: str
-) -> tuple[str, list[str]]:
+def _merge_onto(repo: GitRepo, *, tip: str, base: str, series_tip: str) -> _Landing:
     name, email = _committer(repo)
-    tree_out, code, err = _merge_tree(repo, merge_base=base, tip=tip, other=series_tip)
-    if code != 0:
-        raise StageError(
-            "integrate",
-            CommandFailed(
-                argv=("git", "merge-tree", "--write-tree"),
-                exit_code=code,
-                stderr_tail=bound_tail(err or tree_out),
-            ),
-        )
-    tree = tree_out.splitlines()[0].strip()
+    tree = _merge_tree(repo, merge_base=base, tip=tip, other=series_tip)
+    if isinstance(tree, Conflict):
+        return tree
     tip_tree = repo.git("rev-parse", f"{tip}^{{tree}}")
     if tree == tip_tree:
-        return tip, []
+        return tip, ()
 
     author, author_email, author_date, _msg = _commit_meta(repo, series_tip)
     message = f"Merge {series_tip[:8]} into branch"
@@ -418,20 +428,41 @@ def _merge_onto(
         )
     finally:
         Path(msg_path).unlink(missing_ok=True)
-    return new, [new]
+    return new, (new,)
 
 
 def _merge_tree(
     repo: GitRepo, *, merge_base: str, tip: str, other: str
-) -> tuple[str, int, str]:
+) -> str | Conflict:
+    """The merged tree's sha, or the paths that conflict; writes no ref, index or file.
+
+    ``-z`` keeps a path with a space or a quote exactly as git stored it.
+    """
     merged = run_git(
         repo.path,
         "merge-tree",
         "--write-tree",
+        "--name-only",
+        "--no-messages",
+        "-z",
         f"--merge-base={merge_base}",
         tip,
         other,
         stage="integrate",
         check=False,
     )
-    return merged.stdout, merged.returncode, merged.stderr
+    tree, *paths = merged.stdout.split("\0")
+    if merged.returncode == 0:
+        return tree
+    # Exit 1 means conflicts only when a tree came with it; git also exits 1,
+    # with nothing on stdout, when it cannot read its inputs.
+    if merged.returncode == 1 and tree:
+        return Conflict(paths=tuple(path for path in paths if path))
+    raise StageError(
+        "integrate",
+        CommandFailed(
+            argv=tuple(merged.args),
+            exit_code=merged.returncode,
+            stderr_tail=bound_tail(merged.stderr),
+        ),
+    )

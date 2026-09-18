@@ -17,6 +17,7 @@ from waystation.results import (
     HookName,
     HookRaised,
     IntegrationReport,
+    RunConflicted,
     RunFailed,
     RunSucceeded,
     Stage,
@@ -140,7 +141,9 @@ class HookBundle:
         return None
 
     def on_run_end(
-        self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
+        self,
+        ctx: RunContext,
+        result: RunSucceeded[Any] | RunConflicted[Any] | RunFailed,
     ) -> Awaitable[None] | None:
         """Fired for every result a run returns."""
         return None

@@ -91,15 +91,30 @@ def _log_later_failure(run_id: str, err: StageError) -> None:
 
 
 @contextlib.contextmanager
-def _preflighting(checked: object) -> Iterator[None]:
-    """Pass a ``PreflightError`` on; make any other failure one naming ``checked``."""
+def _preflighting(checked: str) -> Iterator[None]:
+    """Pass a ``PreflightError`` on; make any other failure one naming ``checked``.
+
+    Only ``PreflightError`` may leave a preflight (#30, ADR-0016): a check
+    that breaks some other way is still a reason the run cannot begin.
+    """
     try:
         yield
     except PreflightError:
         raise
     except Exception as exc:
-        msg = f"{type(checked).__name__} preflight failed: {exc!r}"
+        msg = f"{checked} preflight failed: {exc!r}"
         raise PreflightError(msg, failure=Errored(exception=exc)) from exc
+
+
+def _require_prompt_file(prompt: str | Path) -> None:
+    """A prompt given as a path must name a file; a str is the prompt itself."""
+    if not isinstance(prompt, Path) or prompt.is_file():
+        return
+    problem = "is not a file" if prompt.exists() else "not found"
+    raise PreflightError(
+        f"prompt file {problem}: {prompt} — pass a path to an existing file, "
+        "or the prompt itself as a str"
+    )
 
 
 def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
@@ -532,16 +547,14 @@ class RunSpec[OutcomeT]:
         batch: any problem raises ``PreflightError`` before the run begins
         (#30, ADR-0016). Nothing is installed, built or pulled (ADR-0011).
         """
-        with _preflighting(self.agent):
+        with _preflighting(type(self.agent).__name__):
             self.agent.preflight()
-        with _preflighting(self.sandbox):
+        with _preflighting(type(self.sandbox).__name__):
             await self.sandbox.preflight()
-        if isinstance(self.prompt, Path) and not self.prompt.is_file():
-            raise PreflightError(
-                f"prompt file not found: {self.prompt} — pass a path to an "
-                "existing file, or the prompt itself as a str"
-            )
-        await require_host_git()
+        with _preflighting("prompt file"):
+            _require_prompt_file(self.prompt)
+        with _preflighting("host git"):
+            await require_host_git()
 
     async def _prepare(
         self, ctx: RunContext, state: RunState, record: _RunRecord

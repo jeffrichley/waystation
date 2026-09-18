@@ -6,7 +6,11 @@ from waystation.results import AgentExit, Failure, Stage
 
 
 class WaystationError(Exception):
-    """Base for errors raised by primitives; awaited runs never raise these."""
+    """Base for errors raised by primitives.
+
+    An awaited run returns its failures as a result instead; the one thing it
+    raises is a ``PreflightError``, before it begins (ADR-0016).
+    """
 
 
 class PreflightError(WaystationError):

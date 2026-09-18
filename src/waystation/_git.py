@@ -63,7 +63,12 @@ async def run_git(
         env=dict(env) if env is not None else None,
         **processes.spawn_options(),
     )
-    process = await run_to_end(spawn, waited.append)
+    try:
+        process = await run_to_end(spawn, waited.append)
+    except Exception:
+        if waited:  # a cancellation that waited outranks a spawn that failed
+            raise waited[0] from None
+        raise
     tree = processes.adopt(process)
     try:
         if waited:
@@ -101,16 +106,26 @@ async def require_host_git() -> None:
     """Raise ``PreflightError``, saying how to fix it, unless host git is new enough."""
     wanted = ".".join(map(str, _OLDEST_GIT))
     try:
+        # check=False: no stage owns preflight, so nothing here raises a
+        # StageError; the stage named is only the runner's required label.
         shown = await run_git(None, "--version", stage="workspace", check=False)
     except FileNotFoundError as exc:
         msg = f"git is not on PATH: install git {wanted} or newer"
         raise PreflightError(msg, failure=Errored(exc)) from exc
+    except OSError as exc:
+        msg = f"could not run git ({exc}): check the git install on PATH"
+        raise PreflightError(msg, failure=Errored(exc)) from exc
+    if shown.returncode != 0:
+        raise PreflightError(
+            f"`git --version` exited {shown.returncode}: "
+            f"{bound_tail(shown.stderr).strip()} — check the git install on PATH"
+        )
     raw = shown.stdout.strip()  # e.g. "git version 2.43.0.windows.1"
     version = raw.removeprefix("git version ")
     try:
         found = tuple(int(part) for part in version.split(".")[:2])
     except ValueError as exc:
-        msg = f"could not read the host git version from {raw!r}"
+        msg = f"could not read a git version from {raw!r}: is `git` on PATH git?"
         raise PreflightError(msg, failure=Errored(exc)) from exc
     if found < _OLDEST_GIT:
         raise PreflightError(

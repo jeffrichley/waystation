@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from helpers import a_run, git, workspaces
+from helpers import a_run, host_state, workspaces
 from waystation import (
     Errored,
     Flow,
@@ -31,13 +31,14 @@ from waystation.agents import AgentCommand, AgentEvent
 
 
 @dataclass(frozen=True)
-class AgentThatFailsPreflight:
-    """An agent provider whose host check fails, the way ``ClaudeCode`` does."""
+class AgentWithPreflight:
+    """An agent provider whose host check does what the test says, and no more."""
 
-    error: Exception
+    error: Exception | None = None
 
     def preflight(self) -> None:
-        raise self.error
+        if self.error is not None:
+            raise self.error
 
     def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
         raise AssertionError("a run that failed preflight built a command")
@@ -56,20 +57,20 @@ class SandboxThatFailsPreflight(NoSandbox):
         raise self.error
 
 
-def _refs(repo: Path) -> str:
-    return git(repo, "for-each-ref", "--format=%(refname) %(objectname)")
+def _spec(repo: Path, agent: AgentWithPreflight) -> RunSpec[Summary]:
+    return Flow(repo, agent=agent, sandbox=NoSandbox()).run("work")
 
 
 async def _refused(
     spec: RunSpec[Summary], repo: Path, temp: Path, started: list[str]
 ) -> PreflightError:
     """Await ``spec``, expecting preflight to stop it before anything began."""
-    refs = _refs(repo)
+    before = host_state(repo)
     with pytest.raises(PreflightError) as refused:
         await spec.on_run_start(lambda ctx: started.append(ctx.run_id))
     assert started == [], "a run that failed preflight fired run_start"
     assert workspaces(temp) == []
-    assert _refs(repo) == refs
+    assert host_state(repo) == before
     return refused.value
 
 
@@ -82,7 +83,21 @@ async def test_a_missing_prompt_file_fails_preflight_naming_it(
     error = await _refused(a_run(host_repo, missing), host_repo, isolated_tempdir, [])
 
     assert str(missing) in str(error)
+    assert "not found" in str(error)
     assert "str" in str(error), "the fix — pass the prompt itself — is named"
+
+
+@pytest.mark.git
+async def test_a_prompt_path_that_is_a_directory_fails_preflight_saying_so(
+    host_repo: Path, tmp_path: Path, isolated_tempdir: Path
+) -> None:
+    folder = tmp_path / "prompts"
+    folder.mkdir()
+
+    error = await _refused(a_run(host_repo, folder), host_repo, isolated_tempdir, [])
+
+    assert str(folder) in str(error)
+    assert "not a file" in str(error)
 
 
 @pytest.mark.git
@@ -90,9 +105,7 @@ async def test_an_agent_provider_that_fails_preflight_stops_the_run_first(
     host_repo: Path, isolated_tempdir: Path
 ) -> None:
     refusal = PreflightError("CLAUDE_CODE_OAUTH_TOKEN is not set: export it")
-    spec: RunSpec[Summary] = Flow(
-        host_repo, agent=AgentThatFailsPreflight(refusal), sandbox=NoSandbox()
-    ).run("work")
+    spec = _spec(host_repo, AgentWithPreflight(refusal))
 
     error = await _refused(spec, host_repo, isolated_tempdir, [])
 
@@ -104,13 +117,12 @@ async def test_a_provider_bug_in_preflight_is_a_preflight_error_naming_it(
     host_repo: Path, isolated_tempdir: Path
 ) -> None:
     bug = KeyError("HOME")
-    spec: RunSpec[Summary] = Flow(
-        host_repo, agent=AgentThatFailsPreflight(bug), sandbox=NoSandbox()
-    ).run("work")
 
-    error = await _refused(spec, host_repo, isolated_tempdir, [])
+    error = await _refused(
+        _spec(host_repo, AgentWithPreflight(bug)), host_repo, isolated_tempdir, []
+    )
 
-    assert "AgentThatFailsPreflight" in str(error)
+    assert "AgentWithPreflight" in str(error)
     assert isinstance(error.failure, Errored)
     assert error.failure.exception is bug
 
@@ -130,30 +142,68 @@ async def test_a_sandbox_spec_that_fails_preflight_stops_the_run_first(
 
 
 @pytest.mark.git
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="a stand-in git on PATH needs a POSIX shebang; the check is the same",
-)
-async def test_host_git_older_than_2_40_fails_preflight_with_an_upgrade_hint(
+async def test_no_git_on_path_fails_preflight_saying_to_install_it(
     host_repo: Path,
     tmp_path: Path,
     isolated_tempdir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    refs = _refs(host_repo)  # read with the real git, before the stand-in
-    stand_in = tmp_path / "old-git"
-    stand_in.mkdir()
-    fake = stand_in / "git"
-    fake.write_text('#!/bin/sh\necho "git version 2.39.5"\n', encoding="utf-8")
-    fake.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{stand_in}:{Path('/usr/bin')}:/bin")
+    before = host_state(host_repo)  # read with the real git, before PATH goes
+    empty = tmp_path / "no-git-here"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
 
     with pytest.raises(PreflightError) as refused:
-        await a_run(host_repo)
+        await _spec(host_repo, AgentWithPreflight())
 
-    assert "2.39.5" in str(refused.value)
-    assert "2.40" in str(refused.value)
-    assert "upgrade" in str(refused.value).lower()
+    assert "install git" in str(refused.value)
     assert workspaces(isolated_tempdir) == []
     monkeypatch.undo()
-    assert _refs(host_repo) == refs
+    assert host_state(host_repo) == before
+
+
+@pytest.mark.git
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="a stand-in git on PATH needs a POSIX shebang; the check is the same",
+)
+@pytest.mark.parametrize(
+    ("stand_in", "says"),
+    [
+        pytest.param(
+            'echo "git version 2.39.5"', ("2.39.5", "2.40", "upgrade"), id="too-old"
+        ),
+        pytest.param(
+            'echo "hub version 2.14.2"', ("hub version 2.14.2", "PATH"), id="not-git"
+        ),
+        pytest.param(
+            'echo "no such thing" >&2; exit 3',
+            ("exited 3", "no such thing", "PATH"),
+            id="fails",
+        ),
+    ],
+)
+async def test_a_host_git_that_will_not_do_fails_preflight_saying_why(
+    host_repo: Path,
+    tmp_path: Path,
+    isolated_tempdir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stand_in: str,
+    says: tuple[str, ...],
+) -> None:
+    before = host_state(host_repo)  # read with the real git, before the stand-in
+    bin_dir = tmp_path / "stand-in"
+    bin_dir.mkdir()
+    fake = bin_dir / "git"
+    fake.write_text(f"#!/bin/sh\n{stand_in}\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+
+    with pytest.raises(PreflightError) as refused:
+        await _spec(host_repo, AgentWithPreflight())
+
+    for fragment in says:
+        assert fragment in str(refused.value)
+    assert workspaces(isolated_tempdir) == []
+    monkeypatch.undo()
+    assert host_state(host_repo) == before

@@ -29,8 +29,9 @@ from waystation.observability import AGENT_OUTPUT, PACKAGE, RUN, tag, tagged_log
 from waystation.results import (
     AgentExit,
     IntegrationReport,
+    RunConflicted,
     RunFailed,
-    RunSucceeded,
+    RunResult,
     TimedOut,
 )
 
@@ -95,7 +96,9 @@ class RunLog(HookBundle):
 
     @override
     def on_run_end(
-        self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
+        self,
+        ctx: RunContext,
+        result: RunResult[Any],
     ) -> None:
         elapsed = sum(result.elapsed.values())
         if isinstance(result, RunFailed):
@@ -104,6 +107,14 @@ class RunLog(HookBundle):
                 result.stage,
                 type(result.failure).__name__,
                 elapsed,
+            )
+            return
+        if isinstance(result, RunConflicted):
+            self._run.info(
+                "run end: conflicted landing on %s in %.1fs; series kept on %s",
+                result.report.target,
+                elapsed,
+                result.preserved,
             )
             return
         self._run.info("run end: succeeded in %.1fs", elapsed)
@@ -286,7 +297,9 @@ class RunLogFiles(HookBundle):
     @override
     @_safely
     def on_run_end(
-        self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
+        self,
+        ctx: RunContext,
+        result: RunResult[Any],
     ) -> None:
         open_file = self._open.pop(ctx.run_id, None)
         if open_file is None:
@@ -300,7 +313,7 @@ class RunLogFiles(HookBundle):
             file.close()
 
 
-def _footer(result: RunSucceeded[Any] | RunFailed) -> str:
+def _footer(result: RunResult[Any]) -> str:
     """The last line of a run file: how the agent ended, or why it didn't."""
     if isinstance(result, RunFailed) and isinstance(result.failure, TimedOut):
         bound = result.failure
@@ -370,7 +383,9 @@ class EventLog(HookBundle):
     @override
     @_safely
     def on_run_end(
-        self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
+        self,
+        ctx: RunContext,
+        result: RunResult[Any],
     ) -> None:
         fields = _fields(result)
         if isinstance(result, RunFailed):

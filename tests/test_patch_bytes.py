@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from helpers import git
+from helpers import commit_on, git
 from waystation import (
     Flow,
     Integration,
@@ -74,11 +74,7 @@ async def test_carriage_returns_in_content_survive_from_range(
     git(host_repo, "add", ".gitattributes")
     git(host_repo, "commit", "-m", "attributes")
     base = git(host_repo, "rev-parse", "HEAD")
-    git(host_repo, "switch", "-q", "-c", "source")
-    (host_repo / "dos.crlf").write_bytes(b"one\r\ntwo\r\n")
-    git(host_repo, "add", "dos.crlf")
-    git(host_repo, "commit", "-m", "dos file")
-    git(host_repo, "switch", "-q", "-")
+    commit_on(host_repo, "source", {"dos.crlf": "one\r\ntwo\r\n"})
 
     series = PatchSeries.from_range(host_repo, base, "source")
     report = await Integration("agents/dos").integrate(GitRepo.open(host_repo), series)

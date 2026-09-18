@@ -79,8 +79,36 @@ class Series:
 
 
 @dataclass(frozen=True, slots=True)
+class FailedPatch:
+    """The patch an ``apply`` replay stopped at.
+
+    ``index`` is its place in the series, counting from 0, so
+    ``series.patches[index]`` is the patch itself.
+    """
+
+    index: int
+    subject: str
+
+
+@dataclass(frozen=True, slots=True)
+class Conflict:
+    """Why a landing stopped: the paths that conflicted.
+
+    ``failed_patch`` is set for ``apply``, which replays one patch at a time;
+    ``merge`` lands the series in one step, so there is no patch to name.
+    """
+
+    paths: tuple[str, ...]
+    failed_patch: FailedPatch | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class IntegrationReport:
-    """What integration did for a run."""
+    """What integration did for a run.
+
+    On a conflict ``conflict`` is set, ``target_after`` is ``None`` and
+    ``landed`` is empty: the target never moved.
+    """
 
     strategy: str
     target: str
@@ -88,7 +116,7 @@ class IntegrationReport:
     target_before: str
     target_after: str | None
     landed: tuple[str, ...]
-    conflict: None = None
+    conflict: Conflict | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +203,26 @@ class RunSucceeded[OutcomeT]:
 
 
 @dataclass(frozen=True, slots=True)
+class RunConflicted[OutcomeT]:
+    """A run whose Outcome validated but whose landing conflicted.
+
+    Nothing landed: ``report.conflict`` says where it stopped, and
+    ``preserved`` names the branch the series is kept on, ready for a
+    resolver run (ADR-0015).
+    """
+
+    run_id: str
+    name: str | None
+    base_sha: str | None
+    elapsed: Mapping[Stage, float]
+    agent: AgentExit | None
+    series: Series | None
+    preserved: str | None
+    outcome: OutcomeT
+    report: IntegrationReport
+
+
+@dataclass(frozen=True, slots=True)
 class RunFailed:
     """A run that failed at a stage; never raised from an awaited run."""
 
@@ -187,3 +235,7 @@ class RunFailed:
     preserved: str | None
     stage: Stage
     failure: Failure
+
+
+type RunResult[OutcomeT] = RunSucceeded[OutcomeT] | RunConflicted[OutcomeT] | RunFailed
+"""What awaiting a run returns; ``match`` on the three kinds, as with ``Failure``."""

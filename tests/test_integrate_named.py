@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from helpers import git
+from helpers import commit_on, git
 from waystation import (
     Flow,
     Integration,
@@ -109,12 +109,8 @@ async def test_integrate_none_clears_flow_default(host_repo: Path) -> None:
 async def test_integrate_primitive_from_range(host_repo: Path) -> None:
     from waystation import PatchSeries, integrate
 
-    git(host_repo, "checkout", "-b", "feature")
-    (host_repo / "f.txt").write_text("f\n", encoding="utf-8")
-    git(host_repo, "add", "f.txt")
-    git(host_repo, "commit", "-m", "on feature")
-    base = git(host_repo, "rev-parse", "feature^")
-    git(host_repo, "checkout", "-")
+    base = git(host_repo, "rev-parse", "HEAD")
+    commit_on(host_repo, "feature", {"f.txt": "f\n"})
     series = PatchSeries.from_range(host_repo, base, "feature")
     report = await integrate(host_repo, series, Integration("agents/from-range"))
     assert report.target == "agents/from-range"
@@ -131,19 +127,10 @@ async def test_integrate_serializes_concurrent_lands(host_repo: Path) -> None:
 
     base = git(host_repo, "rev-parse", "HEAD")
 
-    git(host_repo, "checkout", "-b", "side-a")
-    (host_repo / "a.txt").write_text("a\n", encoding="utf-8")
-    git(host_repo, "add", "a.txt")
-    git(host_repo, "commit", "-m", "a")
+    commit_on(host_repo, "side-a", {"a.txt": "a\n"})
+    commit_on(host_repo, "side-b", {"b.txt": "b\n"})
     series_a = PatchSeries.from_range(host_repo, base, "side-a")
-
-    git(host_repo, "checkout", base)
-    git(host_repo, "checkout", "-b", "side-b")
-    (host_repo / "b.txt").write_text("b\n", encoding="utf-8")
-    git(host_repo, "add", "b.txt")
-    git(host_repo, "commit", "-m", "b")
     series_b = PatchSeries.from_range(host_repo, base, "side-b")
-    git(host_repo, "checkout", base)
 
     r1, r2 = await asyncio.gather(
         integrate(host_repo, series_a, Integration("agents/race")),

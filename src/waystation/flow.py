@@ -40,7 +40,9 @@ from waystation.results import (
     Errored,
     IntegrationReport,
     Refused,
+    RunConflicted,
     RunFailed,
+    RunResult,
     RunSucceeded,
     Series,
     Stage,
@@ -147,6 +149,21 @@ class _RunRecord:
             report=report,
         )
 
+    def conflicted[OutcomeT](
+        self, outcome: OutcomeT, report: IntegrationReport
+    ) -> RunConflicted[OutcomeT]:
+        return RunConflicted(
+            run_id=self.run_id,
+            name=None,
+            base_sha=self.base_sha,
+            elapsed=dict(self.elapsed),
+            agent=self.agent,
+            series=self.series,
+            preserved=self.preserved,
+            outcome=outcome,
+            report=report,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class Flow:
@@ -215,9 +232,7 @@ class Flow:
         """
         return self._register("integrated", fn)
 
-    def on_run_end[F: Callable[[RunContext, RunSucceeded[Any] | RunFailed], object]](
-        self, fn: F
-    ) -> F:
+    def on_run_end[F: Callable[[RunContext, RunResult[Any]], object]](self, fn: F) -> F:
         """Fire ``fn(ctx, result)`` for every result a run returns.
 
         Returns ``fn``; runs built afterwards get it.
@@ -345,7 +360,11 @@ class RunSpec[OutcomeT]:
         return self._with_hook("integrated", fn)
 
     def on_run_end(
-        self, fn: Callable[[RunContext, RunSucceeded[OutcomeT] | RunFailed], object]
+        self,
+        fn: Callable[
+            [RunContext, RunResult[OutcomeT]],
+            object,
+        ],
     ) -> RunSpec[OutcomeT]:
         """Fire ``fn(ctx, result)`` for every result a run returns.
 
@@ -382,7 +401,9 @@ class RunSpec[OutcomeT]:
                 TimedOut(bound=bound, limit=seconds, elapsed=elapsed),
             ) from exc
 
-    async def _execute(self) -> RunSucceeded[OutcomeT] | RunFailed:
+    async def _execute(
+        self,
+    ) -> RunResult[OutcomeT]:
         state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
         ctx = RunContext(state)
         record = _RunRecord(run_id=state.run_id, log=RunLog(state.run_id, state.name))
@@ -403,7 +424,7 @@ class RunSpec[OutcomeT]:
 
     async def _lifecycle(
         self, ctx: RunContext, state: RunState, record: _RunRecord
-    ) -> RunSucceeded[OutcomeT] | RunFailed:
+    ) -> RunResult[OutcomeT]:
         """Run the stages in order; each phase below owns its own stages."""
         try:
             # run_start fires for every run, so a prompt file that cannot be
@@ -591,7 +612,7 @@ class RunSpec[OutcomeT]:
 
     async def _land(
         self, ctx: RunContext, record: _RunRecord, outcome: OutcomeT
-    ) -> RunSucceeded[OutcomeT] | RunFailed:
+    ) -> RunResult[OutcomeT]:
         """Integrate stage, or preservation when the run integrates nowhere."""
         patches, strategy = record.patches, self.integration
         assert patches is not None
@@ -611,9 +632,15 @@ class RunSpec[OutcomeT]:
                 )
             except Exception as exc:
                 record.fail(_as_stage_error("integrate", exc))
-        if record.failure is not None:
+        if record.failure is not None or report.conflict is not None:
+            # Nothing landed, so the series is kept like any other that
+            # reached no target (ADR-0005).
             self._preserve(record)
+        if record.failure is not None:
             return record.failed()
+        if report.conflict is not None:
+            # No ``integrated`` hook: the conflict rides ``run_end`` (ADR-0015).
+            return record.conflicted(outcome, report)
         record.log.on_integrated(ctx, report)
         try:
             await self.hook_registry.fire("integrated", "integrate", ctx, report)

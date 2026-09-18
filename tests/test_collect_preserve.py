@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from helpers import git
+from helpers import commit_on, git
 from waystation import (
     AgentExited,
     Flow,
@@ -281,11 +281,8 @@ async def test_agent_failure_outranks_a_nonlinear_series(host_repo: Path) -> Non
 def test_patch_series_from_range(host_repo: Path) -> None:
     from waystation import PatchSeries
 
-    git(host_repo, "checkout", "-b", "feature")
-    (host_repo / "X").write_text("x\n", encoding="utf-8")
-    git(host_repo, "add", "X")
-    git(host_repo, "commit", "-m", "on feature")
-    base = git(host_repo, "rev-parse", "feature^")
+    base = git(host_repo, "rev-parse", "HEAD")
+    commit_on(host_repo, "feature", {"X": "x\n"}, message="on feature")
     series = PatchSeries.from_range(host_repo, base, "feature")
     assert series.commits == 1
     assert series.base_sha == base

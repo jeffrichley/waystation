@@ -7,16 +7,14 @@ import os
 import secrets
 import shutil
 import stat
-import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from waystation._git import run_git
 from waystation.errors import StageError
-from waystation.observability import GIT, log_argv
-from waystation.results import CommandFailed, Refused
-from waystation.tails import bound_tail
+from waystation.results import Refused
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,52 +42,29 @@ def remove_workspace(path: str | os.PathLike[str]) -> None:
     shutil.rmtree(path, onexc=_writable_and_retry)
 
 
-def _git(
-    repo: Path, *args: str, check: bool = True
-) -> subprocess.CompletedProcess[str]:
-    argv = ["git", "-C", str(repo), *args]
-    log_argv(GIT, argv)
-    result = subprocess.run(
-        argv,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if check and result.returncode != 0:
-        raise StageError(
-            "workspace",
-            CommandFailed(
-                argv=tuple(argv),
-                exit_code=result.returncode,
-                stderr_tail=bound_tail(result.stderr),
-            ),
-        )
-    return result
-
-
-def prepare_workspace(
+async def prepare_workspace(
     repo: Path | str,
     *,
     base: str = "HEAD",
     run_id: str | None = None,
 ) -> Workspace:
-    """Resolve ``base``, mint a run id, and clone committed state into a temp dir."""
+    """Resolve ``base``, mint a run id, and clone committed state into a temp dir.
+
+    Cancelling it — a workspace bound firing, say — kills the clone's git and
+    all it started, and removes the half-made workspace (ADR-0023, #57).
+    """
     host = Path(repo).resolve()
     if not host.exists():
         msg = f"host repo does not exist: {host}"
         raise FileNotFoundError(msg)
 
     rid = run_id if run_id is not None else secrets.token_hex(4)
-    base_sha = _git(host, "rev-parse", "--verify", base).stdout.strip()
+    resolved = await run_git(host, "rev-parse", "--verify", base, stage="workspace")
+    base_sha = resolved.stdout.strip()
 
-    name = _git(host, "config", "--get", "user.name", check=False)
-    email = _git(host, "config", "--get", "user.email", check=False)
-    if (
-        name.returncode != 0
-        or email.returncode != 0
-        or not name.stdout.strip()
-        or not email.stdout.strip()
-    ):
+    name = await _identity(host, "user.name")
+    email = await _identity(host, "user.email")
+    if not name or not email:
         raise StageError(
             "workspace",
             Refused(
@@ -100,37 +75,28 @@ def prepare_workspace(
 
     tmp = Path(tempfile.mkdtemp(prefix=f"waystation-{rid}-"))
     try:
-        clone_argv = [
-            "git",
+        await run_git(
+            host,
             "clone",
             "--local",
             "--no-checkout",
             str(host),
             str(tmp),
-        ]
-        log_argv(GIT, clone_argv)
-        clone = subprocess.run(
-            clone_argv,
-            check=False,
-            capture_output=True,
-            text=True,
+            stage="workspace",
         )
-        if clone.returncode != 0:
-            raise StageError(
-                "workspace",
-                CommandFailed(
-                    argv=tuple(clone_argv),
-                    exit_code=clone.returncode,
-                    stderr_tail=bound_tail(clone.stderr),
-                ),
-            )
         branch = f"waystation/{rid}"
-        _git(tmp, "checkout", "-B", branch, base_sha)
-        _git(tmp, "config", "user.name", name.stdout.strip())
-        _git(tmp, "config", "user.email", email.stdout.strip())
-    except Exception:
+        await run_git(tmp, "checkout", "-B", branch, base_sha, stage="workspace")
+        await run_git(tmp, "config", "user.name", name, stage="workspace")
+        await run_git(tmp, "config", "user.email", email, stage="workspace")
+    except BaseException:
         with contextlib.suppress(OSError):
             remove_workspace(tmp)
         raise
 
     return Workspace(path=tmp, run_id=rid, base_sha=base_sha, host_repo=host)
+
+
+async def _identity(host: Path, key: str) -> str:
+    """The host's ``key`` from git config, or ``""`` when it has none."""
+    shown = await run_git(host, "config", "--get", key, stage="workspace", check=False)
+    return shown.stdout.strip() if shown.returncode == 0 else ""

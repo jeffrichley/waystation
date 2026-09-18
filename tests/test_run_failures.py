@@ -155,7 +155,7 @@ async def test_base_exception_propagates_from_awaited_run(
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_run_agent_primitive_raises_stage_error(host_repo: Path) -> None:
-    ws = prepare_workspace(host_repo)
+    ws = await prepare_workspace(host_repo)
     try:
         backend = NoSandbox()
         agent = ScriptedAgent(outcome=None)
@@ -209,7 +209,7 @@ async def test_bad_base_ref_returns_command_failed(host_repo: Path) -> None:
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_capture_false_keeps_only_tails(host_repo: Path) -> None:
-    ws = prepare_workspace(host_repo)
+    ws = await prepare_workspace(host_repo)
     try:
         backend = NoSandbox()
         async with backend.start(ws, env={}, pass_env=()) as sandbox:

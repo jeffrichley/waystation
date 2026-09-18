@@ -21,6 +21,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0017](0017-nothing-bounded-or-trapped-by-default.md) Nothing is bounded or trapped by default | about to type a number for a timeout, retry or buffer, or deciding what a cancellation may interrupt |
 | [0024](0024-first-failure-wins.md) The first failure wins; later failures are logged | handling an error that arrives after the run already failed |
 | [0023](0023-cancelled-exec-kills-its-process-tree.md) A cancelled exec kills its process tree | touching cancellation, signals, or how a process is killed |
+| [0027](0027-host-git-is-killable-and-a-ref-swap-finishes.md) Host git is killable, and a ref swap, once started, finishes | running git on the host, or deciding what a bound may kill |
 
 ## Workspace, commits and integration
 

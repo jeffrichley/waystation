@@ -6,10 +6,11 @@ helper can be called from a fixture, a test body, or another helper.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -46,7 +47,9 @@ __all__ = [
     "init_host_repo",
     "lifecycle",
     "sh",
+    "stalling_ref_hook",
     "subjects",
+    "until",
     "workspaces",
 ]
 
@@ -128,6 +131,50 @@ def workspaces(temp: Path) -> list[Path]:
 def lifecycle(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     """The records of the lines a run logs per lifecycle event, in order."""
     return [r for r in caplog.records if r.name == "waystation.run"]
+
+
+async def until(ready: Callable[[], bool], task: asyncio.Task[Any]) -> None:
+    """Wait until ``ready()`` holds, failing at once if ``task`` ends first.
+
+    For a run that must reach a known point — a git stalled mid-stage — before
+    the test acts. It polls the file system, not a bound: the bounds under
+    test are driven by ``ManualClock``.
+    """
+    while not ready():
+        if task.done():
+            pytest.fail(f"the run ended first: {task.result()!r}")
+        await asyncio.sleep(0.02)
+
+
+def stalling_ref_hook(hooks: Path, started: Path, release: Path) -> Path:
+    """A ``reference-transaction`` hook in ``hooks``; returns the directory.
+
+    The first ref update git prepares touches ``started``, then waits for
+    ``release`` (20 s at most, so a failed test cannot hang CI): it runs inside
+    ``update-ref`` while git holds the ref's lock. Point a host at it with
+    ``git config core.hooksPath``.
+    """
+    hooks.mkdir()
+    hook = hooks / "reference-transaction"
+    started_at, release_at = started.as_posix(), release.as_posix()
+    hook.write_bytes(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                "cat > /dev/null",
+                f"if [ \"$1\" = prepared ] && [ ! -f '{started_at}' ]; then",
+                f"  : > '{started_at}'",
+                "  i=0",
+                f"  while [ ! -f '{release_at}' ] && [ $i -lt 400 ]; do",
+                "    sleep 0.05; i=$((i+1))",
+                "  done",
+                "fi",
+                "",
+            ]
+        ).encode()
+    )
+    hook.chmod(0o755)
+    return hooks
 
 
 def sh() -> str:

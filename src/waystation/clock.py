@@ -10,6 +10,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from waystation._cancellation import CommitPoints
+
 
 class Clock(Protocol):
     def monotonic(self) -> float: ...
@@ -82,10 +84,14 @@ def use_clock(clock: Clock) -> Iterator[Clock]:
 async def race_timeout[T](
     awaitable: asyncio.Future[T] | asyncio.Task[T],
     seconds: float | None,
+    *,
+    commits: CommitPoints | None = None,
 ) -> T:
     """Await ``awaitable``, cancelling it if ``seconds`` elapses on the active clock.
 
     ``seconds is None`` means unbounded. Raises ``TimeoutError`` on expiry.
+    With ``commits``, a bound that runs out waits for any commit point under
+    way first, and the work that finished meanwhile is its result (ADR-0027).
     """
     if seconds is None:
         return await awaitable
@@ -104,6 +110,10 @@ async def race_timeout[T](
         )
         if task in done:
             return task.result()
+        if commits is not None:
+            await commits.idle()
+            if task.done():
+                return task.result()
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task

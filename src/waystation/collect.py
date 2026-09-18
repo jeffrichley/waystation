@@ -29,12 +29,11 @@ class PatchSeries:
         return cls(base_sha=base_sha, patches=_split_format_patch(stdout))
 
     @classmethod
-    def from_range(cls, repo: Path | str, base: str, ref: str) -> PatchSeries:
+    async def from_range(cls, repo: Path | str, base: str, ref: str) -> PatchSeries:
         host = Path(repo)
-        base_sha = run_git(
-            host, "rev-parse", "--verify", base, stage="collect"
-        ).stdout.strip()
-        result = run_git(
+        verified = await run_git(host, "rev-parse", "--verify", base, stage="collect")
+        base_sha = verified.stdout.strip()
+        result = await run_git(
             host, "format-patch", "--stdout", f"{base_sha}..{ref}", stage="collect"
         )
         return cls.from_format_patch(base_sha, result.stdout)

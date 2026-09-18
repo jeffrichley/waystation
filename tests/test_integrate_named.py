@@ -111,7 +111,7 @@ async def test_integrate_primitive_from_range(host_repo: Path) -> None:
 
     base = git(host_repo, "rev-parse", "HEAD")
     commit_on(host_repo, "feature", {"f.txt": "f\n"})
-    series = PatchSeries.from_range(host_repo, base, "feature")
+    series = await PatchSeries.from_range(host_repo, base, "feature")
     report = await integrate(host_repo, series, Integration("agents/from-range"))
     assert report.target == "agents/from-range"
     assert len(report.landed) == 1
@@ -129,8 +129,8 @@ async def test_integrate_serializes_concurrent_lands(host_repo: Path) -> None:
 
     commit_on(host_repo, "side-a", {"a.txt": "a\n"})
     commit_on(host_repo, "side-b", {"b.txt": "b\n"})
-    series_a = PatchSeries.from_range(host_repo, base, "side-a")
-    series_b = PatchSeries.from_range(host_repo, base, "side-b")
+    series_a = await PatchSeries.from_range(host_repo, base, "side-a")
+    series_b = await PatchSeries.from_range(host_repo, base, "side-b")
 
     r1, r2 = await asyncio.gather(
         integrate(host_repo, series_a, Integration("agents/race")),

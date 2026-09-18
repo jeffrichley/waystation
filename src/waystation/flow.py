@@ -15,6 +15,7 @@ from typing import Any, Literal
 from pydantic import TypeAdapter
 from pydantic.json_schema import GenerateJsonSchema
 
+from waystation._cancellation import run_to_end, start_bounded
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
@@ -136,14 +137,7 @@ class _RunRecord:
 
     async def uninterrupted[T](self, stage: Stage, work: Awaitable[T]) -> T:
         """Await ``work`` to its end; a cancellation meanwhile is held, not lost."""
-        task = asyncio.ensure_future(work)
-        while True:
-            try:
-                return await asyncio.shield(task)
-            except asyncio.CancelledError as cancel:
-                if task.cancelled():
-                    raise  # the work itself was cancelled, not the run
-                self.hold(stage, cancel)
+        return await run_to_end(work, lambda cancel: self.hold(stage, cancel))
 
     def surface(self) -> None:
         """Raise the held cancellation, if any: the stage it waited on is done."""
@@ -433,9 +427,10 @@ class RunSpec[OutcomeT]:
         """
         clock = get_clock()
         t0 = clock.monotonic()
-        task: asyncio.Task[T] = asyncio.create_task(factory())
+        task, commits = start_bounded(factory())
+        bounded: Awaitable[T] = race_timeout(task, seconds, commits=commits)
         try:
-            return await record.uninterrupted(stage, race_timeout(task, seconds))
+            return await record.uninterrupted(stage, bounded)
         except TimeoutError as exc:
             elapsed = clock.monotonic() - t0
             assert seconds is not None
@@ -491,7 +486,7 @@ class RunSpec[OutcomeT]:
             workspace = await self._prepare(ctx, state, record)
             outcome = await self._in_sandbox(ctx, state, record, workspace)
             if record.failure is not None or record.held is not None:
-                self._preserve(record)
+                await self._preserve(record)
                 record.surface()  # before integrate starts: it never will
                 return record.failed()
             assert outcome is not None
@@ -533,8 +528,8 @@ class RunSpec[OutcomeT]:
         """Workspace stage: a private clone of the base, then ``workspace_ready``."""
 
         async def _workspace() -> Workspace:
-            return await asyncio.to_thread(
-                prepare_workspace, self.repo, base=self.base, run_id=record.run_id
+            return await prepare_workspace(
+                self.repo, base=self.base, run_id=record.run_id
             )
 
         with record.entering("workspace"):
@@ -680,7 +675,8 @@ class RunSpec[OutcomeT]:
         patches, strategy = record.patches, self.integration
         assert patches is not None
         if strategy is None:
-            self._preserve(record)
+            await self._preserve(record)
+            record.surface()  # held while the series was kept
             return (
                 record.failed() if record.failure else record.succeeded(outcome, None)
             )
@@ -702,7 +698,7 @@ class RunSpec[OutcomeT]:
         if record.failure is not None or report.conflict is not None:
             # Nothing landed, so the series is kept like any other that
             # reached no target (ADR-0005).
-            self._preserve(record)
+            await self._preserve(record)
         else:
             record.landed_on = report.target
         # The stage was atomic: a cancellation held meanwhile surfaces only
@@ -722,13 +718,19 @@ class RunSpec[OutcomeT]:
             return record.failed()
         return record.succeeded(outcome, report)
 
-    def _preserve(self, record: _RunRecord) -> None:
-        """Keep a series that reached no target on ``waystation/<run-id>``."""
+    async def _preserve(self, record: _RunRecord) -> None:
+        """Keep a series that reached no target on ``waystation/<run-id>``.
+
+        Unbounded and never interrupted: preservation is how a cancelled or
+        failed run loses nothing (ADR-0016, ADR-0017).
+        """
         if record.patches is None or record.patches.commits == 0:
             return
+        branch = f"waystation/{record.run_id}"
         try:
-            record.preserved = preserve_series(
-                self.repo, branch=f"waystation/{record.run_id}", series=record.patches
+            record.preserved = await record.uninterrupted(
+                "integrate",
+                preserve_series(self.repo, branch=branch, series=record.patches),
             )
         except Exception as exc:
             record.fail(_as_stage_error("integrate", exc))

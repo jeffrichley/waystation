@@ -15,9 +15,9 @@ from contextlib import suppress
 from pathlib import Path
 
 from waystation._cancellation import run_to_end
-from waystation.errors import StageError
+from waystation.errors import PreflightError, StageError
 from waystation.observability import GIT, log_argv
-from waystation.results import CommandFailed, Stage
+from waystation.results import CommandFailed, Errored, Stage
 from waystation.sandbox.processes import host_processes
 from waystation.tails import bound_tail
 
@@ -38,15 +38,18 @@ def encode(text: str) -> bytes:
 
 
 async def run_git(
-    repo: Path,
+    repo: Path | None,
     *args: str,
     stage: Stage,
     check: bool = True,
     env: Mapping[str, str] | None = None,
     stdin: bytes | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``git -C repo *args``; on failure (with ``check``) raise for ``stage``."""
-    argv = ["git", "-C", str(repo), *args]
+    """Run ``git -C repo *args``; on failure (with ``check``) raise for ``stage``.
+
+    ``repo=None`` runs git where the process is, for what needs no repo.
+    """
+    argv = ["git", *(("-C", str(repo)) if repo is not None else ()), *args]
     log_argv(GIT, argv)
     processes = host_processes()
     # A cancellation during the spawn waits for the tree to be adopted, so it
@@ -87,3 +90,30 @@ async def run_git(
             ),
         )
     return result
+
+
+# Landing replays each commit with `git merge-tree --merge-base`, which older
+# git lacks: the one host-version floor waystation has (ADR-0020).
+_OLDEST_GIT = (2, 40)
+
+
+async def require_host_git() -> None:
+    """Raise ``PreflightError``, saying how to fix it, unless host git is new enough."""
+    wanted = ".".join(map(str, _OLDEST_GIT))
+    try:
+        shown = await run_git(None, "--version", stage="workspace", check=False)
+    except FileNotFoundError as exc:
+        msg = f"git is not on PATH: install git {wanted} or newer"
+        raise PreflightError(msg, failure=Errored(exc)) from exc
+    raw = shown.stdout.strip()  # e.g. "git version 2.43.0.windows.1"
+    version = raw.removeprefix("git version ")
+    try:
+        found = tuple(int(part) for part in version.split(".")[:2])
+    except ValueError as exc:
+        msg = f"could not read the host git version from {raw!r}"
+        raise PreflightError(msg, failure=Errored(exc)) from exc
+    if found < _OLDEST_GIT:
+        raise PreflightError(
+            f"host git is {version}, but waystation needs {wanted} or newer: "
+            f"upgrade git (landing uses `git merge-tree --merge-base`)"
+        )

@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 from pydantic.json_schema import GenerateJsonSchema
 
 from waystation._cancellation import run_to_end, start_bounded
+from waystation._git import require_host_git
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
@@ -87,6 +88,18 @@ def _log_unreported(run_id: str, err: StageError, why: str) -> None:
 def _log_later_failure(run_id: str, err: StageError) -> None:
     """Log a failure met after the run already failed; never report it (ADR-0024)."""
     _log_unreported(run_id, err, "after the run had already failed")
+
+
+@contextlib.contextmanager
+def _preflighting(checked: object) -> Iterator[None]:
+    """Pass a ``PreflightError`` on; make any other failure one naming ``checked``."""
+    try:
+        yield
+    except PreflightError:
+        raise
+    except Exception as exc:
+        msg = f"{type(checked).__name__} preflight failed: {exc!r}"
+        raise PreflightError(msg, failure=Errored(exception=exc)) from exc
 
 
 def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
@@ -446,6 +459,9 @@ class RunSpec[OutcomeT]:
         ctx = RunContext(state)
         record = _RunRecord(run_id=state.run_id, log=RunLog(state.run_id, state.name))
         with bind_run(state.run_id, state.name):
+            # Bound, so what preflight logs carries the id, but a run that
+            # fails it never began: no hook fires and no workspace is made.
+            await self._preflight()
             record.log.on_run_start(ctx)
             try:
                 result = await self._lifecycle(ctx, state, record)
@@ -482,7 +498,6 @@ class RunSpec[OutcomeT]:
             await self.hook_registry.fire("run_start", "workspace", ctx)
             if prompt_error is not None:
                 raise prompt_error
-            await self._preflight()
             workspace = await self._prepare(ctx, state, record)
             outcome = await self._in_sandbox(ctx, state, record, workspace)
             if record.failure is not None or record.held is not None:
@@ -491,9 +506,6 @@ class RunSpec[OutcomeT]:
                 return record.failed()
             assert outcome is not None
             return await self._land(ctx, record, outcome)
-        except PreflightError as err:
-            failure = err.failure if err.failure is not None else Errored(err)
-            record.fail(StageError(record.stage, failure))
         except Exception as exc:
             record.fail(_as_stage_error(record.stage, exc))
         record.surface()  # a failure never hides a cancellation held meanwhile
@@ -514,13 +526,22 @@ class RunSpec[OutcomeT]:
             raise StageError("agent", Errored(exception=exc)) from exc
 
     async def _preflight(self) -> None:
-        try:
+        """Check the agent, sandbox spec, prompt file and host git, repairing nothing.
+
+        A lone awaited run preflights itself the way fan-out preflights a
+        batch: any problem raises ``PreflightError`` before the run begins
+        (#30, ADR-0016). Nothing is installed, built or pulled (ADR-0011).
+        """
+        with _preflighting(self.agent):
             self.agent.preflight()
+        with _preflighting(self.sandbox):
             await self.sandbox.preflight()
-        except PreflightError:
-            raise
-        except Exception as exc:
-            raise PreflightError(str(exc), failure=Errored(exception=exc)) from exc
+        if isinstance(self.prompt, Path) and not self.prompt.is_file():
+            raise PreflightError(
+                f"prompt file not found: {self.prompt} — pass a path to an "
+                "existing file, or the prompt itself as a str"
+            )
+        await require_host_git()
 
     async def _prepare(
         self, ctx: RunContext, state: RunState, record: _RunRecord

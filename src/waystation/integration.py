@@ -143,11 +143,11 @@ class Integration:
     def _integrate_sync(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
         ref = f"refs/heads/{self.target}"
         base = series.base_sha
-        exists = _ref_exists(repo, ref)
-        target_before = repo.git("rev-parse", self.target) if exists else base
+        current = _read_ref(repo, ref)
+        target_before = current if current is not None else base
 
         if not series.patches:
-            return self._report(target_before, target_before if exists else None)
+            return self._report(target_before, current)
         holder = _worktree_holding(repo, ref)
         if holder is not None:
             # update-ref would move the branch out from under that checkout,
@@ -174,19 +174,21 @@ class Integration:
             return self._report(target_before, None, conflict=landing)
         tip, landed = landing
 
-        old = target_before if exists else _ZERO
         try:
-            repo.git("update-ref", ref, tip, old)
+            # Compare-and-swap: only moves the target if it is still `current`.
+            repo.git("update-ref", ref, tip, current or _ZERO)
         except StageError as exc:
-            if isinstance(exc.failure, CommandFailed):
-                raise StageError(
-                    "integrate",
-                    Refused(
-                        reason="target_moved",
-                        detail=f"{self.target} moved during integrate",
-                    ),
-                ) from exc
-            raise
+            # A refusal is only ours to give if we saw the target move; any
+            # other failed swap is git's, reported as it came (ADR-0016).
+            if _read_ref(repo, ref) == current:
+                raise
+            raise StageError(
+                "integrate",
+                Refused(
+                    reason="target_moved",
+                    detail=f"{self.target} moved while the series was landing",
+                ),
+            ) from exc
         return self._report(target_before, tip, landed)
 
     def _report(
@@ -208,17 +210,21 @@ class Integration:
         )
 
 
-def _ref_exists(repo: GitRepo, ref: str) -> bool:
+def _read_ref(repo: GitRepo, ref: str) -> str | None:
+    """The commit ``ref`` points at, or ``None`` if there is no such ref.
+
+    Always a full ref name: resolving a bare one lets a tag of the same name win.
+    """
     shown = run_git(
         repo.path,
-        "show-ref",
+        "rev-parse",
         "--verify",
         "--quiet",
         ref,
         stage="integrate",
         check=False,
     )
-    return shown.returncode == 0
+    return shown.stdout.strip() if shown.returncode == 0 else None
 
 
 def _worktree_holding(repo: GitRepo, ref: str) -> str | None:

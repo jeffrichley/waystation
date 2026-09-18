@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
 from helpers import a_run, git
 from waystation import (
+    CommandFailed,
+    Integration,
+    PatchSeries,
     Refused,
     RunConflicted,
     RunFailed,
@@ -17,7 +21,13 @@ from waystation import (
     ScriptedCommit,
     Summary,
 )
-from waystation.integration import Conflict, FailedPatch
+from waystation.integration import (
+    Conflict,
+    FailedPatch,
+    GitRepo,
+    IntegrationReport,
+    IntegrationStrategy,
+)
 
 pytestmark = pytest.mark.git
 
@@ -205,3 +215,77 @@ async def test_a_target_checked_out_in_another_worktree_is_refused(
 
     assert_refused(result, "target_checked_out", host_repo)
     assert git(host_repo, "rev-parse", TARGET) == tip
+
+
+@dataclass(frozen=True)
+class MovesOnSwap(GitRepo):
+    """A host whose target gains an outside commit just before the swap."""
+
+    moved: list[str] = field(default_factory=list)
+
+    def git(self, *args: str, env: Mapping[str, str] | None = None) -> str:
+        if args[:1] == ("update-ref",) and not self.moved:
+            outside = git(
+                self.path, "commit-tree", f"{TARGET}^{{tree}}", "-p", TARGET, "-m", "x"
+            )
+            git(self.path, "update-ref", f"refs/heads/{TARGET}", outside)
+            self.moved.append(outside)
+        return super().git(*args, env=env)
+
+
+@dataclass(frozen=True)
+class Raced:
+    """Wraps a strategy, handing it a host that moves the target mid-landing."""
+
+    inner: IntegrationStrategy
+    repo: list[MovesOnSwap] = field(default_factory=list)
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        self.repo.append(MovesOnSwap(repo.path, repo.common_dir))
+        return await self.inner.integrate(self.repo[0], series)
+
+
+async def test_a_target_moved_before_the_swap_is_refused_and_stays_moved(
+    host_repo: Path,
+) -> None:
+    git(host_repo, "branch", TARGET)
+    raced = Raced(Integration(TARGET))
+
+    result = await a_run(host_repo).integrate(raced)
+
+    assert_refused(result, "target_moved", host_repo)
+    (outside,) = raced.repo[0].moved
+    assert git(host_repo, "rev-parse", TARGET) == outside, "their commit stands"
+
+
+async def test_a_swap_that_fails_with_the_target_unmoved_is_not_target_moved(
+    host_repo: Path,
+) -> None:
+    git(host_repo, "branch", TARGET)
+    tip = git(host_repo, "rev-parse", TARGET)
+    # Another git process holds the ref's lock: the swap fails, nothing moved.
+    (host_repo / ".git" / "refs" / "heads" / f"{TARGET}.lock").write_bytes(b"")
+
+    result = await a_run(host_repo).integrate(TARGET)
+
+    assert isinstance(result, RunFailed)
+    assert result.stage == "integrate"
+    assert isinstance(result.failure, CommandFailed)
+    assert result.preserved == f"waystation/{result.run_id}"
+    assert git(host_repo, "rev-parse", TARGET) == tip
+
+
+async def test_a_tag_named_like_the_target_does_not_stand_in_for_it(
+    host_repo: Path,
+) -> None:
+    git(host_repo, "branch", TARGET)
+    commit_on(host_repo, "elsewhere", {"other.txt": "other\n"})
+    git(host_repo, "tag", TARGET, "elsewhere")
+    tip = git(host_repo, "rev-parse", f"refs/heads/{TARGET}")
+
+    result = await a_run(host_repo).integrate(TARGET)
+
+    assert isinstance(result, RunSucceeded)
+    assert result.report is not None
+    assert result.report.target_before == tip
+    assert git(host_repo, "rev-parse", f"refs/heads/{TARGET}^") == tip

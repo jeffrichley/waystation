@@ -18,7 +18,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | ADR | Read it when you're… |
 | --- | --- |
 | [0016](0016-runs-return-primitives-raise.md) Runs return typed failures; primitives raise | adding a failure kind, or deciding whether to raise |
-| [0017](0017-nothing-bounded-or-trapped-by-default.md) Nothing is bounded or trapped by default | about to type a number for a timeout, retry or buffer |
+| [0017](0017-nothing-bounded-or-trapped-by-default.md) Nothing is bounded or trapped by default | about to type a number for a timeout, retry or buffer, or deciding what a cancellation may interrupt |
 | [0024](0024-first-failure-wins.md) The first failure wins; later failures are logged | handling an error that arrives after the run already failed |
 | [0023](0023-cancelled-exec-kills-its-process-tree.md) A cancelled exec kills its process tree | touching cancellation, signals, or how a process is killed |
 

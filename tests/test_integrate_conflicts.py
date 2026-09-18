@@ -197,6 +197,22 @@ async def test_a_target_checked_out_in_the_main_worktree_is_refused(
     assert git(host_repo, "status", "--porcelain") == ""
 
 
+async def test_a_checked_out_target_is_refused_even_when_nothing_would_land(
+    host_repo: Path,
+) -> None:
+    # The target is a setup mistake whatever the agent did, as `git branch -f`
+    # refuses a no-op; a batch shouldn't pass or fail on who happened to commit.
+    home = git(host_repo, "symbolic-ref", "--short", "HEAD")
+
+    result = await a_run(host_repo, commits=()).integrate(home)
+
+    assert isinstance(result, RunFailed)
+    assert result.stage == "integrate"
+    assert isinstance(result.failure, Refused)
+    assert result.failure.reason == "target_checked_out"
+    assert result.preserved is None, "an empty series has nothing to keep"
+
+
 async def test_a_target_checked_out_in_another_worktree_is_refused(
     host_repo: Path, tmp_path: Path
 ) -> None:

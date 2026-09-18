@@ -146,12 +146,12 @@ class Integration:
         current = _read_ref(repo, ref)
         target_before = current if current is not None else base
 
-        if not series.patches:
-            return self._report(target_before, current)
         holder = _worktree_holding(repo, ref)
         if holder is not None:
             # update-ref would move the branch out from under that checkout,
             # leaving its index and files describing the old tip (ADR-0020).
+            # Refused even when nothing would land, as `git branch -f` refuses
+            # a no-op: the target is wrong whatever this series holds.
             raise StageError(
                 "integrate",
                 Refused(
@@ -159,6 +159,8 @@ class Integration:
                     detail=f"{self.target} is checked out in {holder}",
                 ),
             )
+        if not series.patches:
+            return self._report(target_before, current)
 
         commits = _materialize_at_base(repo, series)
         # One attempt with the configured mechanism: an apply that conflicts

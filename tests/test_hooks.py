@@ -629,6 +629,35 @@ def test_a_bundle_without_hook_methods_is_rejected(host_repo: Path) -> None:
 
 
 @pytest.mark.git
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+async def test_an_output_line_of_any_length_reaches_on_agent_output_intact(
+    host_repo: Path, stream: str
+) -> None:
+    # One JSON event from `claude -p --output-format stream-json` carrying a
+    # large tool result is one line, well past asyncio's 64 KiB line limit.
+    size = 200_000
+    redirect = " >&2" if stream == "stderr" else ""
+    seen: list[AgentLine] = []
+
+    def record(ctx: RunContext, line: AgentLine) -> None:
+        seen.append(line)
+
+    flow = Flow(
+        host_repo,
+        agent=ShellAgent(
+            f"{{ head -c {size} /dev/zero | tr '\\0' x; echo; }}{redirect}; "
+            f"echo '{OK_OUTCOME_LINE}'"
+        ),
+        sandbox=NoSandbox(),
+    )
+
+    result = await flow.run("long line", outcome=Answer).on_agent_output(record)
+
+    assert isinstance(result, RunSucceeded)
+    assert "x" * size in [line.raw for line in seen if line.stream == stream]
+
+
+@pytest.mark.git
 @pytest.mark.asyncio
 async def test_agent_output_hooks_never_overlap_across_streams(
     host_repo: Path,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import logging
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -77,18 +76,6 @@ def test_redact_argv_keeps_ordinary_git_arguments() -> None:
         "fix: a thing",
     )
     assert redact_argv(argv) == argv
-
-
-@pytest.fixture
-def clean_logging() -> Iterator[None]:
-    """Restore the ``waystation`` logger after a test opts into a console."""
-    logger = logging.getLogger("waystation")
-    handlers, level = list(logger.handlers), logger.level
-    try:
-        yield
-    finally:
-        logger.handlers[:] = handlers
-        logger.setLevel(level)
 
 
 def test_configure_logging_installs_exactly_one_stderr_handler(

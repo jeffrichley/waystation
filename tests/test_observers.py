@@ -2,25 +2,29 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 from pathlib import Path
 from typing import Any
 
 import pytest
+from rich.console import Console
 
 from helpers import OK_OUTCOME, OK_OUTCOME_LINE, PROMPT, ShellAgent, a_run
 from waystation import (
     Errored,
+    EventLog,
     Flow,
     NoSandbox,
     RunFailed,
+    RunLogFiles,
     RunSucceeded,
     ScriptedAgent,
+    configure_logging,
 )
 from waystation.agents import AgentLine
 from waystation.hooks import RunContext, RunState
-from waystation.observers import EventLog, RunLogFiles
 
 
 @pytest.mark.git
@@ -251,3 +255,54 @@ async def test_a_broken_observer_logs_at_error_and_leaves_the_run_alone(
     errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
     assert any("RunLogFiles" in message for message in errors)
     assert any("EventLog" in message for message in errors)
+
+
+@pytest.mark.git
+async def test_a_run_file_does_not_turn_the_console_up(
+    host_repo: Path, tmp_path: Path, clean_logging: None
+) -> None:
+    """The file wants DEBUG; the console keeps the level the script asked for."""
+    console = io.StringIO()
+    configure_logging("INFO", console=Console(file=console, width=200))
+
+    result = await a_run(host_repo).hooks(RunLogFiles(tmp_path / "logs"))
+
+    assert isinstance(result, RunSucceeded)
+    printed = console.getvalue()
+    assert "DEBUG" not in printed, "attaching a run file must not reconfigure stderr"
+    assert "workspace ready" in printed, "INFO still reaches the console"
+    in_file = (tmp_path / "logs" / f"{result.run_id}.log").read_text(encoding="utf-8")
+    assert "DEBUG" in in_file, "the file still gets everything"
+
+
+@pytest.mark.git
+async def test_a_logger_the_script_tuned_still_reaches_the_console(
+    host_repo: Path, clean_logging: None
+) -> None:
+    """Per-logger tuning is plain stdlib and the console filter must respect it."""
+    console = io.StringIO()
+    configure_logging("INFO", console=Console(file=console, width=200))
+    logging.getLogger("waystation.agent.output").setLevel(logging.DEBUG)
+
+    result = await a_run(host_repo)
+
+    assert isinstance(result, RunSucceeded)
+    assert "working" in console.getvalue()
+
+
+@pytest.mark.git
+async def test_a_run_that_cannot_read_its_prompt_still_starts(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    """A run never ends without starting: every event log has a first line."""
+    missing = tmp_path / "gone.md"
+    missing.write_text("here for now", encoding="utf-8")
+    events = tmp_path / "events.jsonl"
+    spec = a_run(host_repo, missing).hooks(EventLog(events))
+    missing.unlink()
+
+    result = await spec
+
+    assert isinstance(result, RunFailed)
+    assert result.stage == "agent", "reading the prompt is still the agent's business"
+    assert [event["event"] for event in events_in(events)] == ["run_start", "run_end"]

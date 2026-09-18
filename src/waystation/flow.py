@@ -406,8 +406,16 @@ class RunSpec[OutcomeT]:
     ) -> RunSucceeded[OutcomeT] | RunFailed:
         """Run the stages in order; each phase below owns its own stages."""
         try:
-            state.prompt = self._prompt_text()
+            # run_start fires for every run, so a prompt file that cannot be
+            # read waits its turn: the run started, and then it failed.
+            prompt_error: StageError | None = None
+            try:
+                state.prompt = self._prompt_text()
+            except StageError as err:
+                prompt_error = err
             await self.hook_registry.fire("run_start", "workspace", ctx)
+            if prompt_error is not None:
+                raise prompt_error
             await self._preflight()
             workspace = await self._prepare(ctx, state, record)
             outcome = await self._in_sandbox(ctx, state, record, workspace)

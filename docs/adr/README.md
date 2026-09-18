@@ -57,6 +57,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0008](0008-hooks-snapshot-observer.md) Hooks are an Observer with snapshot binding | adding a hook point, or changing when hooks bind |
 | [0001](0001-observability-as-hook-bundles.md) Observability is opt-in and ships as hook bundles | adding logging, a dashboard, or any way to watch a run |
 | [0025](0025-credentials-are-elided-in-the-value-not-at-the-call-site.md) Credentials are elided inside the value | logging a command line, or touching redaction |
+| [0026](0026-built-in-observers-guard-themselves-and-hold-the-level.md) A built-in observer guards itself, and a run file holds the level | adding a shipped observer, or changing what the console prints |
 | [0007](0007-fan-out-yields-never-raises.md) Fan-out yields typed results and never raises | touching fan-out or how a batch reports |
 
 ## Adding one

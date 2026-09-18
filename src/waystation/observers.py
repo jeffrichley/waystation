@@ -19,12 +19,12 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Concatenate, TextIO, cast, override
+from typing import Any, Concatenate, NamedTuple, cast, override
 
 from pydantic_core import to_jsonable_python
 
 from waystation.agents.protocol import AgentLine
-from waystation.hooks import HookBundle, RunContext
+from waystation.hooks import HookBundle, HookName, RunContext
 from waystation.observability import AGENT_OUTPUT, PACKAGE, RUN, tag, tagged_logger
 from waystation.results import (
     AgentExit,
@@ -117,12 +117,14 @@ class RunLog(HookBundle):
         )
 
 
-class _RunFile:
-    """One run's log file. Every write is flushed, so a tail sees it at once.
+class _FlushingFile:
+    """An append-only text file whose every line is flushed as it lands.
 
-    The handler emits from whichever thread logged — ``prepare_workspace``
-    runs in one — while agent lines arrive on the event loop, so both go
-    through the same lock and no line lands inside another.
+    Both observers want the same thing: a reader — ``tail -f``, or an analysis
+    script watching a fan-out — should see a line the moment it happens, not
+    when the run ends. Writes come from whichever thread logged, since
+    ``prepare_workspace`` runs in one while agent lines arrive on the event
+    loop, so they go through a lock and no line lands inside another.
     """
 
     __slots__ = ("_handle", "_lock", "path")
@@ -143,10 +145,17 @@ class _RunFile:
             self._handle.close()
 
 
+class _OpenRunFile(NamedTuple):
+    """A run's file and the handler feeding it; they open and close together."""
+
+    file: _FlushingFile
+    handler: _RunFileHandler
+
+
 class _RunFileHandler(logging.Handler):
     """Routes one run's records into its file, leaving other runs alone."""
 
-    def __init__(self, run_id: str, file: _RunFile) -> None:
+    def __init__(self, run_id: str, file: _FlushingFile) -> None:
         super().__init__(logging.DEBUG)
         self._run_id = run_id
         self._file = file
@@ -169,7 +178,9 @@ class _DebugWhileWatched:
 
     A run file wants every record, but a record the logger never created can't
     be handled — and without ``configure_logging`` the hierarchy sits at the
-    root's WARNING. The level is restored once the last run lets go.
+    root's WARNING. The level is restored once the last run lets go, and the
+    console filters on its own remembered level so this never changes what a
+    terminal shows (ADR-0026).
     """
 
     def __init__(self) -> None:
@@ -190,17 +201,21 @@ class _DebugWhileWatched:
         with self._lock:
             self._watchers -= 1
             if self._watchers == 0 and self._restore is not None:
-                logging.getLogger(PACKAGE).setLevel(self._restore)
+                root = logging.getLogger(PACKAGE)
+                # Only give back what we took: a configure_logging call during
+                # the window is the script's decision and outranks ours.
+                if root.level == logging.DEBUG:
+                    root.setLevel(self._restore)
                 self._restore = None
 
 
 _DEBUG_WHILE_WATCHED = _DebugWhileWatched()
 
 
-def safely[**P](
+def _safely[**P](
     method: Callable[Concatenate[Any, P], None],
 ) -> Callable[Concatenate[Any, P], None]:
-    """Let a built-in observer fail without failing the run (ADR-0001).
+    """Let a built-in observer fail without failing the run (ADR-0026).
 
     Observability that can break the work is worse than none: a full disk or
     an unwritable directory costs a log line, never an agent's commits.
@@ -237,20 +252,20 @@ class RunLogFiles(HookBundle):
 
     def __init__(self, directory: Path | str) -> None:
         self.directory = Path(directory)
-        self._open: dict[str, tuple[_RunFile, _RunFileHandler]] = {}
+        self._open: dict[str, _OpenRunFile] = {}
 
     @override
-    @safely
+    @_safely
     def on_run_start(self, ctx: RunContext) -> None:
         stem = f"{ctx.name}-{ctx.run_id}" if ctx.name else ctx.run_id
-        file = _RunFile(self.directory / f"{stem}.log")
+        file = _FlushingFile(self.directory / f"{stem}.log")
         handler = _RunFileHandler(ctx.run_id, file)
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)-7s %(message)s")
         )
         # Recorded before the level is held, so on_run_end always finds the
         # entry and always gives the level back.
-        self._open[ctx.run_id] = (file, handler)
+        self._open[ctx.run_id] = _OpenRunFile(file, handler)
         _DEBUG_WHILE_WATCHED.acquire()
         logging.getLogger(PACKAGE).addHandler(handler)
         file.write(f"=== run {ctx.run_id} on {ctx.repo} ===")
@@ -260,23 +275,23 @@ class RunLogFiles(HookBundle):
         ctx.log.info("run log: %s", file.path)
 
     @override
-    @safely
+    @_safely
     def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
-        entry = self._open.get(ctx.run_id)
-        if entry is None:
+        open_file = self._open.get(ctx.run_id)
+        if open_file is None:
             return
         prefix = "[stderr] " if line.stream == "stderr" else ""
-        entry[0].write(f"{prefix}{line.raw}")
+        open_file.file.write(f"{prefix}{line.raw}")
 
     @override
-    @safely
+    @_safely
     def on_run_end(
         self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
     ) -> None:
-        entry = self._open.pop(ctx.run_id, None)
-        if entry is None:
+        open_file = self._open.pop(ctx.run_id, None)
+        if open_file is None:
             return
-        file, handler = entry
+        file, handler = open_file
         try:
             file.write(_footer(result))
         finally:
@@ -316,44 +331,44 @@ class EventLog(HookBundle):
         self.path = Path(path)
         self.include_output = include_output
         self._lock = threading.Lock()
-        self._handle: TextIO | None = None
+        self._file: _FlushingFile | None = None
 
     @override
-    @safely
+    @_safely
     def on_run_start(self, ctx: RunContext) -> None:
         self._write(
             "run_start", ctx, {"repo": str(ctx.repo), "prompt_chars": len(ctx.prompt)}
         )
 
     @override
-    @safely
+    @_safely
     def on_workspace_ready(self, ctx: RunContext) -> None:
         self._write("workspace_ready", ctx, {"base_sha": ctx.base_sha})
 
     @override
-    @safely
+    @_safely
     def on_sandbox_ready(self, ctx: RunContext) -> None:
         self._write("sandbox_ready", ctx)
 
     @override
-    @safely
+    @_safely
     def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
         if not self.include_output:
             return
         self._write("agent_output", ctx, {"stream": line.stream, "raw": line.raw})
 
     @override
-    @safely
+    @_safely
     def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> None:
         self._write("agent_end", ctx, _fields(exit))
 
     @override
-    @safely
+    @_safely
     def on_integrated(self, ctx: RunContext, report: IntegrationReport) -> None:
         self._write("integrated", ctx, _fields(report))
 
     @override
-    @safely
+    @_safely
     def on_run_end(
         self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
     ) -> None:
@@ -365,7 +380,10 @@ class EventLog(HookBundle):
         self._write("run_end", ctx, fields)
 
     def _write(
-        self, event: str, ctx: RunContext, fields: Mapping[str, Any] | None = None
+        self,
+        event: HookName,
+        ctx: RunContext,
+        fields: Mapping[str, Any] | None = None,
     ) -> None:
         line: dict[str, Any] = {
             "ts": datetime.now(UTC).isoformat(),
@@ -377,11 +395,28 @@ class EventLog(HookBundle):
             # The envelope is the authority on which run this is.
             line.setdefault(key, value)
         with self._lock:
-            if self._handle is None:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                self._handle = self.path.open("a", encoding="utf-8")
-            self._handle.write(json.dumps(line, default=repr) + "\n")
-            self._handle.flush()
+            # Opened on the first event rather than at construction, so an
+            # unwritable path costs a logged ERROR inside a guarded hook
+            # instead of raising while a flow script is still being built.
+            if self._file is None:
+                self._file = _FlushingFile(self.path)
+            self._file.write(json.dumps(line, default=repr))
+
+    def close(self) -> None:
+        """Release the file. A flow has no end event, so a script that wants
+        the handle back scopes the log itself: ``with EventLog(path) as log:``.
+        Every line is already flushed, so nothing is lost without this.
+        """
+        with self._lock:
+            if self._file is not None:
+                self._file.close()
+                self._file = None
+
+    def __enter__(self) -> EventLog:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 def _fields(value: object) -> dict[str, Any]:

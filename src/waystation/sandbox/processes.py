@@ -2,9 +2,10 @@
 
 Which environment a process needs to start, how to start it, and how to kill
 it with everything it spawned (ADR-0023) all differ by operating system, so
-each way is one strategy that ``NoSandbox`` takes by injection. The host's own
-strategy is the default, and ``host_processes`` is the only place that chooses
-by platform; the guards inside each strategy only refuse the wrong one.
+each way is one strategy that ``NoSandbox`` takes by injection, and host git
+runs through the host's own (ADR-0027). The host's own strategy is the
+default, and ``host_processes`` is the only place that chooses by platform;
+the guards inside each strategy only refuse the wrong one.
 
 Signals (``handle_signals``) and the Docker transport default (ADR-0012) are
 OS-specific too, but they belong to their own consumers, not here.

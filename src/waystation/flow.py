@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import secrets
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -15,6 +15,7 @@ from typing import Any, Literal
 from pydantic import TypeAdapter
 from pydantic.json_schema import GenerateJsonSchema
 
+from waystation._cancellation import run_to_end, start_bounded
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
@@ -40,7 +41,9 @@ from waystation.results import (
     Errored,
     IntegrationReport,
     Refused,
+    RunConflicted,
     RunFailed,
+    RunResult,
     RunSucceeded,
     Series,
     Stage,
@@ -68,16 +71,22 @@ def _assert_object_outcome(outcome_type: type[Any]) -> None:
         raise TypeError(msg)
 
 
-def _log_later_failure(run_id: str, err: StageError) -> None:
-    """Log a failure met after the run already failed; never report it (ADR-0024)."""
+def _log_unreported(run_id: str, err: StageError, why: str) -> None:
+    """Log a failure no result will carry, saying ``why`` it goes unreported."""
     exception = getattr(err.failure, "exception", None)
     logger.error(
-        "run %s: %s failed after the run had already failed: %r",
+        "run %s: %s failed %s: %r",
         run_id,
         err.stage,
+        why,
         err.failure,
         exc_info=exception,
     )
+
+
+def _log_later_failure(run_id: str, err: StageError) -> None:
+    """Log a failure met after the run already failed; never report it (ADR-0024)."""
+    _log_unreported(run_id, err, "after the run had already failed")
 
 
 def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
@@ -97,7 +106,10 @@ class _RunRecord:
     series: Series | None = None
     patches: PatchSeries | None = None
     preserved: str | None = None
+    landed_on: str | None = None
     failure: StageError | None = None
+    # A cancellation held until the stage it arrived during has done its work.
+    held: tuple[Stage, asyncio.CancelledError] | None = None
 
     @contextlib.contextmanager
     def entering(self, stage: Stage) -> Iterator[None]:
@@ -118,6 +130,27 @@ class _RunRecord:
         if err.agent is not None:
             self.agent = err.agent
 
+    def hold(self, stage: Stage, cancel: asyncio.CancelledError) -> None:
+        """Keep the first cancellation until ``surface`` lets it go (ADR-0017)."""
+        if self.held is None:
+            self.held = (stage, cancel)
+
+    async def uninterrupted[T](self, stage: Stage, work: Awaitable[T]) -> T:
+        """Await ``work`` to its end; a cancellation meanwhile is held, not lost."""
+        return await run_to_end(work, lambda cancel: self.hold(stage, cancel))
+
+    def surface(self) -> None:
+        """Raise the held cancellation, if any: the stage it waited on is done."""
+        if self.held is not None:
+            raise self.held[1]
+
+    def log_cancelled(self) -> None:
+        """Say where a cancelled run's series went: no ``run_end`` will."""
+        if self.failure is not None:
+            _log_unreported(self.run_id, self.failure, "in a run that was cancelled")
+        stage = self.held[0] if self.held is not None else self.stage
+        self.log.cancelled(stage, kept_on=self.preserved, landed_on=self.landed_on)
+
     def failed(self) -> RunFailed:
         assert self.failure is not None
         return RunFailed(
@@ -136,6 +169,21 @@ class _RunRecord:
         self, outcome: OutcomeT, report: IntegrationReport | None
     ) -> RunSucceeded[OutcomeT]:
         return RunSucceeded(
+            run_id=self.run_id,
+            name=None,
+            base_sha=self.base_sha,
+            elapsed=dict(self.elapsed),
+            agent=self.agent,
+            series=self.series,
+            preserved=self.preserved,
+            outcome=outcome,
+            report=report,
+        )
+
+    def conflicted[OutcomeT](
+        self, outcome: OutcomeT, report: IntegrationReport
+    ) -> RunConflicted[OutcomeT]:
+        return RunConflicted(
             run_id=self.run_id,
             name=None,
             base_sha=self.base_sha,
@@ -215,9 +263,7 @@ class Flow:
         """
         return self._register("integrated", fn)
 
-    def on_run_end[F: Callable[[RunContext, RunSucceeded[Any] | RunFailed], object]](
-        self, fn: F
-    ) -> F:
+    def on_run_end[F: Callable[[RunContext, RunResult[Any]], object]](self, fn: F) -> F:
         """Fire ``fn(ctx, result)`` for every result a run returns.
 
         Returns ``fn``; runs built afterwards get it.
@@ -345,7 +391,11 @@ class RunSpec[OutcomeT]:
         return self._with_hook("integrated", fn)
 
     def on_run_end(
-        self, fn: Callable[[RunContext, RunSucceeded[OutcomeT] | RunFailed], object]
+        self,
+        fn: Callable[
+            [RunContext, RunResult[OutcomeT]],
+            object,
+        ],
     ) -> RunSpec[OutcomeT]:
         """Fire ``fn(ctx, result)`` for every result a run returns.
 
@@ -363,17 +413,24 @@ class RunSpec[OutcomeT]:
 
     async def _bounded[T](
         self,
+        record: _RunRecord,
         stage: Stage,
         bound: str,
         seconds: float | None,
         factory: Any,
     ) -> T:
-        """Run an awaitable factory under a stage bound; raise StageError on expiry."""
+        """Run a stage's own work under its bound; raise StageError on expiry.
+
+        Cancelling the run never interrupts this work — a half-cloned
+        workspace, half-cut series or half-moved target would outlive it — so
+        the cancellation is held on ``record`` until the work ends (ADR-0017).
+        """
         clock = get_clock()
         t0 = clock.monotonic()
-        task: asyncio.Task[T] = asyncio.create_task(factory())
+        task, commits = start_bounded(factory())
+        bounded: Awaitable[T] = race_timeout(task, seconds, commits=commits)
         try:
-            return await race_timeout(task, seconds)
+            return await record.uninterrupted(stage, bounded)
         except TimeoutError as exc:
             elapsed = clock.monotonic() - t0
             assert seconds is not None
@@ -382,28 +439,37 @@ class RunSpec[OutcomeT]:
                 TimedOut(bound=bound, limit=seconds, elapsed=elapsed),
             ) from exc
 
-    async def _execute(self) -> RunSucceeded[OutcomeT] | RunFailed:
+    async def _execute(
+        self,
+    ) -> RunResult[OutcomeT]:
         state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
         ctx = RunContext(state)
         record = _RunRecord(run_id=state.run_id, log=RunLog(state.run_id, state.name))
         with bind_run(state.run_id, state.name):
             record.log.on_run_start(ctx)
-            result = await self._lifecycle(ctx, state, record)
-            end_stage = result.stage if isinstance(result, RunFailed) else record.stage
             try:
-                # Every run_end hook sees the result, even after one raises.
-                await self.hook_registry.fire(
-                    "run_end", end_stage, ctx, result, stop_on_raise=False
+                result = await self._lifecycle(ctx, state, record)
+                end_stage = (
+                    result.stage if isinstance(result, RunFailed) else record.stage
                 )
-            except StageError as err:
-                record.fail(err)
-                result = record.failed()
+                try:
+                    # Every run_end hook sees the result, even after one raises.
+                    await self.hook_registry.fire(
+                        "run_end", end_stage, ctx, result, stop_on_raise=False
+                    )
+                except StageError as err:
+                    record.fail(err)
+                    result = record.failed()
+            except asyncio.CancelledError:
+                # Logged, never reported: there is no Cancelled result (ADR-0017).
+                record.log_cancelled()
+                raise
             record.log.on_run_end(ctx, result)
             return result
 
     async def _lifecycle(
         self, ctx: RunContext, state: RunState, record: _RunRecord
-    ) -> RunSucceeded[OutcomeT] | RunFailed:
+    ) -> RunResult[OutcomeT]:
         """Run the stages in order; each phase below owns its own stages."""
         try:
             # run_start fires for every run, so a prompt file that cannot be
@@ -419,8 +485,9 @@ class RunSpec[OutcomeT]:
             await self._preflight()
             workspace = await self._prepare(ctx, state, record)
             outcome = await self._in_sandbox(ctx, state, record, workspace)
-            if record.failure is not None:
-                self._preserve(record)
+            if record.failure is not None or record.held is not None:
+                await self._preserve(record)
+                record.surface()  # before integrate starts: it never will
                 return record.failed()
             assert outcome is not None
             return await self._land(ctx, record, outcome)
@@ -429,6 +496,7 @@ class RunSpec[OutcomeT]:
             record.fail(StageError(record.stage, failure))
         except Exception as exc:
             record.fail(_as_stage_error(record.stage, exc))
+        record.surface()  # a failure never hides a cancellation held meanwhile
         return record.failed()
 
     def _prompt_text(self) -> str:
@@ -460,17 +528,18 @@ class RunSpec[OutcomeT]:
         """Workspace stage: a private clone of the base, then ``workspace_ready``."""
 
         async def _workspace() -> Workspace:
-            return await asyncio.to_thread(
-                prepare_workspace, self.repo, base=self.base, run_id=record.run_id
+            return await prepare_workspace(
+                self.repo, base=self.base, run_id=record.run_id
             )
 
         with record.entering("workspace"):
             workspace: Workspace = await self._bounded(
-                "workspace", "workspace", self.timeouts.workspace, _workspace
+                record, "workspace", "workspace", self.timeouts.workspace, _workspace
             )
         record.base_sha = state.base_sha = workspace.base_sha
-        record.log.on_workspace_ready(ctx)
         try:
+            record.surface()  # held while the workspace was cloned
+            record.log.on_workspace_ready(ctx)
             await self.hook_registry.fire("workspace_ready", "workspace", ctx)
         except BaseException:
             # No sandbox owns the workspace yet, so nothing else removes it.
@@ -496,16 +565,26 @@ class RunSpec[OutcomeT]:
         with record.entering("sandbox"):
             try:
                 sandbox: Sandbox = await self._bounded(
-                    "sandbox", "sandbox", self.timeouts.sandbox, _enter
+                    record, "sandbox", "sandbox", self.timeouts.sandbox, _enter
                 )
             except BaseException as exc:
-                await cm.__aexit__(type(exc), exc, exc.__traceback__)
+                await record.uninterrupted(
+                    "sandbox", cm.__aexit__(type(exc), exc, exc.__traceback__)
+                )
                 raise
         try:
+            record.surface()  # held while the sandbox started
             state.sandbox = sandbox
             record.log.on_sandbox_ready(ctx)
             await self.hook_registry.fire("sandbox_ready", "sandbox", ctx)
-            outcome = await self._run_agent(ctx, record, sandbox)
+            try:
+                outcome = await self._run_agent(ctx, record, sandbox)
+            except asyncio.CancelledError as cancel:
+                # The exec killed the agent's tree before this surfaced
+                # (ADR-0023), so what it left is collected like any stopped
+                # agent's; the cancellation waits for that (ADR-0017).
+                record.hold("agent", cancel)
+                outcome = None
             await self._collect(record, sandbox, workspace)
             return outcome
         finally:
@@ -566,7 +645,7 @@ class RunSpec[OutcomeT]:
         with record.entering("collect"):
             try:
                 collected: CollectResult = await self._bounded(
-                    "collect", "collect", self.timeouts.collect, _collected
+                    record, "collect", "collect", self.timeouts.collect, _collected
                 )
             except Exception as exc:
                 if record.failure is None:
@@ -591,12 +670,13 @@ class RunSpec[OutcomeT]:
 
     async def _land(
         self, ctx: RunContext, record: _RunRecord, outcome: OutcomeT
-    ) -> RunSucceeded[OutcomeT] | RunFailed:
+    ) -> RunResult[OutcomeT]:
         """Integrate stage, or preservation when the run integrates nowhere."""
         patches, strategy = record.patches, self.integration
         assert patches is not None
         if strategy is None:
-            self._preserve(record)
+            await self._preserve(record)
+            record.surface()  # held while the series was kept
             return (
                 record.failed() if record.failure else record.succeeded(outcome, None)
             )
@@ -607,13 +687,28 @@ class RunSpec[OutcomeT]:
         with record.entering("integrate"):
             try:
                 report: IntegrationReport = await self._bounded(
-                    "integrate", "integrate", self.timeouts.integrate, _integrated
+                    record,
+                    "integrate",
+                    "integrate",
+                    self.timeouts.integrate,
+                    _integrated,
                 )
             except Exception as exc:
                 record.fail(_as_stage_error("integrate", exc))
+        if record.failure is not None or report.conflict is not None:
+            # Nothing landed, so the series is kept like any other that
+            # reached no target (ADR-0005).
+            await self._preserve(record)
+        else:
+            record.landed_on = report.target
+        # The stage was atomic: a cancellation held meanwhile surfaces only
+        # now, with the target moved or left alone, never half-moved.
+        record.surface()
         if record.failure is not None:
-            self._preserve(record)
             return record.failed()
+        if report.conflict is not None:
+            # No ``integrated`` hook: the conflict rides ``run_end`` (ADR-0015).
+            return record.conflicted(outcome, report)
         record.log.on_integrated(ctx, report)
         try:
             await self.hook_registry.fire("integrated", "integrate", ctx, report)
@@ -623,13 +718,19 @@ class RunSpec[OutcomeT]:
             return record.failed()
         return record.succeeded(outcome, report)
 
-    def _preserve(self, record: _RunRecord) -> None:
-        """Keep a series that reached no target on ``waystation/<run-id>``."""
+    async def _preserve(self, record: _RunRecord) -> None:
+        """Keep a series that reached no target on ``waystation/<run-id>``.
+
+        Unbounded and never interrupted: preservation is how a cancelled or
+        failed run loses nothing (ADR-0016, ADR-0017).
+        """
         if record.patches is None or record.patches.commits == 0:
             return
+        branch = f"waystation/{record.run_id}"
         try:
-            record.preserved = preserve_series(
-                self.repo, branch=f"waystation/{record.run_id}", series=record.patches
+            record.preserved = await record.uninterrupted(
+                "integrate",
+                preserve_series(self.repo, branch=branch, series=record.patches),
             )
         except Exception as exc:
             record.fail(_as_stage_error("integrate", exc))
@@ -643,6 +744,8 @@ class RunSpec[OutcomeT]:
             await cm.__aexit__(None, None, None)
 
         try:
-            await self._bounded("sandbox", "teardown", self.timeouts.teardown, _leave)
+            await self._bounded(
+                record, "sandbox", "teardown", self.timeouts.teardown, _leave
+            )
         except Exception as exc:
             _log_later_failure(record.run_id, _as_stage_error("sandbox", exc))

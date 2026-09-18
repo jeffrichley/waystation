@@ -37,7 +37,9 @@ from waystation.results import (
     OutcomeInvalid,
     OutcomeMissing,
     Refused,
+    RunConflicted,
     RunFailed,
+    RunResult,
     RunSucceeded,
     Series,
     Stage,
@@ -46,6 +48,7 @@ from waystation.results import (
     Timeouts,
 )
 from waystation.sandbox import ExecResult, NoSandbox, Sandbox, SandboxBackend
+from waystation.signals import handle_signals
 from waystation.workspace import Workspace, prepare_workspace
 
 __all__ = [
@@ -74,9 +77,11 @@ __all__ = [
     "PatchSeries",
     "PreflightError",
     "Refused",
+    "RunConflicted",
     "RunContext",
     "RunFailed",
     "RunLogFiles",
+    "RunResult",
     "RunSpec",
     "RunSucceeded",
     "Sandbox",
@@ -94,6 +99,7 @@ __all__ = [
     "collect",
     "configure_logging",
     "find_outcome",
+    "handle_signals",
     "integrate",
     "outcome_instructions",
     "prepare_workspace",

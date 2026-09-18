@@ -33,9 +33,16 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | Helper | Gives you |
 | --- | --- |
 | `git(repo, *args)` | run git in `repo`, stdout stripped, raises on non-zero |
+| `commit_on(repo, branch, files)` | a commit on `branch` (made at HEAD if missing) with the checkout put back — a target that moved, or a range for `PatchSeries.from_range`; returns the tip |
 | `init_host_repo(root)` | what `host_repo` is built from — call it directly only for a *second* repo, or one outside `tmp_path` |
 | `sh()` | the POSIX sh on this host (Git Bash on Windows) |
-| `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it |
+| `subjects(repo, revisions)` | the commit subjects in a range like `HEAD..waystation/<id>`, newest first — what a preserved or landed series holds |
+| `lifecycle(caplog)` | the records a run logged per lifecycle event (`waystation.run`), in order |
+| `workspaces(temp)` | the run workspaces left under a temp dir — assert `== []` to prove a run cleaned up |
+| `until(ready, task)` | wait until `ready()` holds — a run reached a known point, say a stalled git — failing at once if the run ends first |
+| `stalling_ref_hook(hooks, started, release)` | a `reference-transaction` hook that holds the first ref update git prepares until `release` exists; point a host at it with `core.hooksPath` |
+| `awaited(spec)` | a coroutine awaiting a `RunSpec`, for `asyncio.create_task` — reach for it when a test cancels or drives a run from outside |
+| `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series, `sandbox=` your own backend |
 | `ShellAgent(script)` | an agent that *is* a shell script — reach for it over `ScriptedAgent` when the test drives stderr, an exit code, or timing |
 | `PROMPT` | the prompt `a_run` uses; has a second line, so a test can prove the body stayed unlogged |
 | `OK_OUTCOME` | the Outcome a scripted agent reports when the test doesn't care |
@@ -51,7 +58,7 @@ Test modules import helpers as a top-level module — `from helpers import git` 
 
 - **Test through the public surface.** Import from `waystation`, not from a private module, unless the seam under test *is* internal. A test that reaches into internals breaks on refactors that changed no behaviour — that's the tell.
 - **Name the behaviour, not the function.** `test_agent_silence_resets_on_output_lines`, not `test_run_agent_3`. Read the name back as a sentence about the library; if it doesn't say anything a user would care about, the test is probably at the wrong seam.
-- **Never wall-sleep to test a bound.** `use_clock(ManualClock())` makes time explicit; `clock.advance(seconds)` wakes the sleepers. A `time.sleep` in a timeout test is a flake waiting for a slow CI box. The same goes for real work a `ManualClock` test waits on before advancing — a commit, a file, a process: poll for the signal itself (`test_timeouts.py`'s `_poll_until`), because a sleep long enough on your box is a guess someone else's box loses. Keep the predicate a stat, never a subprocess: a poll that spawns a process every tick blocks the loop and starves the run it is waiting on, which on a two-core Windows runner is its own kind of flake.
+- **Never wall-sleep to test a bound.** `use_clock(ManualClock())` makes time explicit; `clock.advance(seconds)` wakes the sleepers. A `time.sleep` in a timeout test is a flake waiting for a slow CI box. The same goes for real work a `ManualClock` test waits on before advancing — a commit, a file, a process: poll for the signal itself with `until`, because a sleep long enough on your box is a guess someone else's box loses. Keep the predicate a stat, never a subprocess: a poll that spawns a process every tick blocks the loop and starves the run it is waiting on, which on a two-core Windows runner is its own kind of flake.
 - **`asyncio_mode = "auto"`**, so an async test needs no decorator. (Plenty of older tests still carry `@pytest.mark.asyncio`; harmless, not required.)
 - **`isolated_tempdir` is autouse** — every test gets its own temp dir, so a workspace never lands in the host's. Don't reach for `tempfile.mkdtemp` directly.
 - **Assert on log records, not on rendered text.** `caplog.at_level(level, logger="waystation")`, then filter `caplog.records` by `record.name`. The console's formatting is not the contract; the logger a line goes to, and the level it goes at, are.

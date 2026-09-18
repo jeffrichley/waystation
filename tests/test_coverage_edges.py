@@ -26,14 +26,14 @@ def test_find_outcome_skips_empty_and_invalid_marker_lines() -> None:
 
 
 @pytest.mark.git
-def test_prepare_workspace_requires_existing_repo(tmp_path: Path) -> None:
+async def test_prepare_workspace_requires_existing_repo(tmp_path: Path) -> None:
     missing = tmp_path / "nope"
     with pytest.raises(FileNotFoundError):
-        prepare_workspace(missing)
+        await prepare_workspace(missing)
 
 
 @pytest.mark.git
-def test_prepare_workspace_requires_git_identity(
+async def test_prepare_workspace_requires_git_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -53,7 +53,7 @@ def test_prepare_workspace_requires_git_identity(
     from waystation import Refused, StageError
 
     with pytest.raises(StageError) as caught:
-        prepare_workspace(repo)
+        await prepare_workspace(repo)
     assert isinstance(caught.value.failure, Refused)
     assert caught.value.failure.reason == "no_git_identity"
 

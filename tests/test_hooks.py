@@ -10,7 +10,7 @@ from typing import Any, override
 import pytest
 from pydantic import BaseModel
 
-from helpers import OK_OUTCOME_LINE, OUTCOME, ShellAgent, git, sh
+from helpers import OK_OUTCOME_LINE, OUTCOME, ShellAgent, commit_on, git, sh
 from waystation import (
     AgentExit,
     AgentExited,
@@ -20,8 +20,10 @@ from waystation import (
     Integration,
     IntegrationReport,
     NoSandbox,
+    RunConflicted,
     RunContext,
     RunFailed,
+    RunResult,
     RunSucceeded,
     ScriptedAgent,
     ScriptedCommit,
@@ -547,11 +549,7 @@ async def test_raising_integrated_hook_keeps_landed_series_unpreserved(
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_integrated_fires_only_when_integration_lands(host_repo: Path) -> None:
-    git(host_repo, "switch", "-q", "-c", "agents/taken")
-    (host_repo / "clash.txt").write_bytes(b"theirs\n")
-    git(host_repo, "add", "clash.txt")
-    git(host_repo, "commit", "-qm", "theirs")
-    git(host_repo, "switch", "-q", "-")
+    commit_on(host_repo, "agents/taken", {"clash.txt": "theirs\n"})
     agent = ScriptedAgent(
         commits=(ScriptedCommit(message="ours", files={"clash.txt": "ours\n"}),),
         outcome=Answer(summary="ok"),
@@ -570,7 +568,7 @@ async def test_integrated_fires_only_when_integration_lands(host_repo: Path) -> 
     assert isinstance(unintegrated, RunSucceeded)
     assert "integrated" not in no_integration.names
     assert no_integration.args("run_end") == [unintegrated]
-    assert not isinstance(collided, RunSucceeded)
+    assert isinstance(collided, RunConflicted)
     assert "integrated" not in conflicting.names
     assert conflicting.args("run_end") == [collided]
 
@@ -796,11 +794,13 @@ class EndOnly(HookBundle):
     """A bundle that overrides one hook and inherits no-ops for the rest."""
 
     def __init__(self) -> None:
-        self.results: list[RunSucceeded[Any] | RunFailed] = []
+        self.results: list[RunResult[Any]] = []
 
     @override
     async def on_run_end(
-        self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
+        self,
+        ctx: RunContext,
+        result: RunResult[Any],
     ) -> None:
         self.results.append(result)
 

@@ -29,8 +29,10 @@ from waystation.observability import AGENT_OUTPUT, PACKAGE, RUN, tag, tagged_log
 from waystation.results import (
     AgentExit,
     IntegrationReport,
+    RunConflicted,
     RunFailed,
-    RunSucceeded,
+    RunResult,
+    Stage,
     TimedOut,
 )
 
@@ -95,7 +97,9 @@ class RunLog(HookBundle):
 
     @override
     def on_run_end(
-        self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
+        self,
+        ctx: RunContext,
+        result: RunResult[Any],
     ) -> None:
         elapsed = sum(result.elapsed.values())
         if isinstance(result, RunFailed):
@@ -106,15 +110,37 @@ class RunLog(HookBundle):
                 elapsed,
             )
             return
+        if isinstance(result, RunConflicted):
+            self._run.info(
+                "run end: conflicted landing on %s in %.1fs; series kept on %s",
+                result.report.target,
+                elapsed,
+                result.preserved,
+            )
+            return
         self._run.info("run end: succeeded in %.1fs", elapsed)
 
-    # The agent's start is the one event with no hook behind it: the agent
-    # stage opens between sandbox_ready and the first output line.
+    # The agent's start and a run's cancellation are the events with no hook
+    # behind them: the agent stage opens between sandbox_ready and the first
+    # output line, and a cancelled run has no result for run_end (ADR-0017).
     def agent_start(self, prompt: str) -> None:
         """Announce the prompt by shape only — its body is never logged."""
         self._run.info(
             "agent start: prompt %d chars, first line %r", len(prompt), _head(prompt)
         )
+
+    def cancelled(
+        self, stage: Stage, *, kept_on: str | None, landed_on: str | None
+    ) -> None:
+        """Say a run was cancelled, and where its series went, if anywhere."""
+        if kept_on is not None:
+            self._run.info("run cancelled during %s; series kept on %s", stage, kept_on)
+        elif landed_on is not None:
+            self._run.info(
+                "run cancelled during %s; series landed on %s", stage, landed_on
+            )
+        else:
+            self._run.info("run cancelled during %s", stage)
 
 
 class _FlushingFile:
@@ -122,9 +148,9 @@ class _FlushingFile:
 
     Both observers want the same thing: a reader — ``tail -f``, or an analysis
     script watching a fan-out — should see a line the moment it happens, not
-    when the run ends. Writes come from whichever thread logged, since
-    ``prepare_workspace`` runs in one while agent lines arrive on the event
-    loop, so they go through a lock and no line lands inside another.
+    when the run ends. Writes come from whichever thread logged — a hook may
+    log from a worker thread while agent lines arrive on the event loop — so
+    they go through a lock and no line lands inside another.
     """
 
     __slots__ = ("_handle", "_lock", "path")
@@ -286,7 +312,9 @@ class RunLogFiles(HookBundle):
     @override
     @_safely
     def on_run_end(
-        self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
+        self,
+        ctx: RunContext,
+        result: RunResult[Any],
     ) -> None:
         open_file = self._open.pop(ctx.run_id, None)
         if open_file is None:
@@ -300,7 +328,7 @@ class RunLogFiles(HookBundle):
             file.close()
 
 
-def _footer(result: RunSucceeded[Any] | RunFailed) -> str:
+def _footer(result: RunResult[Any]) -> str:
     """The last line of a run file: how the agent ended, or why it didn't."""
     if isinstance(result, RunFailed) and isinstance(result.failure, TimedOut):
         bound = result.failure
@@ -370,7 +398,9 @@ class EventLog(HookBundle):
     @override
     @_safely
     def on_run_end(
-        self, ctx: RunContext, result: RunSucceeded[Any] | RunFailed
+        self,
+        ctx: RunContext,
+        result: RunResult[Any],
     ) -> None:
         fields = _fields(result)
         if isinstance(result, RunFailed):

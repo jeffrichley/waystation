@@ -11,7 +11,7 @@ import pytest
 from rich.console import Console
 from rich.logging import RichHandler
 
-from helpers import PROMPT, a_run
+from helpers import PROMPT, a_run, lifecycle
 from waystation import (
     CommandFailed,
     RunSucceeded,
@@ -128,10 +128,6 @@ def run_id_of(record: logging.LogRecord) -> str | None:
 
 def run_name_of(record: logging.LogRecord) -> str | None:
     return getattr(record, "run_name", None)
-
-
-def lifecycle(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
-    return [r for r in caplog.records if r.name == "waystation.run"]
 
 
 @pytest.mark.git

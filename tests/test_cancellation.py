@@ -24,7 +24,9 @@ from helpers import (
     awaited,
     git,
     lifecycle,
+    stalling_ref_hook,
     subjects,
+    until,
     workspaces,
 )
 from waystation import (
@@ -367,3 +369,26 @@ async def test_a_cancellation_inside_a_hook_is_still_said(
     assert not gate.passed.is_set()
     assert workspaces(isolated_tempdir) == []
     assert _said(caplog, "run cancelled during sandbox")
+
+
+@pytest.mark.git
+async def test_a_cancellation_during_preservation_waits_for_it_then_surfaces(
+    host_repo: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    started, release = tmp_path / "started", tmp_path / "release"
+    hooks = stalling_ref_hook(tmp_path / "hooks", started, release)
+    git(host_repo, "config", "core.hooksPath", hooks.as_posix())
+    run_ids: list[str] = []
+    spec = a_run(host_repo).on_run_start(lambda ctx: run_ids.append(ctx.run_id))
+
+    with caplog.at_level(logging.INFO, logger="waystation"):
+        task = asyncio.create_task(awaited(spec))
+        await until(started.exists, task)  # the preservation branch is landing
+        task.cancel()
+        release.touch()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    branch = f"waystation/{run_ids[0]}"
+    assert subjects(host_repo, f"HEAD..{branch}") == ["add a file"]
+    assert _said(caplog, f"run cancelled during integrate; series kept on {branch}")

@@ -676,6 +676,7 @@ class RunSpec[OutcomeT]:
         assert patches is not None
         if strategy is None:
             await self._preserve(record)
+            record.surface()  # held while the series was kept
             return (
                 record.failed() if record.failure else record.succeeded(outcome, None)
             )

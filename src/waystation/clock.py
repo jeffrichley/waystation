@@ -85,7 +85,8 @@ async def race_timeout[T](
 ) -> T:
     """Await ``awaitable``, cancelling it if ``seconds`` elapses on the active clock.
 
-    ``seconds is None`` means unbounded. Raises ``TimeoutError`` on expiry.
+    ``seconds is None`` means unbounded. Raises ``TimeoutError`` on expiry,
+    unless the cancelled work returns anyway, in which case that is returned.
     """
     if seconds is None:
         return await awaitable
@@ -107,6 +108,10 @@ async def race_timeout[T](
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+        if not task.cancelled():
+            # It finished anyway, past a point it could not stop at: what it
+            # did is the truth, not the bound (ADR-0027).
+            return task.result()
         raise TimeoutError()
     finally:
         if not sleeper.done():

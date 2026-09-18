@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from helpers import a_run, awaited, git
+from helpers import a_run, awaited, git, subjects
 from waystation import (
     GitRepo,
     Integration,
@@ -25,6 +25,7 @@ from waystation import (
     PatchSeries,
     RunFailed,
     RunResult,
+    RunSucceeded,
     TimedOut,
     Timeouts,
 )
@@ -114,3 +115,55 @@ async def test_an_integrate_bound_kills_the_landing_and_all_it_started(
     assert git(host_repo, "branch", "--list", TARGET) == ""
     assert result.preserved == f"waystation/{result.run_id}"
     await _still(pulse)
+
+
+def _stalling_ref_hook(hooks: Path, started: Path, release: Path) -> None:
+    """A reference-transaction hook: the first swap waits for ``release``.
+
+    It runs inside ``update-ref`` while git holds the ref's lock, which is the
+    one moment a kill would leave a lock behind.
+    """
+    hooks.mkdir()
+    hook = hooks / "reference-transaction"
+    hook.write_bytes(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                "cat > /dev/null",
+                f"if [ \"$1\" = prepared ] && [ ! -f '{started.as_posix()}' ]; then",
+                f"  : > '{started.as_posix()}'",
+                "  i=0",
+                f"  while [ ! -f '{release.as_posix()}' ] && [ $i -lt 400 ]; do",
+                "    sleep 0.05; i=$((i+1))",
+                "  done",
+                "fi",
+                "",
+            ]
+        ).encode()
+    )
+    hook.chmod(0o755)
+
+
+@pytest.mark.git
+async def test_a_bound_firing_mid_swap_lets_it_land_and_reports_the_landing(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    started, release = tmp_path / "started", tmp_path / "release"
+    _stalling_ref_hook(tmp_path / "hooks", started, release)
+    git(host_repo, "config", "core.hooksPath", (tmp_path / "hooks").as_posix())
+    spec = a_run(host_repo).integrate(TARGET).with_timeouts(Timeouts(integrate=1.0))
+    clock = ManualClock()
+
+    with use_clock(clock):
+        task = asyncio.create_task(awaited(spec))
+        await _when(started.exists, task)
+        clock.advance(1.0)
+        for _ in range(10):  # let the bound's cancellation reach the swap
+            await asyncio.sleep(0)
+        release.touch()
+        result = await task
+
+    assert isinstance(result, RunSucceeded)
+    assert result.preserved is None
+    assert subjects(host_repo, f"HEAD..{TARGET}") == ["add a file"]
+    assert list((host_repo / ".git" / "refs" / "heads").glob("*.lock")) == []

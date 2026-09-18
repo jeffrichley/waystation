@@ -15,6 +15,7 @@ from typing import Any, Literal
 from pydantic import TypeAdapter
 from pydantic.json_schema import GenerateJsonSchema
 
+from waystation._cancellation import run_to_end
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
@@ -136,14 +137,7 @@ class _RunRecord:
 
     async def uninterrupted[T](self, stage: Stage, work: Awaitable[T]) -> T:
         """Await ``work`` to its end; a cancellation meanwhile is held, not lost."""
-        task = asyncio.ensure_future(work)
-        while True:
-            try:
-                return await asyncio.shield(task)
-            except asyncio.CancelledError as cancel:
-                if task.cancelled():
-                    raise  # the work itself was cancelled, not the run
-                self.hold(stage, cancel)
+        return await run_to_end(work, lambda cancel: self.hold(stage, cancel))
 
     def surface(self) -> None:
         """Raise the held cancellation, if any: the stage it waited on is done."""

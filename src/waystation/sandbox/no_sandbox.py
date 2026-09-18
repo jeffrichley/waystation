@@ -34,6 +34,26 @@ def _build_env(
     return env
 
 
+async def _read_line(stream: asyncio.StreamReader) -> bytes:
+    """The next line, however long; ``b""`` at EOF.
+
+    ``readline`` raises on a line past the reader's limit (64 KiB by default)
+    and drops it. ``readuntil`` leaves an overrun buffered, so the line is
+    taken a limit's worth at a time and none is too long (ADR-0017).
+    """
+    parts: list[bytes] = []
+    while True:
+        try:
+            parts.append(await stream.readuntil(b"\n"))
+            break
+        except asyncio.LimitOverrunError as exc:
+            parts.append(await stream.readexactly(exc.consumed))
+        except asyncio.IncompleteReadError as exc:
+            parts.append(exc.partial)
+            break
+    return b"".join(parts)
+
+
 def _rmtree_retry(path: str | os.PathLike[str], *, attempts: int = 5) -> None:
     """Remove a workspace dir; retry briefly on Windows file-lock races."""
     import time
@@ -92,7 +112,7 @@ class _HostSandbox:
             if stream is None:
                 return
             while True:
-                line_b = await stream.readline()
+                line_b = await _read_line(stream)
                 if not line_b:
                     break
                 text = line_b.decode("utf-8", errors="replace")

@@ -29,9 +29,29 @@ _CREDENTIALS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
 
 @dataclass(frozen=True, slots=True)
 class ClaudeCode:
-    """Run the real Claude Code CLI as a run's agent."""
+    """Run the real Claude Code CLI as a run's agent, with its full behaviour.
+
+    ``claude`` runs inside the sandbox in print mode, loading its system
+    prompt, settings, plugins, skills and MCP servers from the image and the
+    workspace, never from the host. The run's Outcome schema goes in as
+    ``--json-schema``, so the CLI itself re-prompts until the output matches.
+    Frozen and stateless: one instance serves every run of a fan-out.
+
+    Attributes:
+        model: ``--model``, an alias such as ``"sonnet"`` or a full model
+            name; ``None`` leaves it to the CLI's settings.
+        permission_mode: ``--permission-mode``. An unattended agent cannot
+            answer a permission prompt, and the sandbox is the trust boundary.
+        max_turns: ``--max-turns``; ``None`` is unbounded.
+        max_budget_usd: ``--max-budget-usd``; ``None`` is unbounded.
+        env: variables set in the agent's environment.
+        pass_env: host variables passed through to the agent, beside the two
+            credentials, which always are.
+        args: extra CLI arguments, appended after every flag above.
+    """
 
     model: str | None = None
+    # A str, not a Literal: the CLI owns its modes and adds to them.
     permission_mode: str = "bypassPermissions"
     max_turns: int | None = None
     max_budget_usd: float | None = None

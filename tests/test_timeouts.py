@@ -338,12 +338,18 @@ async def test_collect_bound_times_out(host_repo: Path) -> None:
 
 @pytest.mark.git
 @pytest.mark.asyncio
-async def test_wall_timeout_preserves_series(host_repo: Path) -> None:
+async def test_wall_timeout_preserves_series(host_repo: Path, tmp_path: Path) -> None:
     """After a timeout, collect runs and a non-empty series is preserved."""
+    # A scripted agent commits before it lingers, so the first byte of its
+    # linger file says the commit landed. That is the signal the clock waits
+    # for, and asking the filesystem is a stat: a poll that shelled out to git
+    # every tick would starve the very run it is waiting on.
+    committed = tmp_path / "committed"
     agent = ScriptedAgent(
         outcome=None,
         commits=(ScriptedCommit(message="wip", files={"a.txt": "a\n"}),),
         linger=True,
+        linger_touch=str(committed),
     )
     clock = ManualClock()
     flow = Flow(
@@ -355,14 +361,12 @@ async def test_wall_timeout_preserves_series(host_repo: Path) -> None:
     )
     with use_clock(clock):
         task = asyncio.create_task(awaited(flow.run("p", outcome=Answer)))
-        # Wait until the wall sleeper is parked, then let commits finish.
-        deadline = asyncio.get_running_loop().time() + 5.0
-        while not clock._waiters and not task.done():
-            if asyncio.get_running_loop().time() > deadline:
-                task.cancel()
-                raise AssertionError("wall bound never armed")
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.4)
+        # Wait until the wall sleeper is parked, then until the commit has
+        # really landed. Advancing after an elapsed-time guess instead races
+        # git: the bound fires first, the series comes back empty, and the
+        # test fails on a loaded box for a reason it does not test.
+        await until(lambda: bool(clock._waiters), task)
+        await until(committed.exists, task)
         clock.advance(1.0)
         result = await task
 

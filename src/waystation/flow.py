@@ -510,7 +510,7 @@ class RunSpec[OutcomeT]:
             return self.prompt
         try:
             return self.prompt.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             raise StageError("agent", Errored(exception=exc)) from exc
 
     async def _preflight(self) -> None:

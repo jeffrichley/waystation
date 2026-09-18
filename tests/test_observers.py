@@ -295,13 +295,12 @@ async def test_a_run_that_cannot_read_its_prompt_still_starts(
     host_repo: Path, tmp_path: Path
 ) -> None:
     """A run never ends without starting: every event log has a first line."""
-    missing = tmp_path / "gone.md"
-    missing.write_text("here for now", encoding="utf-8")
+    # There, so preflight passes it (#30), but not UTF-8, so it can't be read.
+    unreadable = tmp_path / "latin1.md"
+    unreadable.write_bytes("café".encode("latin-1"))
     events = tmp_path / "events.jsonl"
-    spec = a_run(host_repo, missing).hooks(EventLog(events))
-    missing.unlink()
 
-    result = await spec
+    result = await a_run(host_repo, unreadable).hooks(EventLog(events))
 
     assert isinstance(result, RunFailed)
     assert result.stage == "agent", "reading the prompt is still the agent's business"

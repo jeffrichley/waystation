@@ -278,12 +278,12 @@ async def test_agent_failure_outranks_a_nonlinear_series(host_repo: Path) -> Non
 
 
 @pytest.mark.git
-def test_patch_series_from_range(host_repo: Path) -> None:
+async def test_patch_series_from_range(host_repo: Path) -> None:
     from waystation import PatchSeries
 
     base = git(host_repo, "rev-parse", "HEAD")
     commit_on(host_repo, "feature", {"X": "x\n"}, message="on feature")
-    series = PatchSeries.from_range(host_repo, base, "feature")
+    series = await PatchSeries.from_range(host_repo, base, "feature")
     assert series.commits == 1
     assert series.base_sha == base
     assert "on feature" in series.patches[0]

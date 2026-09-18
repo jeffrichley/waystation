@@ -269,14 +269,14 @@ class MovesOnSwap(GitRepo):
 
     moved: list[str] = field(default_factory=list)
 
-    def git(self, *args: str, env: Mapping[str, str] | None = None) -> str:
+    async def git(self, *args: str, env: Mapping[str, str] | None = None) -> str:
         if args[:1] == ("update-ref",) and not self.moved:
             outside = git(
                 self.path, "commit-tree", f"{TARGET}^{{tree}}", "-p", TARGET, "-m", "x"
             )
             git(self.path, "update-ref", f"refs/heads/{TARGET}", outside)
             self.moved.append(outside)
-        return super().git(*args, env=env)
+        return await super().git(*args, env=env)
 
 
 @dataclass(frozen=True)

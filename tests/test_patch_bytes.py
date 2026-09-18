@@ -76,8 +76,10 @@ async def test_carriage_returns_in_content_survive_from_range(
     base = git(host_repo, "rev-parse", "HEAD")
     commit_on(host_repo, "source", {"dos.crlf": "one\r\ntwo\r\n"})
 
-    series = PatchSeries.from_range(host_repo, base, "source")
-    report = await Integration("agents/dos").integrate(GitRepo.open(host_repo), series)
+    series = await PatchSeries.from_range(host_repo, base, "source")
+    report = await Integration("agents/dos").integrate(
+        await GitRepo.open(host_repo), series
+    )
 
     assert report.target_after is not None
     landed = _bytes(host_repo, "cat-file", "blob", "agents/dos:dos.crlf")

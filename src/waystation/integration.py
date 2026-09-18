@@ -48,20 +48,23 @@ class GitRepo:
     common_dir: Path
 
     @classmethod
-    def open(cls, repo: Path | str) -> GitRepo:
+    async def open(cls, repo: Path | str) -> GitRepo:
         path = Path(repo).resolve()
-        common_raw = _repo_git(path, "rev-parse", "--git-common-dir")
+        common_raw = await _repo_git(path, "rev-parse", "--git-common-dir")
         common = Path(common_raw)
         if not common.is_absolute():
             common = (path / common).resolve()
         return cls(path=path, common_dir=common)
 
-    def git(self, *args: str, env: Mapping[str, str] | None = None) -> str:
-        return _repo_git(self.path, *args, env=env)
+    async def git(self, *args: str, env: Mapping[str, str] | None = None) -> str:
+        """Run git in this repo; its stdout, stripped. Cancelling it kills it."""
+        return await _repo_git(self.path, *args, env=env)
 
 
-def _repo_git(repo: Path, *args: str, env: Mapping[str, str] | None = None) -> str:
-    return run_git(repo, *args, stage="integrate", env=env).stdout.strip()
+async def _repo_git(
+    repo: Path, *args: str, env: Mapping[str, str] | None = None
+) -> str:
+    return (await run_git(repo, *args, stage="integrate", env=env)).stdout.strip()
 
 
 @runtime_checkable
@@ -86,13 +89,15 @@ async def integrate(
     strategy: IntegrationStrategy,
 ) -> IntegrationReport:
     """Land ``series`` with ``strategy``, serialized per git common dir."""
-    git_repo = repo if isinstance(repo, GitRepo) else GitRepo.open(repo)
-    _require_git_240(git_repo)
+    git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
+    await _require_git_240(git_repo)
+    # A bound or cancellation kills the strategy's git before it leaves the
+    # lock, so the lock is never free while a landing is still writing (#57).
     async with _lock_for(git_repo.common_dir):
         return await strategy.integrate(git_repo, series)
 
 
-def preserve_series(
+async def preserve_series(
     repo: Path | str | GitRepo,
     *,
     branch: str,
@@ -104,14 +109,14 @@ def preserve_series(
     index, and HEAD untouched. Returns ``branch``.
     """
     if series.patches:
-        git_repo = repo if isinstance(repo, GitRepo) else GitRepo.open(repo)
-        commits = _materialize_at_base(git_repo, series)
-        git_repo.git("update-ref", f"refs/heads/{branch}", commits[-1])
+        git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
+        commits = await _materialize_at_base(git_repo, series)
+        await git_repo.git("update-ref", f"refs/heads/{branch}", commits[-1])
     return branch
 
 
-def _require_git_240(repo: GitRepo) -> None:
-    raw = repo.git("--version")  # e.g. "git version 2.43.0.windows.1"
+async def _require_git_240(repo: GitRepo) -> None:
+    raw = await repo.git("--version")  # e.g. "git version 2.43.0.windows.1"
     parts = raw.replace("git version ", "").split(".")
     try:
         major = int(parts[0])
@@ -138,15 +143,15 @@ class Integration:
                     detail="HEAD target is not supported yet; use a named branch",
                 ),
             )
-        return await asyncio.to_thread(self._integrate_sync, repo, series)
+        return await self._land(repo, series)
 
-    def _integrate_sync(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+    async def _land(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
         ref = f"refs/heads/{self.target}"
         base = series.base_sha
-        current = _read_ref(repo, ref)
+        current = await _read_ref(repo, ref)
         target_before = current if current is not None else base
 
-        holder = _worktree_holding(repo, ref)
+        holder = await _worktree_holding(repo, ref)
         if holder is not None:
             # update-ref would move the branch out from under that checkout,
             # leaving its index and files describing the old tip (ADR-0020).
@@ -162,13 +167,13 @@ class Integration:
         if not series.patches:
             return self._report(target_before, current)
 
-        commits = _materialize_at_base(repo, series)
+        commits = await _materialize_at_base(repo, series)
         # One attempt with the configured mechanism: an apply that conflicts
         # never falls back to merge (ADR-0015).
         if self.mechanism == "apply":
-            landing = _apply_onto(repo, tip=target_before, commits=commits)
+            landing = await _apply_onto(repo, tip=target_before, commits=commits)
         else:
-            landing = _merge_onto(
+            landing = await _merge_onto(
                 repo, tip=target_before, base=base, series_tip=commits[-1]
             )
         if isinstance(landing, Conflict):
@@ -178,11 +183,11 @@ class Integration:
 
         try:
             # Compare-and-swap: only moves the target if it is still `current`.
-            repo.git("update-ref", ref, tip, current or _ZERO)
+            await repo.git("update-ref", ref, tip, current or _ZERO)
         except StageError as exc:
             # A refusal is only ours to give if we saw the target move; any
             # other failed swap is git's, reported as it came (ADR-0016).
-            if _read_ref(repo, ref) == current:
+            if await _read_ref(repo, ref) == current:
                 raise
             raise StageError(
                 "integrate",
@@ -212,12 +217,12 @@ class Integration:
         )
 
 
-def _read_ref(repo: GitRepo, ref: str) -> str | None:
+async def _read_ref(repo: GitRepo, ref: str) -> str | None:
     """The commit ``ref`` points at, or ``None`` if there is no such ref.
 
     Always a full ref name: resolving a bare one lets a tag of the same name win.
     """
-    shown = run_git(
+    shown = await run_git(
         repo.path,
         "rev-parse",
         "--verify",
@@ -229,14 +234,14 @@ def _read_ref(repo: GitRepo, ref: str) -> str | None:
     return shown.stdout.strip() if shown.returncode == 0 else None
 
 
-def _worktree_holding(repo: GitRepo, ref: str) -> str | None:
+async def _worktree_holding(repo: GitRepo, ref: str) -> str | None:
     """The worktree using ``ref``, the main one included, if any.
 
     Using means what it means to ``git branch -f``: checked out, or the branch
     a rebase or bisect there will return to. A rebase detaches HEAD, but
     finishing it writes that branch over whatever landed meanwhile.
     """
-    listing = repo.git("worktree", "list", "--porcelain", "-z")
+    listing = await repo.git("worktree", "list", "--porcelain", "-z")
     for index, record in enumerate(listing.split("\0\0")):
         fields = record.strip("\0").split("\0")
         if not fields[0].startswith("worktree "):
@@ -286,10 +291,10 @@ def _read_state(path: Path) -> str | None:
         return None
 
 
-def _committer(repo: GitRepo) -> tuple[str, str]:
+async def _committer(repo: GitRepo) -> tuple[str, str]:
     try:
-        name = repo.git("config", "--get", "user.name")
-        email = repo.git("config", "--get", "user.email")
+        name = await repo.git("config", "--get", "user.name")
+        email = await repo.git("config", "--get", "user.email")
     except StageError as exc:
         raise StageError(
             "integrate",
@@ -309,19 +314,19 @@ def _committer(repo: GitRepo) -> tuple[str, str]:
     return name, email
 
 
-def _materialize_at_base(repo: GitRepo, series: PatchSeries) -> list[str]:
+async def _materialize_at_base(repo: GitRepo, series: PatchSeries) -> list[str]:
     """Rebuild each patch as a commit atop ``series.base_sha``; return shas."""
-    name, email = _committer(repo)
+    name, email = await _committer(repo)
     fd, index_path = tempfile.mkstemp(prefix="waystation-idx-")
     os.close(fd)
     index = Path(index_path)
     try:
         env = {**os.environ, "GIT_INDEX_FILE": str(index)}
-        repo.git("read-tree", series.base_sha, env=env)
+        await repo.git("read-tree", series.base_sha, env=env)
         parent = series.base_sha
         commits: list[str] = []
         for patch_text in series.patches:
-            parent = _commit_patch(
+            parent = await _commit_patch(
                 repo,
                 patch_text=patch_text,
                 parent=parent,
@@ -338,7 +343,7 @@ def _materialize_at_base(repo: GitRepo, series: PatchSeries) -> list[str]:
 _SUBJECT_PATCH_PREFIX = re.compile(r"^\[PATCH(?:\s+\d+/\d+)?\]\s*")
 
 
-def _commit_patch(
+async def _commit_patch(
     repo: GitRepo,
     *,
     patch_text: str,
@@ -350,7 +355,7 @@ def _commit_patch(
     with tempfile.TemporaryDirectory(prefix="waystation-patch-") as tmp:
         msg_file = Path(tmp) / "MSG"
         diff_file = Path(tmp) / "DIFF"
-        mail = run_git(
+        mail = await run_git(
             repo.path,
             "mailinfo",
             str(msg_file),
@@ -366,9 +371,9 @@ def _commit_patch(
 
         author_date = _parse_date(patch_text)
         if diff_file.stat().st_size > 0:
-            repo.git("apply", "--cached", str(diff_file), env=env)
+            await repo.git("apply", "--cached", str(diff_file), env=env)
 
-        tree = repo.git("write-tree", env=env)
+        tree = await repo.git("write-tree", env=env)
         commit_env = {
             **env,
             "GIT_AUTHOR_NAME": author_name or committer_name,
@@ -378,7 +383,7 @@ def _commit_patch(
         }
         if author_date:
             commit_env["GIT_AUTHOR_DATE"] = author_date
-        return repo.git(
+        return await repo.git(
             "commit-tree", tree, "-p", parent, "-F", str(msg_file), env=commit_env
         )
 
@@ -413,8 +418,8 @@ def _message_file(message: str) -> str:
         return fh.name
 
 
-def _commit_meta(repo: GitRepo, sha: str) -> tuple[str, str, str, str]:
-    raw = repo.git("log", "-1", "--format=%an%n%ae%n%aI%n%B", sha)
+async def _commit_meta(repo: GitRepo, sha: str) -> tuple[str, str, str, str]:
+    raw = await repo.git("log", "-1", "--format=%an%n%ae%n%aI%n%B", sha)
     lines = raw.splitlines()
     author = lines[0] if lines else ""
     email = lines[1] if len(lines) > 1 else ""
@@ -429,19 +434,19 @@ type _Landing = tuple[str, tuple[str, ...]] | Conflict
 """The new tip and the commits that landed on it, or where the replay stopped."""
 
 
-def _apply_onto(repo: GitRepo, *, tip: str, commits: list[str]) -> _Landing:
-    name, email = _committer(repo)
+async def _apply_onto(repo: GitRepo, *, tip: str, commits: list[str]) -> _Landing:
+    name, email = await _committer(repo)
     landed: list[str] = []
     for index, commit in enumerate(commits):
-        parent = repo.git("rev-parse", f"{commit}^")
-        tree = _merge_tree(repo, merge_base=parent, tip=tip, other=commit)
+        parent = await repo.git("rev-parse", f"{commit}^")
+        tree = await _merge_tree(repo, merge_base=parent, tip=tip, other=commit)
         if isinstance(tree, Conflict):
-            subject = repo.git("log", "-1", "--format=%s", commit)
+            subject = await repo.git("log", "-1", "--format=%s", commit)
             return replace(tree, failed_patch=FailedPatch(index, subject))
-        tip_tree = repo.git("rev-parse", f"{tip}^{{tree}}")
+        tip_tree = await repo.git("rev-parse", f"{tip}^{{tree}}")
         if tree == tip_tree:
             continue
-        author, author_email, author_date, message = _commit_meta(repo, commit)
+        author, author_email, author_date, message = await _commit_meta(repo, commit)
         env = {
             **os.environ,
             "GIT_AUTHOR_NAME": author or name,
@@ -453,7 +458,7 @@ def _apply_onto(repo: GitRepo, *, tip: str, commits: list[str]) -> _Landing:
             env["GIT_AUTHOR_DATE"] = author_date
         msg_path = _message_file(message)
         try:
-            new = repo.git(
+            new = await repo.git(
                 "commit-tree",
                 tree,
                 "-p",
@@ -469,16 +474,18 @@ def _apply_onto(repo: GitRepo, *, tip: str, commits: list[str]) -> _Landing:
     return tip, tuple(landed)
 
 
-def _merge_onto(repo: GitRepo, *, tip: str, base: str, series_tip: str) -> _Landing:
-    name, email = _committer(repo)
-    tree = _merge_tree(repo, merge_base=base, tip=tip, other=series_tip)
+async def _merge_onto(
+    repo: GitRepo, *, tip: str, base: str, series_tip: str
+) -> _Landing:
+    name, email = await _committer(repo)
+    tree = await _merge_tree(repo, merge_base=base, tip=tip, other=series_tip)
     if isinstance(tree, Conflict):
         return tree
-    tip_tree = repo.git("rev-parse", f"{tip}^{{tree}}")
+    tip_tree = await repo.git("rev-parse", f"{tip}^{{tree}}")
     if tree == tip_tree:
         return tip, ()
 
-    author, author_email, author_date, _msg = _commit_meta(repo, series_tip)
+    author, author_email, author_date, _msg = await _commit_meta(repo, series_tip)
     message = f"Merge {series_tip[:8]} into branch"
     env = {
         **os.environ,
@@ -491,7 +498,7 @@ def _merge_onto(repo: GitRepo, *, tip: str, base: str, series_tip: str) -> _Land
         env["GIT_AUTHOR_DATE"] = author_date
     msg_path = _message_file(message)
     try:
-        new = repo.git(
+        new = await repo.git(
             "commit-tree",
             tree,
             "-p",
@@ -507,14 +514,14 @@ def _merge_onto(repo: GitRepo, *, tip: str, base: str, series_tip: str) -> _Land
     return new, (new,)
 
 
-def _merge_tree(
+async def _merge_tree(
     repo: GitRepo, *, merge_base: str, tip: str, other: str
 ) -> str | Conflict:
     """The merged tree's sha, or the paths that conflict; writes no ref, index or file.
 
     ``-z`` keeps a path with a space or a quote exactly as git stored it.
     """
-    merged = run_git(
+    merged = await run_git(
         repo.path,
         "merge-tree",
         "--write-tree",

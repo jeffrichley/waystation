@@ -9,7 +9,14 @@ from pathlib import Path
 import pytest
 
 from helpers import a_run, git
-from waystation import RunConflicted, RunSucceeded, ScriptedCommit, Summary
+from waystation import (
+    Refused,
+    RunConflicted,
+    RunFailed,
+    RunSucceeded,
+    ScriptedCommit,
+    Summary,
+)
 from waystation.integration import Conflict, FailedPatch
 
 pytestmark = pytest.mark.git
@@ -163,3 +170,38 @@ async def test_a_conflict_is_logged_as_one_and_names_the_kept_branch(
     assert end.startswith("run end: conflicted")
     assert TARGET in end
     assert f"{result.preserved}" in end
+
+
+def assert_refused(result: object, reason: str, repo: Path) -> None:
+    """Failed at integrate for ``reason``, with the series kept all the same."""
+    assert isinstance(result, RunFailed)
+    assert result.stage == "integrate"
+    assert isinstance(result.failure, Refused)
+    assert result.failure.reason == reason
+    assert result.preserved == f"waystation/{result.run_id}"
+    assert git(repo, "log", "-1", "--format=%s", result.preserved) == "add a file"
+
+
+async def test_a_target_checked_out_in_the_main_worktree_is_refused(
+    host_repo: Path,
+) -> None:
+    home = git(host_repo, "symbolic-ref", "--short", "HEAD")
+    tip = git(host_repo, "rev-parse", home)
+
+    result = await a_run(host_repo).integrate(home)
+
+    assert_refused(result, "target_checked_out", host_repo)
+    assert git(host_repo, "rev-parse", home) == tip
+    assert git(host_repo, "status", "--porcelain") == ""
+
+
+async def test_a_target_checked_out_in_another_worktree_is_refused(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    git(host_repo, "worktree", "add", "-b", TARGET, str(tmp_path / "elsewhere"))
+    tip = git(host_repo, "rev-parse", TARGET)
+
+    result = await a_run(host_repo).integrate(TARGET)
+
+    assert_refused(result, "target_checked_out", host_repo)
+    assert git(host_repo, "rev-parse", TARGET) == tip

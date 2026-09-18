@@ -148,6 +148,17 @@ class Integration:
 
         if not series.patches:
             return self._report(target_before, target_before if exists else None)
+        holder = _worktree_holding(repo, ref)
+        if holder is not None:
+            # update-ref would move the branch out from under that checkout,
+            # leaving its index and files describing the old tip (ADR-0020).
+            raise StageError(
+                "integrate",
+                Refused(
+                    reason="target_checked_out",
+                    detail=f"{self.target} is checked out in {holder}",
+                ),
+            )
 
         commits = _materialize_at_base(repo, series)
         # One attempt with the configured mechanism: an apply that conflicts
@@ -208,6 +219,18 @@ def _ref_exists(repo: GitRepo, ref: str) -> bool:
         check=False,
     )
     return shown.returncode == 0
+
+
+def _worktree_holding(repo: GitRepo, ref: str) -> str | None:
+    """The worktree with ``ref`` checked out, the main one included, if any."""
+    listing = repo.git("worktree", "list", "--porcelain", "-z")
+    worktree: str | None = None
+    for field in listing.split("\0"):
+        if field.startswith("worktree "):
+            worktree = field.removeprefix("worktree ")
+        elif field == f"branch {ref}":
+            return worktree
+    return None
 
 
 def _committer(repo: GitRepo) -> tuple[str, str]:

@@ -3,21 +3,29 @@
 The workspace and integrate stages run host git. When their bound fires, that
 git and everything it started is killed before the run reports ``TimedOut``
 (ADR-0023), so nothing is still writing when the result says the stage
-stopped. Only the compare-and-swap that moves a target is left to finish: once
-it has started, the landing it makes is what the run reports.
+stopped. Only an ``update-ref`` already under way is left alone: the bound
+waits for it, so the landing it makes is what the run reports (ADR-0027).
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from helpers import a_run, awaited, git, subjects, workspaces
+from helpers import (
+    a_run,
+    awaited,
+    git,
+    stalling_ref_hook,
+    subjects,
+    until,
+    workspaces,
+)
 from waystation import (
     GitRepo,
     Integration,
@@ -35,24 +43,20 @@ TARGET = "feature"
 
 
 def _beating(pulse: Path) -> str:
-    """A shell loop that grows ``pulse`` for as long as it lives — 20 s at most."""
+    """A shell loop that grows ``pulse`` for as long as it lives.
+
+    Capped at 20 s so that, if a kill ever fails, the loop cannot outlive the
+    test run; a working kill ends it long before.
+    """
     beat = f"printf x >> '{pulse.as_posix()}'"
     return f"i=0; while [ $i -lt 400 ]; do {beat}; sleep 0.05; i=$((i+1)); done"
-
-
-async def _when(ready: Callable[[], bool], task: asyncio.Task[Any]) -> None:
-    """Wait until ``ready()`` — the stage is mid-git — failing if the run ends."""
-    while not ready():
-        if task.done():
-            pytest.fail(f"the run ended first: {task.result()!r}")
-        await asyncio.sleep(0.02)
 
 
 async def _fire_bound(
     clock: ManualClock, task: asyncio.Task[RunResult[Any]], started: Path
 ) -> RunResult[Any]:
     """Let the run reach its stalled git, then move the clock past the bound."""
-    await _when(started.exists, task)
+    await until(started.exists, task)
     clock.advance(1.0)
     return await task
 
@@ -117,49 +121,20 @@ async def test_an_integrate_bound_kills_the_landing_and_all_it_started(
     await _still(pulse)
 
 
-def _stalling_ref_hook(hooks: Path, started: Path, release: Path) -> None:
-    """A reference-transaction hook: the first swap waits for ``release``.
-
-    It runs inside ``update-ref`` while git holds the ref's lock, which is the
-    one moment a kill would leave a lock behind.
-    """
-    hooks.mkdir()
-    hook = hooks / "reference-transaction"
-    hook.write_bytes(
-        "\n".join(
-            [
-                "#!/bin/sh",
-                "cat > /dev/null",
-                f"if [ \"$1\" = prepared ] && [ ! -f '{started.as_posix()}' ]; then",
-                f"  : > '{started.as_posix()}'",
-                "  i=0",
-                f"  while [ ! -f '{release.as_posix()}' ] && [ $i -lt 400 ]; do",
-                "    sleep 0.05; i=$((i+1))",
-                "  done",
-                "fi",
-                "",
-            ]
-        ).encode()
-    )
-    hook.chmod(0o755)
-
-
 @pytest.mark.git
 async def test_a_bound_firing_mid_swap_lets_it_land_and_reports_the_landing(
     host_repo: Path, tmp_path: Path
 ) -> None:
     started, release = tmp_path / "started", tmp_path / "release"
-    _stalling_ref_hook(tmp_path / "hooks", started, release)
-    git(host_repo, "config", "core.hooksPath", (tmp_path / "hooks").as_posix())
+    hooks = stalling_ref_hook(tmp_path / "hooks", started, release)
+    git(host_repo, "config", "core.hooksPath", hooks.as_posix())
     spec = a_run(host_repo).integrate(TARGET).with_timeouts(Timeouts(integrate=1.0))
     clock = ManualClock()
 
     with use_clock(clock):
         task = asyncio.create_task(awaited(spec))
-        await _when(started.exists, task)
-        clock.advance(1.0)
-        for _ in range(10):  # let the bound's cancellation reach the swap
-            await asyncio.sleep(0)
+        await until(started.exists, task)
+        clock.advance(1.0)  # the bound runs out while the swap is under way
         release.touch()
         result = await task
 

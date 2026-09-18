@@ -39,6 +39,8 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `subjects(repo, revisions)` | the commit subjects in a range like `HEAD..waystation/<id>`, newest first — what a preserved or landed series holds |
 | `lifecycle(caplog)` | the records a run logged per lifecycle event (`waystation.run`), in order |
 | `workspaces(temp)` | the run workspaces left under a temp dir — assert `== []` to prove a run cleaned up |
+| `until(ready, task)` | wait until `ready()` holds — a run reached a known point, say a stalled git — failing at once if the run ends first |
+| `stalling_ref_hook(hooks, started, release)` | a `reference-transaction` hook that holds the first ref update git prepares until `release` exists; point a host at it with `core.hooksPath` |
 | `awaited(spec)` | a coroutine awaiting a `RunSpec`, for `asyncio.create_task` — reach for it when a test cancels or drives a run from outside |
 | `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series, `sandbox=` your own backend |
 | `ShellAgent(script)` | an agent that *is* a shell script — reach for it over `ScriptedAgent` when the test drives stderr, an exit code, or timing |

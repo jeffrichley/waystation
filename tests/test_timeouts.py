@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from helpers import awaited
+from helpers import awaited, until
 from waystation import (
     Flow,
     NoSandbox,
@@ -324,9 +324,10 @@ async def test_collect_bound_times_out(host_repo: Path) -> None:
         # The agent's completion grace parks and goes again, and collect's
         # git parks for 100 s: advance only once collect's own bound has
         # parked, whatever order the others came and went in.
-        while not any(due <= clock.monotonic() + 1.0 for due, _ in clock._waiters):
-            assert not task.done(), task.result()
-            await asyncio.sleep(0.01)
+        await until(
+            lambda: any(due <= clock.monotonic() + 1.0 for due, _ in clock._waiters),
+            task,
+        )
         clock.advance(1.0)
         result = await task
     assert isinstance(result, RunFailed)

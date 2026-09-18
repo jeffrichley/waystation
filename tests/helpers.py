@@ -9,12 +9,22 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from waystation import ScriptedAgent
+from waystation import (
+    Flow,
+    NoSandbox,
+    RunSpec,
+    ScriptedAgent,
+    ScriptedCommit,
+    Summary,
+)
 
-__all__ = ["OK_OUTCOME", "git", "init_host_repo", "sh"]
+__all__ = ["OK_OUTCOME", "PROMPT", "a_run", "git", "init_host_repo", "sh"]
 
 OK_OUTCOME = {"summary": "ok"}
 """The Outcome a scripted agent reports when the test doesn't care what it says."""
+
+PROMPT = "Do the thing.\nWith detail on a second line."
+"""A prompt with a second line, so a test can prove the body stayed unlogged."""
 
 
 def git(repo: Path, *args: str) -> str:
@@ -49,3 +59,16 @@ def init_host_repo(root: Path) -> Path:
 def sh() -> str:
     """The POSIX sh ``ScriptedAgent`` found on this host (Git Bash on Windows)."""
     return str(ScriptedAgent().command("", {}).argv[0])
+
+
+def a_run(repo: Path, prompt: str | Path = PROMPT) -> RunSpec[Summary]:
+    """A run that says one line, makes one commit, and reports an Outcome."""
+    return Flow(
+        repo,
+        agent=ScriptedAgent(
+            lines=["working"],
+            outcome=OK_OUTCOME,
+            commits=[ScriptedCommit("add a file", {"a.txt": "x"})],
+        ),
+        sandbox=NoSandbox(),
+    ).run(prompt)

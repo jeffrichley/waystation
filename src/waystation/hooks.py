@@ -37,6 +37,7 @@ class RunState:
     run_id: str
     name: str | None
     repo: Path
+    prompt: str = ""
     base_sha: str | None = None
     sandbox: Sandbox | None = None
     log: RunLoggerAdapter = field(init=False)
@@ -72,6 +73,11 @@ class RunContext:
     def repo(self) -> Path:
         """The host repo the run targets."""
         return self._state.repo
+
+    @property
+    def prompt(self) -> str:
+        """The prompt handed to the agent, read from disk if it was a path."""
+        return self._state.prompt
 
     @property
     def base_sha(self) -> str | None:

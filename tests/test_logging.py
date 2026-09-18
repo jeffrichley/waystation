@@ -12,15 +12,10 @@ import pytest
 from rich.console import Console
 from rich.logging import RichHandler
 
+from helpers import PROMPT, a_run
 from waystation import (
     CommandFailed,
-    Flow,
-    NoSandbox,
-    RunSpec,
     RunSucceeded,
-    ScriptedAgent,
-    ScriptedCommit,
-    Summary,
     configure_logging,
 )
 from waystation.agents.outcome import OUTCOME_MARKER
@@ -120,22 +115,6 @@ def test_configure_logging_writes_the_run_tag_to_stderr_only(
     assert captured.out == ""
     assert "hello" in captured.err
     assert "0badcafe" in captured.err
-
-
-PROMPT = "Do the thing.\nWith detail on a second line."
-
-
-def a_run(repo: Path, prompt: str = PROMPT) -> RunSpec[Summary]:
-    """A run that says one line, makes one commit, and reports an Outcome."""
-    return Flow(
-        repo,
-        agent=ScriptedAgent(
-            lines=["working"],
-            outcome={"summary": "ok"},
-            commits=[ScriptedCommit("add a file", {"a.txt": "x"})],
-        ),
-        sandbox=NoSandbox(),
-    ).run(prompt)
 
 
 def test_importing_waystation_installs_no_handler_of_its_own() -> None:

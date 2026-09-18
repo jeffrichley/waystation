@@ -74,6 +74,9 @@ logging.getLogger(PACKAGE).addHandler(logging.NullHandler())
 RUN = tagged_logger(f"{PACKAGE}.run")
 """One INFO line per lifecycle event of a run."""
 
+AGENT = tagged_logger(f"{PACKAGE}.agent")
+"""An agent provider's own lines — which credential its preflight found, at INFO."""
+
 AGENT_OUTPUT = tagged_logger(f"{PACKAGE}.agent.output")
 """Every line the agent emits, at DEBUG: an N-way fan-out is unreadable at INFO."""
 

@@ -122,23 +122,6 @@ async def test_a_conflict_leaves_the_host_as_it_was(host_repo: Path) -> None:
     assert after == before
 
 
-async def test_a_conflict_ends_the_run_without_firing_integrated(
-    host_repo: Path,
-) -> None:
-    commit_on(host_repo, TARGET, {"shared.txt": "target\n"})
-    fired: list[str] = []
-
-    result = await (
-        a_run(host_repo, commits=CLAIMS_SHARED)
-        .integrate(TARGET)
-        .on_integrated(lambda ctx, report: fired.append("integrated"))
-        .on_run_end(lambda ctx, result: fired.append(type(result).__name__))
-    )
-
-    assert isinstance(result, RunConflicted)
-    assert fired == ["RunConflicted"]
-
-
 # Claims shared.txt, then gives it back: patch by patch the first commit
 # conflicts, but merged as a whole the series changes nothing there.
 GIVES_BACK = (

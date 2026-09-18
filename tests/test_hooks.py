@@ -571,7 +571,7 @@ async def test_integrated_fires_only_when_integration_lands(host_repo: Path) -> 
     assert isinstance(unintegrated, RunSucceeded)
     assert "integrated" not in no_integration.names
     assert no_integration.args("run_end") == [unintegrated]
-    assert not isinstance(collided, RunSucceeded)
+    assert isinstance(collided, RunConflicted)
     assert "integrated" not in conflicting.names
     assert conflicting.args("run_end") == [collided]
 

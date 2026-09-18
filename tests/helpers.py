@@ -44,6 +44,7 @@ __all__ = [
     "awaited",
     "commit_on",
     "git",
+    "host_state",
     "init_host_repo",
     "lifecycle",
     "sh",
@@ -81,6 +82,20 @@ def git(repo: Path, *args: str) -> str:
 def subjects(repo: Path, revisions: str) -> list[str]:
     """The subject of each commit in ``revisions`` (``base..branch``), newest first."""
     return git(repo, "log", "--format=%s", revisions).splitlines()
+
+
+def host_state(repo: Path) -> dict[str, object]:
+    """What a landing must never touch: refs, HEAD, the index and the tree."""
+    return {
+        "refs": git(repo, "for-each-ref", "--format=%(refname) %(objectname)"),
+        "head": git(repo, "symbolic-ref", "HEAD"),
+        "index": (repo / ".git" / "index").read_bytes(),
+        "tree": {
+            path.relative_to(repo).as_posix(): path.read_bytes()
+            for path in repo.rglob("*")
+            if path.is_file() and path.relative_to(repo).parts[0] != ".git"
+        },
+    }
 
 
 def commit_on(

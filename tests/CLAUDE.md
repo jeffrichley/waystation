@@ -33,6 +33,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | Helper | Gives you |
 | --- | --- |
 | `git(repo, *args)` | run git in `repo`, stdout stripped, raises on non-zero |
+| `commit_on(repo, branch, files)` | a commit on `branch` (made at HEAD if missing) with the checkout put back — a target that moved, or a range for `PatchSeries.from_range`; returns the tip |
 | `init_host_repo(root)` | what `host_repo` is built from — call it directly only for a *second* repo, or one outside `tmp_path` |
 | `sh()` | the POSIX sh on this host (Git Bash on Windows) |
 | `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series |

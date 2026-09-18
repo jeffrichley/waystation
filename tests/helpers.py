@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,7 @@ __all__ = [
     "PROMPT",
     "ShellAgent",
     "a_run",
+    "commit_on",
     "git",
     "init_host_repo",
     "sh",
@@ -63,6 +64,29 @@ def git(repo: Path, *args: str) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def commit_on(
+    repo: Path,
+    branch: str,
+    files: Mapping[str, str],
+    *,
+    message: str | None = None,
+) -> str:
+    """Commit ``files`` on ``branch`` (made at HEAD if missing); return its tip.
+
+    The checkout comes back to the branch it was on. Contents are written as
+    bytes, so a line ending is exactly what the test wrote, on every host.
+    """
+    home = git(repo, "symbolic-ref", "--short", "HEAD")
+    exists = git(repo, "branch", "--list", branch) != ""
+    git(repo, "checkout", "-q", *(() if exists else ("-b",)), branch)
+    for path, text in files.items():
+        (repo / path).write_bytes(text.encode())
+    git(repo, "add", *files)
+    git(repo, "commit", "-q", "-m", message or f"outside: {', '.join(files)}")
+    git(repo, "checkout", "-q", home)
+    return git(repo, "rev-parse", branch)
 
 
 def init_host_repo(root: Path) -> Path:

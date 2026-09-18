@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import a_run, git
+from helpers import a_run, commit_on, git
 from waystation import (
     CommandFailed,
     Integration,
@@ -33,23 +33,6 @@ from waystation.integration import (
 pytestmark = pytest.mark.git
 
 TARGET = "agents/batch"
-
-
-def commit_on(repo: Path, branch: str, files: Mapping[str, str]) -> str:
-    """Commit ``files`` on ``branch`` (made at HEAD if missing); return its tip.
-
-    The host's checkout comes back to where it was. Bytes are written as-is, so
-    a line ending never differs between the host and the agent's series.
-    """
-    home = git(repo, "symbolic-ref", "--short", "HEAD")
-    exists = git(repo, "branch", "--list", branch) != ""
-    git(repo, "checkout", *(() if exists else ("-b",)), branch)
-    for path, text in files.items():
-        (repo / path).write_bytes(text.encode())
-    git(repo, "add", *files)
-    git(repo, "commit", "-m", f"outside: {', '.join(files)}")
-    git(repo, "checkout", home)
-    return git(repo, "rev-parse", branch)
 
 
 # Patch 0 lands cleanly; patch 1 adds the file the target already added.

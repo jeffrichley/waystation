@@ -10,7 +10,7 @@ from typing import Any, override
 import pytest
 from pydantic import BaseModel
 
-from helpers import OK_OUTCOME_LINE, OUTCOME, ShellAgent, git, sh
+from helpers import OK_OUTCOME_LINE, OUTCOME, ShellAgent, commit_on, git, sh
 from waystation import (
     AgentExit,
     AgentExited,
@@ -548,11 +548,7 @@ async def test_raising_integrated_hook_keeps_landed_series_unpreserved(
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_integrated_fires_only_when_integration_lands(host_repo: Path) -> None:
-    git(host_repo, "switch", "-q", "-c", "agents/taken")
-    (host_repo / "clash.txt").write_bytes(b"theirs\n")
-    git(host_repo, "add", "clash.txt")
-    git(host_repo, "commit", "-qm", "theirs")
-    git(host_repo, "switch", "-q", "-")
+    commit_on(host_repo, "agents/taken", {"clash.txt": "theirs\n"})
     agent = ScriptedAgent(
         commits=(ScriptedCommit(message="ours", files={"clash.txt": "ours\n"}),),
         outcome=Answer(summary="ok"),

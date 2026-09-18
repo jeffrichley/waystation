@@ -601,10 +601,15 @@ class RunSpec[OutcomeT]:
                 sandbox: Sandbox = await self._bounded(
                     record, "sandbox", "sandbox", self.timeouts.sandbox, _enter
                 )
-            except BaseException as exc:
-                await record.uninterrupted(
-                    "sandbox", cm.__aexit__(type(exc), exc, exc.__traceback__)
-                )
+            except BaseException:
+                # A start that failed cleans up after itself: ``async with``
+                # never exits a context it did not enter, and exiting a
+                # generator that raised fails with a RuntimeError of its own.
+                # Only a start its bound cancelled before it ran leaves the
+                # workspace behind, so no sandbox ever owned it.
+                with contextlib.suppress(OSError):
+                    if workspace.path.exists():
+                        remove_workspace(workspace.path)
                 raise
         try:
             record.surface()  # held while the sandbox started

@@ -172,10 +172,9 @@ def configure_logging(
     handler writes is the host's business.
     """
     logger = logging.getLogger(PACKAGE)
-    ours = [h for h in logger.handlers if isinstance(h, _WaystationHandler)]
     if console is None:
-        console = ours[0].console if ours else Console(stderr=True)
-    for handler in ours:
+        console = configured_console() or Console(stderr=True)
+    for handler in [h for h in logger.handlers if isinstance(h, _WaystationHandler)]:
         logger.removeHandler(handler)
     installed = _WaystationHandler(
         console=console, show_path=False, rich_tracebacks=True
@@ -186,3 +185,15 @@ def configure_logging(
     logger.addHandler(installed)
     logger.setLevel(numeric)
     return console
+
+
+def configured_console() -> Console | None:
+    """The console ``configure_logging`` installed, or ``None`` before it runs.
+
+    A live display has to draw on this one: log lines printed through any
+    other console would land in the middle of the display.
+    """
+    for handler in logging.getLogger(PACKAGE).handlers:
+        if isinstance(handler, _WaystationHandler):
+            return handler.console
+    return None

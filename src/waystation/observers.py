@@ -16,27 +16,42 @@ import json
 import logging
 import threading
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any, Concatenate, NamedTuple, cast, override
 
 from pydantic_core import to_jsonable_python
+from rich import box
+from rich.console import Console
+from rich.live import Live
+from rich.table import Table
+from rich.text import Text
 
-from waystation.agents.protocol import AgentLine
+from waystation.agents.protocol import AgentLine, AgentText
+from waystation.clock import Clock, get_clock
 from waystation.hooks import HookBundle, HookName, RunContext
-from waystation.observability import AGENT_OUTPUT, PACKAGE, RUN, tag, tagged_logger
+from waystation.observability import (
+    AGENT_OUTPUT,
+    PACKAGE,
+    RUN,
+    configured_console,
+    tag,
+    tagged_logger,
+)
 from waystation.results import (
     AgentExit,
     IntegrationReport,
     RunConflicted,
     RunFailed,
     RunResult,
+    RunSucceeded,
     Stage,
     TimedOut,
 )
 
-__all__ = ["EventLog", "RunLog", "RunLogFiles"]
+__all__ = ["Dashboard", "EventLog", "RunLog", "RunLogFiles"]
 
 logger = tagged_logger(PACKAGE)
 
@@ -458,3 +473,200 @@ def _fields(value: object) -> dict[str, Any]:
     """
     dumped = to_jsonable_python(value, fallback=repr, serialize_unknown=True)
     return dumped if isinstance(dumped, dict) else {"value": dumped}
+
+
+@dataclass(slots=True)
+class _Row:
+    """One run as the dashboard shows it; hooks write it, the display reads it."""
+
+    label: str
+    clock: Clock
+    started: float
+    stage: Stage = "workspace"
+    said: str = ""
+    cost_usd: float | None = None
+    ended: float | None = None
+    glyph: Text | None = None
+
+    def elapsed(self) -> float:
+        # The clock the run started under, not whatever the reading thread
+        # has: the display refreshes from a thread no context reaches.
+        until = self.clock.monotonic() if self.ended is None else self.ended
+        return until - self.started
+
+
+class Dashboard(HookBundle):
+    """A live table of runs, one row each, drawn beneath the scrolling log.
+
+    Open it around the runs it watches and register it like any bundle::
+
+        async with Dashboard() as dashboard:
+            await flow.run(prompt).hooks(dashboard)
+
+    A row shows the run's name (its id when unnamed), the stage it is in, how
+    long it has been going, the last thing the agent said, what it cost once
+    the agent reports usage, and a glyph for its result. What the agent said
+    is the text its provider parsed out of a line, so a raw JSON event or a
+    stderr line never lands there. Rows stay once their run ends, so a
+    finished batch reads back whole; a run still going when the dashboard
+    closes (a cancelled run fires no ``run_end``) is marked as having no
+    result.
+
+    Without a ``console`` it draws on the one ``configure_logging`` installed,
+    so log lines print above the table rather than through it.
+    """
+
+    def __init__(self, console: Console | None = None) -> None:
+        self.console = console
+        self._rows: dict[str, _Row] = {}
+        # Hooks add rows on the event loop while the display reads them from
+        # its refresh thread.
+        self._lock = threading.Lock()
+        self._live: Live | None = None
+
+    async def __aenter__(self) -> Dashboard:
+        self._start()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        # A cancelled run fires no run_end (ADR-0017), so a row still going
+        # now never will be: stop its clock rather than leave it ticking.
+        with self._lock:
+            rows = list(self._rows.values())
+        for row in rows:
+            if row.glyph is None:
+                row.ended = row.clock.monotonic()
+                row.glyph = _NO_RESULT
+        self._stop()
+
+    # Guarded like the hooks: a terminal that went away mid-batch costs a log
+    # line, never the work or the exception the script is already raising.
+    @_safely
+    def _start(self) -> None:
+        console = self.console or configured_console() or Console(stderr=True)
+        # stdout stays the script's: redirecting it onto a stderr console
+        # would move a script's printed results out of a pipe.
+        self._live = Live(self, console=console, redirect_stdout=False)
+        self._live.start(refresh=True)
+
+    @_safely
+    def _stop(self) -> None:
+        live, self._live = self._live, None
+        if live is not None:
+            live.stop()
+
+    @override
+    @_safely
+    def on_run_start(self, ctx: RunContext) -> None:
+        clock = get_clock()
+        row = _Row(label=ctx.name or ctx.run_id, clock=clock, started=clock.monotonic())
+        with self._lock:
+            self._rows[ctx.run_id] = row
+
+    @override
+    @_safely
+    def on_workspace_ready(self, ctx: RunContext) -> None:
+        self._move(ctx, "sandbox")
+
+    @override
+    @_safely
+    def on_sandbox_ready(self, ctx: RunContext) -> None:
+        self._move(ctx, "agent")
+
+    @override
+    @_safely
+    def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
+        row = self._rows.get(ctx.run_id)
+        said = _said(line)
+        if row is not None and said is not None:
+            row.said = said
+
+    @override
+    @_safely
+    def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> None:
+        # Collect follows the agent, and integrate starts with no hook of its
+        # own, so this is as far as the dashboard can see until it lands.
+        self._move(ctx, "collect")
+        row = self._rows.get(ctx.run_id)
+        if row is not None and exit.usage is not None:
+            row.cost_usd = exit.usage.cost_usd
+
+    @override
+    @_safely
+    def on_integrated(self, ctx: RunContext, report: IntegrationReport) -> None:
+        self._move(ctx, "integrate")
+
+    @override
+    @_safely
+    def on_run_end(self, ctx: RunContext, result: RunResult[Any]) -> None:
+        row = self._rows.get(ctx.run_id)
+        if row is None:
+            return
+        if isinstance(result, RunFailed):
+            row.stage = result.stage
+        elif isinstance(result, RunConflicted):
+            row.stage = "integrate"
+        row.ended = row.clock.monotonic()
+        row.glyph = _GLYPHS[type(result)]
+
+    def _move(self, ctx: RunContext, stage: Stage) -> None:
+        row = self._rows.get(ctx.run_id)
+        if row is not None:
+            row.stage = stage
+
+    def __rich__(self) -> Table:
+        """The table as it stands, so ``console.print(dashboard)`` works too."""
+        table = Table(box=box.SIMPLE_HEAD)
+        table.add_column("run", no_wrap=True)
+        table.add_column("stage", no_wrap=True)
+        table.add_column("elapsed", justify="right", no_wrap=True)
+        table.add_column("last line", no_wrap=True, overflow="ellipsis")
+        table.add_column("cost", justify="right", no_wrap=True)
+        table.add_column("", no_wrap=True)
+        with self._lock:
+            rows = list(self._rows.values())
+        for row in rows:
+            table.add_row(
+                Text(row.label),
+                row.stage,
+                _clock_face(row.elapsed()),
+                # Text, never markup: an agent's "[/]" is something it said.
+                Text(row.said),
+                "" if row.cost_usd is None else f"${row.cost_usd:.2f}",
+                row.glyph or "",
+            )
+        return table
+
+
+_GLYPHS: Mapping[type, Text] = {
+    RunSucceeded: Text("✓", style="green"),
+    RunConflicted: Text("!", style="bold yellow"),
+    RunFailed: Text("✗", style="bold red"),
+}
+_NO_RESULT = Text("–", style="dim")
+
+
+def _said(line: AgentLine) -> str | None:
+    """The last thing a line said, if its provider found any text in it.
+
+    Only what the provider parsed counts: a raw line may be a JSON event or a
+    stderr diagnostic, and neither is something the agent said.
+    """
+    said = None
+    for event in line.events:
+        if isinstance(event, AgentText):
+            spoken = [part.strip() for part in event.text.splitlines() if part.strip()]
+            if spoken:
+                said = spoken[-1]
+    return said
+
+
+def _clock_face(seconds: float) -> str:
+    """Elapsed time the way a person reads it: ``4.2s``, ``1m05s``, ``2h07m``."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(int(seconds), 60)
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"

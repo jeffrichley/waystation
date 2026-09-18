@@ -22,6 +22,7 @@ from waystation import (
     RunSucceeded,
     ScriptedAgent,
     configure_logging,
+    observers,
 )
 from waystation.agents import AgentLine
 from waystation.hooks import RunContext, RunState
@@ -255,6 +256,21 @@ async def test_a_broken_observer_logs_at_error_and_leaves_the_run_alone(
     errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
     assert any("RunLogFiles" in message for message in errors)
     assert any("EventLog" in message for message in errors)
+
+
+# RunLog is the one left out: the orchestrator calls it directly, it is never
+# registered, so it cannot fail a run as a hook.
+SHIPPED = [getattr(observers, name) for name in observers.__all__ if name != "RunLog"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("observer", SHIPPED, ids=lambda cls: cls.__name__)
+def test_every_hook_a_shipped_observer_defines_is_guarded(observer: type) -> None:
+    """A forgotten ``_safely`` fails the run the day that hook raises (ADR-0026)."""
+    hooks = {name: fn for name, fn in vars(observer).items() if name.startswith("on_")}
+    assert hooks, f"{observer.__name__} defines no hooks"
+    unguarded = [name for name, fn in hooks.items() if not hasattr(fn, "__wrapped__")]
+    assert unguarded == []
 
 
 @pytest.mark.git

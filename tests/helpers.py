@@ -31,6 +31,7 @@ from waystation.agents import (
     AgentCommand,
     AgentEvent,
     AgentText,
+    AgentUsage,
     OutcomeReported,
 )
 
@@ -39,6 +40,7 @@ __all__ = [
     "OK_OUTCOME_LINE",
     "OUTCOME",
     "PROMPT",
+    "USAGE",
     "ShellAgent",
     "a_run",
     "awaited",
@@ -62,6 +64,9 @@ OUTCOME = "OUTCOME "
 
 OK_OUTCOME_LINE = OUTCOME + '{"summary": "ok"}'
 """A whole reporting line, for a script that only needs to finish cleanly."""
+
+USAGE = "USAGE "
+"""The marker line ``ShellAgent`` reports token usage on: ``AgentUsage`` as JSON."""
 
 PROMPT = "Do the thing.\nWith detail on a second line."
 """A prompt with a second line, so a test can prove the body stayed unlogged."""
@@ -229,6 +234,8 @@ async def awaited(spec: RunSpec[Any]) -> RunResult[Any]:
 class ShellAgent:
     """An agent that is a shell script; an ``OUTCOME <json>`` line reports.
 
+    A ``USAGE <json>`` line reports token usage, as an ``AgentUsage``.
+
     Reach for this over ``ScriptedAgent`` when the test needs to control the
     script itself — writing to stderr, say, or exiting mid-stream.
     """
@@ -244,4 +251,6 @@ class ShellAgent:
     def parse(self, line: str) -> Sequence[AgentEvent]:
         if line.startswith(OUTCOME):
             return (OutcomeReported(json.loads(line.removeprefix(OUTCOME))),)
+        if line.startswith(USAGE):
+            return (AgentUsage(**json.loads(line.removeprefix(USAGE))),)
         return (AgentText(line),) if line else ()

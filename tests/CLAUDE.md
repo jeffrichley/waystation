@@ -48,6 +48,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `PROMPT` | the prompt `a_run` uses; has a second line, so a test can prove the body stayed unlogged |
 | `OK_OUTCOME` | the Outcome a scripted agent reports when the test doesn't care |
 | `OUTCOME` / `OK_OUTCOME_LINE` | the marker prefix `ShellAgent` parses, and a ready-made reporting line |
+| `USAGE` | the prefix of a line `ShellAgent` parses into an `AgentUsage` — `AgentUsage`'s fields as JSON — for a test about reported token usage |
 
 Test modules import helpers as a top-level module — `from helpers import git` — because pytest puts the test file's directory on `sys.path`. `mypy_path` in `pyproject.toml` includes `tests` so the type checker resolves it the same way.
 

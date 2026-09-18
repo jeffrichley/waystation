@@ -23,6 +23,7 @@ from waystation.errors import StageError
 from waystation.results import (
     AgentExit,
     AgentExited,
+    AgentUsage,
     OutcomeInvalid,
     OutcomeMissing,
     TimedOut,
@@ -73,6 +74,8 @@ async def run_agent[OutcomeT](
     adapter = TypeAdapter(outcome_type)
     last_valid: OutcomeT | None = None
     last_invalid: tuple[Any, ValidationError] | None = None
+    # Usage is cumulative per report, so the last one is the run's total.
+    last_usage: AgentUsage | None = None
     started = time.perf_counter()
     clock = get_clock()
     silence_task: asyncio.Task[None] | None = None
@@ -88,6 +91,14 @@ async def run_agent[OutcomeT](
     # stdout and stderr are read concurrently; lines are delivered one at a time.
     delivering = asyncio.Lock()
     t_origin = clock.monotonic()
+
+    def _agent_exit(exit_code: int, *, hanging: bool = False) -> AgentExit:
+        return AgentExit(
+            exit_code=exit_code,
+            elapsed=time.perf_counter() - started,
+            hanging=hanging,
+            usage=last_usage,
+        )
 
     def _cancel(task: asyncio.Task[Any] | None) -> None:
         if task is not None and not task.done():
@@ -166,10 +177,12 @@ async def run_agent[OutcomeT](
             await returned
 
     async def _stdout_line(line: str) -> None:
-        nonlocal last_valid, last_invalid, grace_left
+        nonlocal last_valid, last_invalid, grace_left, last_usage
         events = tuple(provider.parse(line))
         for event in events:
-            if isinstance(event, OutcomeReported):
+            if isinstance(event, AgentUsage):
+                last_usage = event
+            elif isinstance(event, OutcomeReported):
                 try:
                     last_valid = adapter.validate_python(event.raw)
                     last_invalid = None
@@ -230,15 +243,7 @@ async def run_agent[OutcomeT](
             with contextlib.suppress(asyncio.CancelledError):
                 await exec_task
             if fired.hanging and last_valid is not None:
-                elapsed = time.perf_counter() - started
-                return (
-                    AgentExit(
-                        exit_code=-1,
-                        elapsed=elapsed,
-                        hanging=True,
-                    ),
-                    last_valid,
-                )
+                return _agent_exit(-1, hanging=True), last_valid
             raise StageError(
                 "agent",
                 TimedOut(
@@ -246,6 +251,9 @@ async def run_agent[OutcomeT](
                     limit=fired.limit,
                     elapsed=fired.elapsed,
                 ),
+                # No exit code, but what the agent spent before it was
+                # stopped is still worth reporting.
+                agent=_agent_exit(-1),
             )
         if exec_task in done:
             result = exec_task.result()
@@ -265,12 +273,7 @@ async def run_agent[OutcomeT](
                     await task
 
     assert result is not None
-    elapsed = time.perf_counter() - started
-    agent_exit = AgentExit(
-        exit_code=result.exit_code,
-        elapsed=elapsed,
-        hanging=False,
-    )
+    agent_exit = _agent_exit(result.exit_code)
     if result.exit_code != 0:
         raise StageError(
             "agent",

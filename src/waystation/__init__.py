@@ -23,6 +23,7 @@ from waystation.integration import (
     integrate,
 )
 from waystation.observability import configure_logging
+from waystation.observers import EventLog, RunLogFiles
 from waystation.results import (
     AgentExit,
     AgentExited,
@@ -55,6 +56,7 @@ __all__ = [
     "AgentUsage",
     "CommandFailed",
     "Errored",
+    "EventLog",
     "ExecResult",
     "Failure",
     "Flow",
@@ -74,6 +76,7 @@ __all__ = [
     "Refused",
     "RunContext",
     "RunFailed",
+    "RunLogFiles",
     "RunSpec",
     "RunSucceeded",
     "Sandbox",

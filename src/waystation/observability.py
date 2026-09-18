@@ -136,6 +136,26 @@ class _WaystationHandler(RichHandler):
     """The one handler ``configure_logging`` owns, and the only one it replaces."""
 
 
+class _ConsoleLevel(logging.Filter):
+    """Holds the console to the level ``configure_logging`` was given.
+
+    A run-file observer turns the hierarchy down to DEBUG so the records it
+    wants exist to be written (ADR-0026). That must not start printing git
+    argv and every agent line to someone's terminal, so the console filters on
+    its own remembered level — while a logger the script tuned itself still
+    gets through, which is the whole point of per-logger tuning.
+    """
+
+    def __init__(self, level: int) -> None:
+        super().__init__()
+        self.level = level
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= self.level:
+            return True
+        return logging.getLogger(record.name).level != logging.NOTSET
+
+
 def configure_logging(
     level: int | str = "INFO", *, console: Console | None = None
 ) -> Console:
@@ -161,6 +181,8 @@ def configure_logging(
         console=console, show_path=False, rich_tracebacks=True
     )
     installed.setFormatter(_RunTagFormatter("%(message)s"))
+    numeric = level if isinstance(level, int) else logging.getLevelNamesMapping()[level]
+    installed.addFilter(_ConsoleLevel(numeric))
     logger.addHandler(installed)
-    logger.setLevel(level)
+    logger.setLevel(numeric)
     return console

@@ -6,15 +6,51 @@ helper can be called from a fixture, a test body, or another helper.
 
 from __future__ import annotations
 
+import json
 import subprocess
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from waystation import ScriptedAgent
+from waystation import (
+    Flow,
+    NoSandbox,
+    RunSpec,
+    ScriptedAgent,
+    ScriptedCommit,
+    Summary,
+)
+from waystation.agents import (
+    AgentCommand,
+    AgentEvent,
+    AgentText,
+    OutcomeReported,
+)
 
-__all__ = ["OK_OUTCOME", "git", "init_host_repo", "sh"]
+__all__ = [
+    "OK_OUTCOME",
+    "OK_OUTCOME_LINE",
+    "OUTCOME",
+    "PROMPT",
+    "ShellAgent",
+    "a_run",
+    "git",
+    "init_host_repo",
+    "sh",
+]
 
 OK_OUTCOME = {"summary": "ok"}
 """The Outcome a scripted agent reports when the test doesn't care what it says."""
+
+OUTCOME = "OUTCOME "
+"""The marker line ``ShellAgent`` reports its Outcome on."""
+
+OK_OUTCOME_LINE = OUTCOME + '{"summary": "ok"}'
+"""A whole reporting line, for a script that only needs to finish cleanly."""
+
+PROMPT = "Do the thing.\nWith detail on a second line."
+"""A prompt with a second line, so a test can prove the body stayed unlogged."""
 
 
 def git(repo: Path, *args: str) -> str:
@@ -49,3 +85,38 @@ def init_host_repo(root: Path) -> Path:
 def sh() -> str:
     """The POSIX sh ``ScriptedAgent`` found on this host (Git Bash on Windows)."""
     return str(ScriptedAgent().command("", {}).argv[0])
+
+
+def a_run(repo: Path, prompt: str | Path = PROMPT) -> RunSpec[Summary]:
+    """A run that says one line, makes one commit, and reports an Outcome."""
+    return Flow(
+        repo,
+        agent=ScriptedAgent(
+            lines=["working"],
+            outcome=OK_OUTCOME,
+            commits=[ScriptedCommit("add a file", {"a.txt": "x"})],
+        ),
+        sandbox=NoSandbox(),
+    ).run(prompt)
+
+
+@dataclass(frozen=True)
+class ShellAgent:
+    """An agent that is a shell script; an ``OUTCOME <json>`` line reports.
+
+    Reach for this over ``ScriptedAgent`` when the test needs to control the
+    script itself — writing to stderr, say, or exiting mid-stream.
+    """
+
+    script: str
+
+    def preflight(self) -> None:
+        return None
+
+    def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
+        return AgentCommand(argv=(sh(), "-c", self.script))
+
+    def parse(self, line: str) -> Sequence[AgentEvent]:
+        if line.startswith(OUTCOME):
+            return (OutcomeReported(json.loads(line.removeprefix(OUTCOME))),)
+        return (AgentText(line),) if line else ()

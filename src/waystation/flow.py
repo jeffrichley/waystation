@@ -406,7 +406,16 @@ class RunSpec[OutcomeT]:
     ) -> RunSucceeded[OutcomeT] | RunFailed:
         """Run the stages in order; each phase below owns its own stages."""
         try:
+            # run_start fires for every run, so a prompt file that cannot be
+            # read waits its turn: the run started, and then it failed.
+            prompt_error: StageError | None = None
+            try:
+                state.prompt = self._prompt_text()
+            except StageError as err:
+                prompt_error = err
             await self.hook_registry.fire("run_start", "workspace", ctx)
+            if prompt_error is not None:
+                raise prompt_error
             await self._preflight()
             workspace = await self._prepare(ctx, state, record)
             outcome = await self._in_sandbox(ctx, state, record, workspace)
@@ -421,6 +430,20 @@ class RunSpec[OutcomeT]:
         except Exception as exc:
             record.fail(_as_stage_error(record.stage, exc))
         return record.failed()
+
+    def _prompt_text(self) -> str:
+        """The prompt as text, whether the flow script gave a string or a path.
+
+        Resolved before ``run_start`` so every hook sees ``ctx.prompt``, but a
+        file that cannot be read still fails the agent stage: preparing the
+        agent's prompt is the agent's business, whenever it happens.
+        """
+        if not isinstance(self.prompt, Path):
+            return self.prompt
+        try:
+            return self.prompt.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise StageError("agent", Errored(exception=exc)) from exc
 
     async def _preflight(self) -> None:
         try:
@@ -494,10 +517,7 @@ class RunSpec[OutcomeT]:
     ) -> OutcomeT | None:
         """Agent stage: exec the provider's command, then ``agent_end``."""
         record.stage = "agent"
-        if isinstance(self.prompt, Path):
-            prompt_text = self.prompt.read_text(encoding="utf-8")
-        else:
-            prompt_text = self.prompt
+        prompt_text = ctx.prompt
         schema = TypeAdapter(self.outcome_type).json_schema()
         try:
             command = self.agent.command(prompt_text, schema)

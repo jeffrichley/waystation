@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, override
 
 import pytest
 from pydantic import BaseModel
 
-from helpers import git
+from helpers import OK_OUTCOME_LINE, OUTCOME, ShellAgent, git, sh
 from waystation import (
     AgentExit,
     AgentExited,
@@ -32,38 +29,15 @@ from waystation import (
     Timeouts,
 )
 from waystation.agents import (
-    AgentCommand,
-    AgentEvent,
     AgentLine,
     AgentText,
     OutcomeReported,
 )
 from waystation.clock import ManualClock, use_clock
 
-OUTCOME = "OUTCOME "
-OK_OUTCOME_LINE = OUTCOME + '{"summary": "ok"}'
-
 
 class Answer(BaseModel):
     summary: str
-
-
-@dataclass(frozen=True)
-class ShellAgent:
-    """An agent that is a shell script; an ``OUTCOME <json>`` line reports."""
-
-    script: str
-
-    def preflight(self) -> None:
-        return None
-
-    def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
-        return AgentCommand(argv=(sh(), "-c", self.script))
-
-    def parse(self, line: str) -> Sequence[AgentEvent]:
-        if line.startswith(OUTCOME):
-            return (OutcomeReported(json.loads(line.removeprefix(OUTCOME))),)
-        return (AgentText(line),) if line else ()
 
 
 async def elapse(clock: ManualClock, seconds: float) -> None:
@@ -73,11 +47,6 @@ async def elapse(clock: ManualClock, seconds: float) -> None:
     clock.advance(seconds)
     for _ in range(5):
         await asyncio.sleep(0)
-
-
-def sh() -> str:
-    """The POSIX sh ScriptedAgent found on this host."""
-    return str(ScriptedAgent().command("", {}).argv[0])
 
 
 def committed_then_reports(message: str) -> ShellAgent:

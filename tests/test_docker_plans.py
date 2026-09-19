@@ -188,6 +188,22 @@ def test_a_cancelled_exec_is_killed_by_a_second_exec_naming_its_group() -> None:
 
 
 @pytest.mark.unit
+def test_an_exec_and_its_kill_meet_in_an_order_that_cannot_miss() -> None:
+    # The docker tier runs these; on Windows CI this is all that holds them.
+    # The exec records its pid before it looks for the kill's mark, and the
+    # kill marks before it reads the pid, so whichever comes first, the other
+    # sees it. The exec becomes argv, keeping the pid, and the kill signals
+    # the negated pid: the whole group, not one process (ADR-0023).
+    wrapper = _exec("box", ["true"])[-3]
+    kill = plan_kill("box", "g1")[-1]
+
+    assert wrapper.index("$$ >") < wrapper.index("-e") < wrapper.index('exec "$@"')
+    assert wrapper.endswith('exec "$@"')
+    assert kill.index(": >") < kill.index("read")
+    assert 'kill -KILL "-$pid"' in kill
+
+
+@pytest.mark.unit
 def test_teardown_forces_removal_and_never_stops() -> None:
     # stop burns a 10 s grace on an idle PID 1; rm -f does not (ADR-0014).
     # -v takes anonymous volumes an image declares along with the container.

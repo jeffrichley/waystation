@@ -14,7 +14,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import pytest
 
@@ -38,7 +38,10 @@ from waystation import (
     RunContext,
     RunFailed,
     RunSucceeded,
+    Sandbox,
     ScriptedAgent,
+    ScriptedCommit,
+    Summary,
     TimedOut,
     Timeouts,
     prepare_workspace,
@@ -125,15 +128,6 @@ def orphan() -> Iterator[Callable[[str], str]]:
     yield make
     if made:
         subprocess.run(["docker", "rm", "-f", *made], check=False, capture_output=True)
-
-
-async def _once(ready: asyncio.Event, task: asyncio.Task[Any]) -> None:
-    """Wait for ``ready``, failing at once if ``task`` ends first."""
-    waiter = asyncio.create_task(ready.wait())
-    await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
-    waiter.cancel()
-    if not ready.is_set():
-        pytest.fail(f"it ended first: {task.result()!r}")
 
 
 def _docker_calls(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -315,12 +309,13 @@ async def test_a_copy_runs_again_over_its_own_work_in_the_container(
 
 
 @pytest.mark.docker
+@pytest.mark.parametrize("insistent", [False, True])
 async def test_a_cancelled_exec_kills_all_it_started_before_the_cancel_completes(
-    host_repo: Path, image: str
+    host_repo: Path, image: str, insistent: bool
 ) -> None:
     # Killing the docker client leaves its process running in the container:
     # a lingering child would keep writing into the workspace collect reads
-    # (ADR-0023).
+    # (ADR-0023). Cancelled again and again, the kill still runs to its end.
     ws = await prepare_workspace(host_repo)
     started = asyncio.Event()
     linger = "( while :; do printf x >> /tmp/pulse; sleep 0.05; done ) & "
@@ -332,8 +327,11 @@ async def test_a_cancelled_exec_kills_all_it_started_before_the_cancel_completes
                 on_stdout=lambda line: started.set(),
             )
         )
-        await _once(started, running)
+        await until(started.is_set, running)
         running.cancel()
+        while insistent and not running.done():
+            await asyncio.sleep(0.02)
+            running.cancel()
         with pytest.raises(asyncio.CancelledError):
             await running
         pulse = "wc -c < /tmp/pulse; sleep 0.3; wc -c < /tmp/pulse"
@@ -389,20 +387,43 @@ def test_an_exec_whose_kill_came_first_never_starts(
 
 @pytest.mark.docker
 @pytest.mark.parametrize("bound", ["agent_silence", "agent_wall"])
-async def test_a_silent_agent_in_docker_is_stopped_by_its_bound(
+async def test_a_bound_in_docker_keeps_the_agents_work_and_stops_its_child(
     host_repo: Path, image: str, bound: Literal["agent_silence", "agent_wall"]
 ) -> None:
+    # As on NoSandbox: the agent commits, then goes quiet with a child still
+    # writing. The bound fails the run, the commit is preserved, and the child
+    # is gone before collect reads the workspace (ADR-0023).
     clock = ManualClock()
     flow = Flow(
         host_repo,
-        agent=ScriptedAgent(outcome=OK_OUTCOME, delay=600, shell="sh"),
+        agent=ScriptedAgent(
+            commits=(ScriptedCommit(message="wip", files={"a.txt": "a"}),),
+            linger=True,
+            linger_touch="/tmp/pulse",
+            shell="sh",
+        ),
         sandbox=DockerSandbox(image),
         timeouts=Timeouts(**{bound: 5.0}),
     )
+    boxes: list[Sandbox] = []
+    sizes: list[str] = []
 
+    async def pulse(ctx: RunContext, exit: AgentExit) -> None:
+        twice = "wc -c < /tmp/pulse; sleep 0.3; wc -c < /tmp/pulse"
+        sizes.extend((await ctx.sandbox.exec(["sh", "-c", twice])).stdout.split())
+
+    def keep(ctx: RunContext) -> None:
+        boxes.append(ctx.sandbox)
+
+    spec = flow.run(PROMPT, outcome=Summary).on_sandbox_ready(keep).on_agent_end(pulse)
     with use_clock(clock):
-        task = asyncio.create_task(awaited(flow.run(PROMPT)))
-        await until(lambda: bool(clock._waiters), task)
+        task = asyncio.create_task(awaited(spec))
+        await until(lambda: bool(boxes and clock._waiters), task)
+        # The pulse starts once the commit has landed. Asking the sandbox is
+        # an exec, but an awaited one: it never blocks the run it waits on.
+        while (await boxes[0].exec(["test", "-e", "/tmp/pulse"])).exit_code:
+            if task.done():
+                pytest.fail(f"the run ended first: {task.result()!r}")
         clock.advance(5.0)
         result = await task
 
@@ -410,6 +431,9 @@ async def test_a_silent_agent_in_docker_is_stopped_by_its_bound(
     assert result.stage == "agent"
     assert isinstance(result.failure, TimedOut)
     assert result.failure.bound == bound
+    assert subjects(host_repo, f"HEAD..{result.preserved}") == ["wip"]
+    assert len(sizes) == 2
+    assert sizes[0] == sizes[1]
     assert _labelled(result.run_id) == []
 
 

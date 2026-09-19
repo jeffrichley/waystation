@@ -178,9 +178,10 @@ class DockerSandbox:
         """
         found = await _docker_or_raise(plan_list(run_id))
         ids = found.stdout.split()
-        if ids:
-            await _docker_or_raise(plan_destroy(*ids))
-        return len(ids)
+        if not ids:
+            return 0
+        removed = await _docker_or_raise(plan_destroy(*ids))
+        return len(removed.stdout.split())  # docker names each one it removed
 
     @asynccontextmanager
     async def start(

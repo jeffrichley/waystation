@@ -19,6 +19,7 @@ __all__ = [
     "plan_destroy",
     "plan_exec",
     "plan_inspect",
+    "plan_kill",
     "plan_labelled",
     "plan_ping",
     "resolve_transport",
@@ -31,6 +32,9 @@ WORKSPACE = "/workspace"
 
 RUN_ID_LABEL = "waystation.run-id"
 """Every sandbox carries it, so an orphan is findable by run (ADR-0014)."""
+
+_GROUPS = "/tmp/waystation-exec-"
+"""Where each exec records its process group, by the group's name."""
 
 
 def resolve_transport(
@@ -95,8 +99,19 @@ def plan_exec(
     *,
     env: Mapping[str, str],
     stdin: bool,
+    group: str,
 ) -> tuple[str, ...]:
-    """``docker exec`` of ``argv`` in the workspace root, stdin open if given."""
+    """``docker exec`` of ``argv`` in the workspace root, stdin open if given.
+
+    Docker starts every exec as the leader of a session of its own, so the
+    pid of the ``sh`` it starts here names the exec's process group. The sh
+    records it under ``group``, then becomes ``argv`` — which it takes as
+    arguments, never as script text — so everything ``argv`` starts is in
+    that group for ``plan_kill`` to kill (ADR-0023). A group already marked
+    killed starts nothing, so a kill that beats the record still lands.
+    """
+    record = f"{_GROUPS}{group}"
+    wrapper = f'echo $$ > {record}.pid && [ ! -e {record}.killed ] && exec "$@"'
     return (
         "docker",
         "exec",
@@ -105,8 +120,30 @@ def plan_exec(
         WORKSPACE,
         *_env_flags(env),
         container,
+        "sh",
+        "-c",
+        wrapper,
+        "waystation",
         *argv,
     )
+
+
+def plan_kill(container: str, group: str) -> tuple[str, ...]:
+    """A second ``docker exec`` that SIGKILLs ``group``, a cancelled exec's.
+
+    Killing the ``docker exec`` client leaves its process running in the
+    container (ADR-0023). This marks the group killed before it reads the
+    group's pid, and ``plan_exec``'s sh records the pid before it looks for
+    the mark: whichever runs first, the other sees it. A group that has
+    already gone is no failure; the exit is non-zero only if docker's is.
+    """
+    record = f"{_GROUPS}{group}"
+    script = (
+        f": > {record}.killed; "
+        f'{{ read -r pid < {record}.pid && kill -KILL "-$pid"; }} 2>/dev/null; '
+        "exit 0"
+    )
+    return ("docker", "exec", container, "sh", "-c", script)
 
 
 def plan_destroy(*containers: str) -> tuple[str, ...]:

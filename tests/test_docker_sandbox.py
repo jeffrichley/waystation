@@ -7,13 +7,14 @@ build one — missing setup is never mistaken for a pass.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import pytest
 
@@ -21,11 +22,14 @@ from helpers import (
     OK_OUTCOME,
     PROMPT,
     a_run,
+    awaited,
     git,
     subjects,
+    until,
     workspaces,
 )
 from waystation import (
+    AgentExit,
     CommandFailed,
     DockerSandbox,
     Flow,
@@ -35,9 +39,13 @@ from waystation import (
     RunFailed,
     RunSucceeded,
     ScriptedAgent,
+    TimedOut,
+    Timeouts,
     prepare_workspace,
 )
+from waystation.clock import ManualClock, use_clock
 from waystation.sandbox import clone_in
+from waystation.sandbox._docker_plans import plan_exec, plan_kill
 
 TEST_IMAGE = "waystation-test"
 MISSING_IMAGE = "waystation-test-missing:never"
@@ -117,6 +125,15 @@ def orphan() -> Iterator[Callable[[str], str]]:
     yield make
     if made:
         subprocess.run(["docker", "rm", "-f", *made], check=False, capture_output=True)
+
+
+async def _once(ready: asyncio.Event, task: asyncio.Task[Any]) -> None:
+    """Wait for ``ready``, failing at once if ``task`` ends first."""
+    waiter = asyncio.create_task(ready.wait())
+    await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+    waiter.cancel()
+    if not ready.is_set():
+        pytest.fail(f"it ended first: {task.result()!r}")
 
 
 def _docker_calls(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -295,6 +312,134 @@ async def test_a_copy_runs_again_over_its_own_work_in_the_container(
         )
 
     assert shown.stdout.splitlines() == [f"waystation/{ws.run_id}"]
+
+
+@pytest.mark.docker
+async def test_a_cancelled_exec_kills_all_it_started_before_the_cancel_completes(
+    host_repo: Path, image: str
+) -> None:
+    # Killing the docker client leaves its process running in the container:
+    # a lingering child would keep writing into the workspace collect reads
+    # (ADR-0023).
+    ws = await prepare_workspace(host_repo)
+    started = asyncio.Event()
+    linger = "( while :; do printf x >> /tmp/pulse; sleep 0.05; done ) & "
+
+    async with DockerSandbox(image).start(ws, env={}, pass_env=()) as sandbox:
+        running = asyncio.create_task(
+            sandbox.exec(
+                ["sh", "-c", linger + "echo started; wait"],
+                on_stdout=lambda line: started.set(),
+            )
+        )
+        await _once(started, running)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        pulse = "wc -c < /tmp/pulse; sleep 0.3; wc -c < /tmp/pulse"
+        sizes = (await sandbox.exec(["sh", "-c", pulse])).stdout.split()
+
+    assert len(sizes) == 2
+    assert sizes[0] == sizes[1]
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("after", [0.0, 0.1, 0.3, 0.6])
+async def test_an_exec_cancelled_as_it_starts_never_runs_on(
+    host_repo: Path, image: str, after: float
+) -> None:
+    # Cancelled at any point of its start — before the client reaches the
+    # daemon, or once the process runs but before it has said which group it
+    # leads — the exec is stopped, or never begins (ADR-0023).
+    ws = await prepare_workspace(host_repo)
+    writer = "while :; do printf x >> /tmp/pulse; sleep 0.05; done"
+
+    async with DockerSandbox(image).start(ws, env={}, pass_env=()) as sandbox:
+        running = asyncio.create_task(sandbox.exec(["sh", "-c", writer]))
+        await asyncio.sleep(after)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        # A start the daemon makes late shows itself in the first pause.
+        pulse = "sleep 0.5; cat /tmp/pulse | wc -c; sleep 0.3; cat /tmp/pulse | wc -c"
+        sizes = await sandbox.exec(["sh", "-c", f"touch /tmp/pulse; {pulse}"])
+
+    first, second = sizes.stdout.split()
+    assert first == second
+
+
+@pytest.mark.docker
+def test_an_exec_whose_kill_came_first_never_starts(
+    image: str, orphan: Callable[[str], str]
+) -> None:
+    # The kill can reach the container before the exec has said which group
+    # it leads. No timing forces that order through ``exec``, so the plans
+    # run here in it, by hand: the exec must see it was killed and not start.
+    box = orphan(secrets.token_hex(4))
+
+    subprocess.run(plan_kill(box, "g1"), check=True)
+    subprocess.run(
+        plan_exec(box, ["touch", "/tmp/ran"], env={}, stdin=False, group="g1"),
+        check=False,
+    )
+
+    ran = subprocess.run(["docker", "exec", box, "test", "-e", "/tmp/ran"])
+    assert ran.returncode != 0
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("bound", ["agent_silence", "agent_wall"])
+async def test_a_silent_agent_in_docker_is_stopped_by_its_bound(
+    host_repo: Path, image: str, bound: Literal["agent_silence", "agent_wall"]
+) -> None:
+    clock = ManualClock()
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(outcome=OK_OUTCOME, delay=600, shell="sh"),
+        sandbox=DockerSandbox(image),
+        timeouts=Timeouts(**{bound: 5.0}),
+    )
+
+    with use_clock(clock):
+        task = asyncio.create_task(awaited(flow.run(PROMPT)))
+        await until(lambda: bool(clock._waiters), task)
+        clock.advance(5.0)
+        result = await task
+
+    assert isinstance(result, RunFailed), result
+    assert result.stage == "agent"
+    assert isinstance(result.failure, TimedOut)
+    assert result.failure.bound == bound
+    assert _labelled(result.run_id) == []
+
+
+@pytest.mark.docker
+async def test_a_hanging_agent_in_docker_succeeds_and_what_it_left_running_is_killed(
+    host_repo: Path, image: str
+) -> None:
+    # Its Outcome is in, but a child holds stdout open: completion_grace ends
+    # the exec, and the child stops before collect reads the workspace.
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(
+            outcome=OK_OUTCOME, linger=True, linger_touch="/tmp/pulse", shell="sh"
+        ),
+        sandbox=DockerSandbox(image),
+        timeouts=Timeouts(completion_grace=0.5),
+    )
+    sizes: list[str] = []
+
+    async def pulse(ctx: RunContext, exit: AgentExit) -> None:
+        twice = "wc -c < /tmp/pulse; sleep 0.3; wc -c < /tmp/pulse"
+        sizes.extend((await ctx.sandbox.exec(["sh", "-c", twice])).stdout.split())
+
+    result = await flow.run(PROMPT).on_agent_end(pulse)
+
+    assert isinstance(result, RunSucceeded), result
+    assert result.agent is not None
+    assert result.agent.hanging is True
+    assert len(sizes) == 2
+    assert sizes[0] == sizes[1]
 
 
 @pytest.mark.docker

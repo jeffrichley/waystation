@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import shutil
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -9,6 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import get_args
 
+from waystation._cancellation import run_to_end
 from waystation.errors import PreflightError, StageError
 from waystation.observability import SANDBOX
 from waystation.results import CommandFailed, Errored, Failure, Refused
@@ -20,6 +22,7 @@ from waystation.sandbox._docker_plans import (
     plan_destroy,
     plan_exec,
     plan_inspect,
+    plan_kill,
     plan_labelled,
     plan_ping,
     resolve_transport,
@@ -52,15 +55,37 @@ class _Container:
         on_stdout: LineCallback | None = None,
         on_stderr: LineCallback | None = None,
     ) -> ExecResult:
+        group = secrets.token_hex(4)
         # The docker client inherits the host's environment, which it needs
         # to find its daemon; the container sees only the -e it is given.
-        return await self._runner.run(
-            plan_exec(self.name, argv, env=env or {}, stdin=stdin is not None),
-            stdin=stdin,
-            capture=capture,
-            on_stdout=on_stdout,
-            on_stderr=on_stderr,
+        planned = plan_exec(
+            self.name, argv, env=env or {}, stdin=stdin is not None, group=group
         )
+        try:
+            return await self._runner.run(
+                planned,
+                stdin=stdin,
+                capture=capture,
+                on_stdout=on_stdout,
+                on_stderr=on_stderr,
+            )
+        except asyncio.CancelledError:
+            # The runner killed the client, which leaves what it started in
+            # the container running: that goes too, before the cancellation
+            # does (ADR-0023). One more cancellation meanwhile adds nothing
+            # to the one already on its way.
+            await run_to_end(self._kill(group), lambda _: None)
+            raise
+
+    async def _kill(self, group: str) -> None:
+        """Kill a cancelled exec's group; a failure is logged, never raised."""
+        killed = await self._runner.run(plan_kill(self.name, group))
+        if killed.exit_code != 0:
+            SANDBOX.error(
+                "failed to kill a cancelled exec in container %s: %s",
+                self.name,
+                bound_tail(killed.stderr),
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +97,10 @@ class DockerSandbox:
     container runs as the image's own ``USER``, idling until work is exec'd
     into it, and is torn down with ``docker rm -f`` (ADR-0014). The image
     needs ``git``, ``sh``, and a ``sleep`` that takes ``infinity`` (coreutils
-    and busybox both do): that is the idle process.
+    and busybox both do): that is the idle process. It needs a writable
+    ``/tmp`` too, where each exec records its process group, so that a
+    cancelled exec is killed with everything it started (ADR-0023); with
+    ``--read-only`` in ``run_args``, add ``--tmpfs /tmp``.
 
     ``transport`` is how the workspace gets in (ADR-0012): ``"auto"`` copies
     on Windows and binds elsewhere. ``"bind"`` mounts the host workspace at

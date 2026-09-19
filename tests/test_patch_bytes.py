@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from helpers import commit_on, git
+from helpers import OK_OUTCOME_LINE, ShellAgent, commit_on, git
 from waystation import (
     Flow,
     Integration,
@@ -63,6 +63,25 @@ async def test_series_reaches_the_host_byte_for_byte(
     message = _bytes(host_repo, "log", "-1", "--format=%B", ref)
     assert b"\r" not in message
     assert message.startswith(b"edit notes\n\nwhy it changed")
+
+
+@pytest.mark.git
+async def test_carriage_returns_in_content_survive_collect(host_repo: Path) -> None:
+    # The series leaves the sandbox on the same exec as collect's checks,
+    # after its verdict line (ADR-0029): that must cost it no byte. printf
+    # makes the CRs: a CR in a Windows command line does not reach Git
+    # Bash's sh.
+    agent = ShellAgent(
+        "printf '*.crlf -text\\n' > .gitattributes && "
+        "printf 'one\\r\\ntwo\\r\\n' > dos.crlf && "
+        f"git add -A && git commit -qm dos && echo '{OK_OUTCOME_LINE}'"
+    )
+
+    result = await Flow(host_repo, agent=agent, sandbox=NoSandbox()).run("dos")
+
+    assert isinstance(result, RunSucceeded), result
+    kept = f"waystation/{result.run_id}:dos.crlf"
+    assert _bytes(host_repo, "cat-file", "blob", kept) == b"one\r\ntwo\r\n"
 
 
 @pytest.mark.git

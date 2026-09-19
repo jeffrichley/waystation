@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import base64
 import shlex
-from pathlib import Path
 
-from waystation._git import encode, run_git
+from waystation._git import config_value, encode, run_git
 from waystation.errors import StageError
 from waystation.results import CommandFailed
 from waystation.sandbox.protocol import Sandbox
@@ -38,8 +37,8 @@ async def clone_in(sandbox: Sandbox, ws: Workspace) -> None:
     )
     script = _clone_script(
         branch,
-        name=await _identity(ws.path, "user.name"),
-        email=await _identity(ws.path, "user.email"),
+        name=await config_value(ws.path, "user.name", stage="sandbox"),
+        email=await config_value(ws.path, "user.email", stage="sandbox"),
     )
     argv = ("sh", "-c", script)
     result = await sandbox.exec(
@@ -57,7 +56,10 @@ async def clone_in(sandbox: Sandbox, ws: Workspace) -> None:
 
 
 def _clone_script(branch: str, *, name: str, email: str) -> str:
-    """One exec does the whole clone: every docker call costs ~0.5 s on Windows."""
+    """One exec does the whole clone: an exec can be a costly round trip.
+
+    A ``docker exec`` is about 0.5 s on Docker Desktop, for one.
+    """
     lines = [
         "set -e",
         '[ -w . ] || { echo "waystation: $(pwd) is not writable by $(id -un)," '
@@ -74,11 +76,3 @@ def _clone_script(branch: str, *, name: str, email: str) -> str:
     if email:
         lines.append(f"git config user.email {shlex.quote(email)}")
     return "\n".join(lines)
-
-
-async def _identity(workspace: Path, key: str) -> str:
-    """The workspace's ``key`` from git config, or ``""`` when it has none."""
-    shown = await run_git(
-        workspace, "config", "--get", key, stage="sandbox", check=False
-    )
-    return shown.stdout.strip() if shown.returncode == 0 else ""

@@ -23,8 +23,8 @@ from waystation.sandbox._docker_plans import (
     plan_ping,
     resolve_transport,
 )
-from waystation.sandbox._host import allowlisted_env, discard_workspace, run_exec
-from waystation.sandbox.processes import ProcessStrategy, ProcessTree, host_processes
+from waystation.sandbox._host import HostRunner, allowlisted_env, discard_workspace
+from waystation.sandbox.processes import host_processes
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.sandbox.transport import clone_in
 from waystation.tails import bound_tail
@@ -38,9 +38,8 @@ class _Container:
     """A running sandbox: each exec is a ``docker exec`` into it."""
 
     name: str
+    _runner: HostRunner
     workspace: str = WORKSPACE
-    _processes: ProcessStrategy = field(default_factory=host_processes)
-    _trees: list[ProcessTree] = field(default_factory=list)
 
     async def exec(
         self,
@@ -54,20 +53,13 @@ class _Container:
     ) -> ExecResult:
         # The docker client inherits the host's environment, which it needs
         # to find its daemon; the container sees only the -e it is given.
-        return await run_exec(
+        return await self._runner.run(
             plan_exec(self.name, argv, env=env or {}, stdin=stdin is not None),
-            processes=self._processes,
-            trees=self._trees,
             stdin=stdin,
             capture=capture,
             on_stdout=on_stdout,
             on_stderr=on_stderr,
         )
-
-    def release_trees(self) -> None:
-        for tree in self._trees:
-            tree.release()
-        self._trees.clear()
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +70,8 @@ class DockerSandbox:
     (ADR-0011), and preflight fails with a build hint when it is missing. The
     container runs as the image's own ``USER``, idling until work is exec'd
     into it, and is torn down with ``docker rm -f`` (ADR-0014). The image
-    needs ``git`` and ``sh``.
+    needs ``git``, ``sh``, and a ``sleep`` that takes ``infinity`` (coreutils
+    and busybox both do): that is the idle process.
 
     ``transport`` is how the workspace gets in (ADR-0012): ``"auto"`` copies
     on Windows and binds elsewhere. ``"bind"`` mounts the host workspace at
@@ -155,9 +148,14 @@ class DockerSandbox:
         pass_env: Sequence[str],
     ) -> AsyncIterator[Sandbox]:
         transport = resolve_transport(self.transport)
-        # Named before it exists, so teardown can remove it even when a bound
-        # kills `docker run` before it says what it made.
-        container = _Container(name=f"waystation-{ws.run_id}-{secrets.token_hex(3)}")
+        # Named before it exists, so teardown can name it even when a bound
+        # kills `docker run` before it says what it made. A create the daemon
+        # finishes only after that `rm -f` is left running, found by its run
+        # label (ADR-0014). The suffix keeps two starts of one run id apart.
+        runner = HostRunner(host_processes())
+        container = _Container(
+            name=f"waystation-{ws.run_id}-{secrets.token_hex(3)}", _runner=runner
+        )
         create = plan_create(
             image=self.image,
             name=container.name,
@@ -166,7 +164,7 @@ class DockerSandbox:
                 literal={**self.env, **env},
                 pass_env=(*self.pass_env, *pass_env),
             ),
-            bind=str(ws.path) if transport == "bind" else None,
+            bind_source=str(ws.path) if transport == "bind" else None,
             run_args=self.run_args,
         )
         try:
@@ -184,7 +182,7 @@ class DockerSandbox:
                 await clone_in(container, ws)
             yield container
         finally:
-            container.release_trees()
+            runner.release()
             try:
                 await _destroy(container.name)
             finally:
@@ -193,12 +191,11 @@ class DockerSandbox:
 
 async def _docker(argv: Sequence[str]) -> ExecResult:
     """One docker CLI call on the host, killed with its tree if cancelled."""
-    trees: list[ProcessTree] = []
+    runner = HostRunner(host_processes())
     try:
-        return await run_exec(argv, processes=host_processes(), trees=trees)
+        return await runner.run(argv)
     finally:
-        for tree in trees:
-            tree.release()
+        runner.release()
 
 
 async def _destroy(name: str) -> None:

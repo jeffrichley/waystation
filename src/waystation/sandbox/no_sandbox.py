@@ -6,12 +6,8 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from waystation.sandbox._host import allowlisted_env, discard_workspace, run_exec
-from waystation.sandbox.processes import (
-    ProcessStrategy,
-    ProcessTree,
-    host_processes,
-)
+from waystation.sandbox._host import HostRunner, allowlisted_env, discard_workspace
+from waystation.sandbox.processes import ProcessStrategy, host_processes
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.workspace import Workspace
 
@@ -22,8 +18,7 @@ __all__ = ["NoSandbox"]
 class _HostSandbox:
     workspace: str
     _env: dict[str, str]
-    _strategy: ProcessStrategy
-    _trees: list[ProcessTree] = field(default_factory=list)
+    _runner: HostRunner
 
     async def exec(
         self,
@@ -38,10 +33,8 @@ class _HostSandbox:
         merged = dict(self._env)
         if env:
             merged.update(env)
-        return await run_exec(
+        return await self._runner.run(
             argv,
-            processes=self._strategy,
-            trees=self._trees,
             stdin=stdin,
             capture=capture,
             on_stdout=on_stdout,
@@ -49,11 +42,6 @@ class _HostSandbox:
             cwd=self.workspace,
             env=merged,
         )
-
-    def release_trees(self) -> None:
-        for tree in self._trees:
-            tree.release()
-        self._trees.clear()
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,13 +68,9 @@ class NoSandbox:
             literal={**dict(self.env), **dict(env)},
             pass_env=(*self.pass_env, *pass_env),
         )
-        sandbox = _HostSandbox(
-            workspace=str(ws.path),
-            _env=built,
-            _strategy=self.processes,
-        )
+        runner = HostRunner(self.processes)
         try:
-            yield sandbox
+            yield _HostSandbox(workspace=str(ws.path), _env=built, _runner=runner)
         finally:
-            sandbox.release_trees()
+            runner.release()
             discard_workspace(ws.path)

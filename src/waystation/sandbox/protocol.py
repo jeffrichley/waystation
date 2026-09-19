@@ -45,4 +45,11 @@ class SandboxBackend(Protocol):
         *,
         env: Mapping[str, str],
         pass_env: Sequence[str],
-    ) -> AbstractAsyncContextManager[Sandbox]: ...
+    ) -> AbstractAsyncContextManager[Sandbox]:
+        """The run's sandbox, which owns ``ws`` from here and removes it on exit.
+
+        A start whose enter fails cleans up after itself, as ``async with``
+        expects of any context manager: nothing exits a start that never
+        entered.
+        """
+        ...

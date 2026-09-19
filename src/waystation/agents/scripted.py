@@ -78,8 +78,8 @@ class ScriptedAgent:
     """Play back canned lines, commits, and an Outcome through ``sh -c``.
 
     ``shell`` is the sh the script runs under. ``None`` finds the host's (Git
-    Bash on Windows), which is what ``NoSandbox`` runs; a container has its
-    own, so an agent bound for one names it — ``shell="sh"``.
+    Bash on Windows), which is what ``NoSandbox`` runs; a sandbox with an sh
+    of its own, such as ``DockerSandbox``'s image, is named — ``shell="sh"``.
     """
 
     lines: Sequence[str] = ()

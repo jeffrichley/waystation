@@ -25,7 +25,7 @@ IMAGE = "flow-image:1"
 def _create(
     *,
     env: dict[str, str] | None = None,
-    bind: str | None = None,
+    bind_source: str | None = None,
     run_args: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     return plan_create(
@@ -33,7 +33,7 @@ def _create(
         name="waystation-1a2b3c4d-000000",
         run_id="1a2b3c4d",
         env=env or {},
-        bind=bind,
+        bind_source=bind_source,
         run_args=run_args,
     )
 
@@ -108,7 +108,7 @@ def test_run_args_follow_waystations_options_and_precede_the_image() -> None:
 
 @pytest.mark.unit
 def test_bind_mounts_the_host_workspace_at_the_workspace_root() -> None:
-    argv = _create(bind="/tmp/waystation-1a2b3c4d-x")
+    argv = _create(bind_source="/tmp/waystation-1a2b3c4d-x")
 
     assert (
         "--mount",

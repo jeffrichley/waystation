@@ -44,6 +44,9 @@ def resolve_transport(
 def _env_flags(env: Mapping[str, str]) -> list[str]:
     # Values ride the argv, as they would in a user's own docker call; every
     # logged command line and CommandFailed elides them by key (ADR-0025).
+    # A bare `-e KEY` would read them from the client's own environment
+    # instead, where a sandbox's PATH, HOME or DOCKER_HOST would redirect the
+    # client itself.
     flags: list[str] = []
     for key, value in env.items():
         flags += ["-e", f"{key}={value}"]
@@ -56,7 +59,7 @@ def plan_create(
     name: str,
     run_id: str,
     env: Mapping[str, str],
-    bind: str | None,
+    bind_source: str | None,
     run_args: Sequence[str],
 ) -> tuple[str, ...]:
     """``docker run -d`` of an idle process, as the image's own user (ADR-0014).
@@ -64,6 +67,7 @@ def plan_create(
     No ``--user``: the image's ``USER`` is the sandbox's. ``--pull=never``
     makes a missing image fail rather than be fetched (ADR-0011). ``run_args``
     come after waystation's own options, so theirs win where both set one.
+    ``bind_source`` is the host path a bind transport mounts; ``None`` copies.
     """
     argv = [
         "docker",
@@ -78,8 +82,8 @@ def plan_create(
         WORKSPACE,
         *_env_flags(env),
     ]
-    if bind is not None:
-        argv += ["--mount", f"type=bind,source={bind},target={WORKSPACE}"]
+    if bind_source is not None:
+        argv += ["--mount", f"type=bind,source={bind_source},target={WORKSPACE}"]
     argv += ["--entrypoint", "sleep", *run_args, image, "infinity"]
     return tuple(argv)
 

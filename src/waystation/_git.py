@@ -97,6 +97,12 @@ async def run_git(
     return result
 
 
+async def config_value(repo: Path, key: str, *, stage: Stage) -> str:
+    """``repo``'s effective ``key`` from git config, or ``""`` when it has none."""
+    shown = await run_git(repo, "config", "--get", key, stage=stage, check=False)
+    return shown.stdout.strip() if shown.returncode == 0 else ""
+
+
 # Landing replays each commit with `git merge-tree --merge-base`, which older
 # git lacks: the one host-version floor waystation has (ADR-0020).
 _OLDEST_GIT = (2, 40)

@@ -44,6 +44,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0013](0013-clearenv-allowlist.md) The sandbox environment is cleared and allowlisted | passing an environment variable into a run |
 | [0014](0014-ephemeral-sandboxes-rm-f.md) Sandboxes are ephemeral, `rm -f`, never auto-reaped | changing teardown or adding cleanup |
 | [0028](0028-copy-lands-in-a-workspace-the-image-owns.md) A copied workspace rides exec stdin as text, into a `/workspace` the image owns | copying a workspace in, or writing an image for `DockerSandbox` |
+| [0030](0030-captured-exec-output-keeps-every-byte.md) Captured exec output keeps every byte; what people read shows U+FFFD | decoding an exec's output, writing a backend's `exec`, or printing a patch |
 
 ## Agents and outcomes
 

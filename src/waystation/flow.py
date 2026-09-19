@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import secrets
 import time
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -16,12 +16,12 @@ from pydantic import TypeAdapter
 from pydantic.json_schema import GenerateJsonSchema
 
 from waystation._cancellation import run_to_end, start_bounded
-from waystation._git import require_host_git
+from waystation._preflight import preflight
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
 from waystation.collect import CollectResult, PatchSeries, collect
-from waystation.errors import PreflightError, StageError
+from waystation.errors import StageError
 from waystation.hooks import (
     HookEntry,
     HookName,
@@ -54,6 +54,8 @@ from waystation.results import (
 )
 from waystation.sandbox.protocol import Sandbox, SandboxBackend
 from waystation.workspace import Workspace, prepare_workspace, remove_workspace
+
+__all__ = ["Flow", "RunSpec"]
 
 logger = tagged_logger("waystation")
 
@@ -88,64 +90,6 @@ def _log_unreported(run_id: str, err: StageError, why: str) -> None:
 def _log_later_failure(run_id: str, err: StageError) -> None:
     """Log a failure met after the run already failed; never report it (ADR-0024)."""
     _log_unreported(run_id, err, "after the run had already failed")
-
-
-@contextlib.contextmanager
-def _preflighting(checked: str) -> Iterator[None]:
-    """Pass a ``PreflightError`` on; make any other failure one naming ``checked``.
-
-    Only ``PreflightError`` may leave a preflight (#30, ADR-0016): a check
-    that breaks some other way is still a reason the run cannot begin.
-    """
-    try:
-        yield
-    except PreflightError:
-        raise
-    except Exception as exc:
-        msg = f"{checked} preflight failed: {exc!r}"
-        raise PreflightError(msg, failure=Errored(exception=exc)) from exc
-
-
-def _require_prompt_file(prompt: str | Path) -> None:
-    """A prompt given as a path must name a file; a str is the prompt itself."""
-    if not isinstance(prompt, Path) or prompt.is_file():
-        return
-    problem = "is not a file" if prompt.exists() else "not found"
-    raise PreflightError(
-        f"prompt file {problem}: {prompt} — pass a path to an existing file, "
-        "or the prompt itself as a str"
-    )
-
-
-def _distinct[T](values: Iterable[T]) -> list[T]:
-    """``values`` without repeats, by equality: a spec holding a mapping has no hash."""
-    kept: list[T] = []
-    for value in values:
-        if value not in kept:
-            kept.append(value)
-    return kept
-
-
-async def preflight(specs: Sequence[RunSpec[Any]]) -> None:
-    """Check what ``specs`` need from the host, repairing nothing.
-
-    Each distinct agent provider and sandbox spec is checked once — equal
-    values describe the same thing, so a batch of fifty runs on one image
-    checks it once — then every prompt file, then the host's git. Any problem
-    raises ``PreflightError`` naming what failed and how to fix it; nothing is
-    installed, built or pulled (#30, #31, ADR-0011).
-    """
-    for agent in _distinct(spec.agent for spec in specs):
-        with _preflighting(type(agent).__name__):
-            agent.preflight()
-    for sandbox in _distinct(spec.sandbox for spec in specs):
-        with _preflighting(type(sandbox).__name__):
-            await sandbox.preflight()
-    for spec in specs:
-        with _preflighting("prompt file"):
-            _require_prompt_file(spec.prompt)
-    with _preflighting("host git"):
-        await require_host_git()
 
 
 def _as_stage_error(stage: Stage, exc: Exception) -> StageError:

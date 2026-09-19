@@ -13,7 +13,8 @@ from collections.abc import Iterable
 from typing import Self
 
 from waystation._cancellation import run_to_end
-from waystation.flow import RunSpec, preflight
+from waystation._preflight import preflight
+from waystation.flow import RunSpec
 from waystation.results import RunResult
 
 __all__ = ["fan_out"]

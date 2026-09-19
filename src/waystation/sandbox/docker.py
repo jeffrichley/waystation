@@ -11,7 +11,7 @@ from typing import get_args
 
 from waystation.errors import PreflightError, StageError
 from waystation.observability import SANDBOX
-from waystation.results import CommandFailed, Errored, Refused
+from waystation.results import CommandFailed, Errored, Failure, Refused
 from waystation.sandbox._docker_plans import (
     RUN_ID_LABEL,
     WORKSPACE,
@@ -127,14 +127,8 @@ class DockerSandbox:
                 "Docker daemon not reachable: start Docker, then retry",
                 failure=_failed(ping, answered),
             )
-        detail = (
-            f"image {self.image!r} is not on this host, and waystation never "
-            f"builds or pulls one (ADR-0011): build it first, e.g. "
-            f"`docker build -t {self.image} <context-dir>`"
-        )
-        raise PreflightError(
-            detail, failure=Refused(reason="image_missing", detail=detail)
-        )
+        refused = _image_missing(self.image)
+        raise PreflightError(refused.detail, failure=refused)
 
     @staticmethod
     async def reap(run_id: str | None = None) -> int:
@@ -182,7 +176,9 @@ class DockerSandbox:
             run_args=self.run_args,
         )
         try:
-            await _docker_or_raise(create)
+            created = await _docker(create)
+            if created.exit_code != 0:
+                raise StageError("sandbox", await self._why_not(create, created))
             if transport == "copy":
                 await clone_in(container, ws)
             yield container
@@ -192,6 +188,27 @@ class DockerSandbox:
                 await _destroy(container.name)
             finally:
                 discard_workspace(ws.path)
+
+    async def _why_not(self, create: Sequence[str], created: ExecResult) -> Failure:
+        """Why ``docker run`` failed: an image gone since preflight is refused.
+
+        Waystation asks for the image itself rather than read docker's stderr,
+        which never becomes a refusal (ADR-0016); and only a daemon that
+        answers can say an image is missing.
+        """
+        image_gone = (await _docker(plan_inspect(self.image))).exit_code != 0
+        if image_gone and (await _docker(plan_ping())).exit_code == 0:
+            return _image_missing(self.image)
+        return _failed(create, created)
+
+
+def _image_missing(image: str) -> Refused:
+    detail = (
+        f"image {image!r} is not on this host, and waystation never "
+        f"builds or pulls one (ADR-0011): build it first, e.g. "
+        f"`docker build -t {image} <context-dir>`"
+    )
+    return Refused(reason="image_missing", detail=detail)
 
 
 async def _docker(argv: Sequence[str]) -> ExecResult:

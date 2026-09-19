@@ -315,6 +315,32 @@ async def test_a_missing_image_fails_preflight_with_a_build_hint_and_is_not_pull
 
 
 @pytest.mark.docker
+async def test_an_image_removed_after_preflight_fails_the_sandbox_stage_as_refused(
+    host_repo: Path, isolated_tempdir: Path, image: str
+) -> None:
+    vanishing = f"waystation-test-vanishing:{secrets.token_hex(4)}"
+    subprocess.run(["docker", "tag", image, vanishing], check=True)
+
+    def remove_it(ctx: RunContext) -> None:
+        subprocess.run(["docker", "image", "rm", vanishing], check=True)
+
+    try:
+        result = await a_run(
+            host_repo, sandbox=DockerSandbox(vanishing), shell="sh"
+        ).on_workspace_ready(remove_it)
+    finally:
+        subprocess.run(["docker", "image", "rm", vanishing], check=False)
+
+    assert isinstance(result, RunFailed), result
+    assert result.stage == "sandbox"
+    assert isinstance(result.failure, Refused)
+    assert result.failure.reason == "image_missing"
+    assert "build it first" in result.failure.detail
+    assert _labelled(result.run_id) == []
+    assert workspaces(isolated_tempdir) == []
+
+
+@pytest.mark.docker
 async def test_an_unreachable_daemon_fails_preflight_saying_so(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

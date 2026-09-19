@@ -20,7 +20,11 @@ __all__ = ["fan_out"]
 
 
 class _FanOut[OutcomeT]:
-    """The runs of one batch, yielded as they complete."""
+    """The runs of one batch, yielded as they complete.
+
+    Private, as ``asyncio.as_completed``'s iterator is: a flow script names
+    what it iterates, ``RunResult``, never the iterator itself.
+    """
 
     def __init__(
         self, specs: tuple[RunSpec[OutcomeT], ...], max_concurrency: int | None
@@ -89,7 +93,51 @@ class _FanOut[OutcomeT]:
 def fan_out[OutcomeT](
     runs: Iterable[RunSpec[OutcomeT]], *, max_concurrency: int | None = None
 ) -> _FanOut[OutcomeT]:
-    """Run every spec in ``runs`` concurrently; yield each result as it completes."""
+    """Run every spec in ``runs`` concurrently; yield each result as it completes.
+
+    ``runs`` is read to its end here, before anything starts. The batch is
+    preflighted as a whole when iteration (or the block) begins: each
+    distinct agent provider and sandbox spec once, every prompt file, and the
+    host's git. Then every run starts, and each result is yielded the moment
+    its run ends — ``RunSucceeded``, ``RunConflicted`` or ``RunFailed``. A
+    failing run is one more result: nothing is cancelled for it and nothing
+    raises mid-iteration (ADR-0007).
+
+    To consume a whole batch::
+
+        async for result in fan_out(batch):
+            ...
+
+    To be able to stop early, open it as a block::
+
+        async with fan_out(batch) as results:
+            async for result in results:
+                if good_enough(result):
+                    break
+
+    Leaving the block, however it is left, cancels the runs still in flight
+    and returns only once each has kept its work and torn its sandbox down
+    (ADR-0017); a queued run never starts. Leaving a bare ``async for``
+    early stops nothing, as with ``asyncio.as_completed``: the rest run on
+    unobserved until they end, or until ``asyncio.run`` cancels them as it
+    closes the loop.
+
+    Args:
+        runs: The batch — run specs from any flows, against any host repos.
+        max_concurrency: The most runs in flight at once; ``None``, the
+            default, is no limit. A queued run starts as a slot frees and
+            resolves its base ref then, not when the batch began.
+
+    Returns:
+        An async iterator of results, and an async context manager that
+        yields it.
+
+    Raises:
+        PreflightError: Before the first result — from the first ``__anext__``
+            or from entering the block — when the batch fails preflight. No
+            run has started.
+        ValueError: At the call, when ``max_concurrency`` is below 1.
+    """
     if max_concurrency is not None and max_concurrency < 1:
         msg = f"max_concurrency must be at least 1, or None, got {max_concurrency}"
         raise ValueError(msg)

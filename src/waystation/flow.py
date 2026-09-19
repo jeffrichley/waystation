@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import secrets
 import time
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -115,6 +115,37 @@ def _require_prompt_file(prompt: str | Path) -> None:
         f"prompt file {problem}: {prompt} — pass a path to an existing file, "
         "or the prompt itself as a str"
     )
+
+
+def _distinct[T](values: Iterable[T]) -> list[T]:
+    """``values`` without repeats, by equality: a spec holding a mapping has no hash."""
+    kept: list[T] = []
+    for value in values:
+        if value not in kept:
+            kept.append(value)
+    return kept
+
+
+async def preflight(specs: Sequence[RunSpec[Any]]) -> None:
+    """Check what ``specs`` need from the host, repairing nothing.
+
+    Each distinct agent provider and sandbox spec is checked once — equal
+    values describe the same thing, so a batch of fifty runs on one image
+    checks it once — then every prompt file, then the host's git. Any problem
+    raises ``PreflightError`` naming what failed and how to fix it; nothing is
+    installed, built or pulled (#30, #31, ADR-0011).
+    """
+    for agent in _distinct(spec.agent for spec in specs):
+        with _preflighting(type(agent).__name__):
+            agent.preflight()
+    for sandbox in _distinct(spec.sandbox for spec in specs):
+        with _preflighting(type(sandbox).__name__):
+            await sandbox.preflight()
+    for spec in specs:
+        with _preflighting("prompt file"):
+            _require_prompt_file(spec.prompt)
+    with _preflighting("host git"):
+        await require_host_git()
 
 
 def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
@@ -467,16 +498,18 @@ class RunSpec[OutcomeT]:
                 TimedOut(bound=bound, limit=seconds, elapsed=elapsed),
             ) from exc
 
-    async def _execute(
-        self,
-    ) -> RunResult[OutcomeT]:
+    async def _execute(self, *, preflighted: bool = False) -> RunResult[OutcomeT]:
+        """Perform one run; ``preflighted`` when fan-out checked its batch whole."""
         state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
         ctx = RunContext(state)
         record = _RunRecord(run_id=state.run_id, log=RunLog(state.run_id, state.name))
         with bind_run(state.run_id, state.name):
             # Bound, so what preflight logs carries the id, but a run that
             # fails it never began: no hook fires and no workspace is made.
-            await self._preflight()
+            # A lone run is a batch of one, checked the way fan-out checks
+            # a batch (#30).
+            if not preflighted:
+                await preflight((self,))
             record.log.on_run_start(ctx)
             try:
                 result = await self._lifecycle(ctx, state, record)
@@ -539,22 +572,6 @@ class RunSpec[OutcomeT]:
             return self.prompt.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             raise StageError("agent", Errored(exception=exc)) from exc
-
-    async def _preflight(self) -> None:
-        """Check the agent, sandbox spec, prompt file and host git, repairing nothing.
-
-        A lone awaited run preflights itself the way fan-out preflights a
-        batch: any problem raises ``PreflightError`` before the run begins
-        (#30, ADR-0016). Nothing is installed, built or pulled (ADR-0011).
-        """
-        with _preflighting(type(self.agent).__name__):
-            self.agent.preflight()
-        with _preflighting(type(self.sandbox).__name__):
-            await self.sandbox.preflight()
-        with _preflighting("prompt file"):
-            _require_prompt_file(self.prompt)
-        with _preflighting("host git"):
-            await require_host_git()
 
     async def _prepare(
         self, ctx: RunContext, state: RunState, record: _RunRecord

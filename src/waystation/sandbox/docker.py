@@ -23,7 +23,7 @@ from waystation.sandbox._docker_plans import (
     plan_exec,
     plan_inspect,
     plan_kill,
-    plan_labelled,
+    plan_list,
     plan_ping,
     resolve_transport,
 )
@@ -169,7 +169,7 @@ class DockerSandbox:
 
         Raises ``StageError("sandbox", CommandFailed)`` when docker fails.
         """
-        found = await _docker_or_raise(plan_labelled(run_id))
+        found = await _docker_or_raise(plan_list(run_id))
         ids = found.stdout.split()
         if ids:
             await _docker_or_raise(plan_destroy(*ids))
@@ -206,7 +206,7 @@ class DockerSandbox:
         try:
             created = await _docker(create)
             if created.exit_code != 0:
-                raise StageError("sandbox", await self._why_not(create, created))
+                raise StageError("sandbox", await self._create_failure(create, created))
             if transport == "copy":
                 await clone_in(container, ws)
             yield container
@@ -217,7 +217,9 @@ class DockerSandbox:
             finally:
                 discard_workspace(ws.path)
 
-    async def _why_not(self, create: Sequence[str], created: ExecResult) -> Failure:
+    async def _create_failure(
+        self, create: Sequence[str], created: ExecResult
+    ) -> Failure:
         """Why ``docker run`` failed: an image gone since preflight is refused.
 
         Waystation asks for the image itself rather than read docker's stderr,

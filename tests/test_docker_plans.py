@@ -19,7 +19,7 @@ from waystation.sandbox._docker_plans import (
     plan_destroy,
     plan_exec,
     plan_kill,
-    plan_labelled,
+    plan_list,
     resolve_transport,
 )
 
@@ -201,7 +201,7 @@ def test_teardown_can_remove_many_sandboxes_in_one_call() -> None:
 
 @pytest.mark.unit
 def test_reaping_a_run_finds_its_sandboxes_by_label_running_or_not() -> None:
-    argv = plan_labelled("1a2b3c4d")
+    argv = plan_list("1a2b3c4d")
 
     assert argv[:2] == ("docker", "ps")
     assert {"--all", "--quiet"} <= set(argv)
@@ -210,7 +210,7 @@ def test_reaping_a_run_finds_its_sandboxes_by_label_running_or_not() -> None:
 
 @pytest.mark.unit
 def test_reaping_every_run_finds_every_labelled_sandbox() -> None:
-    argv = plan_labelled(None)
+    argv = plan_list(None)
 
     assert ("--filter", "label=waystation.run-id") in pairwise(argv)
 

@@ -23,8 +23,8 @@ from waystation.workspace import Workspace
 __all__ = ["clone_in"]
 
 # The one retry anywhere, and its numbers are #18's, with no setting: a
-# container exec whose shell could not start (126) or was SIGKILLed as it
-# started (137) is a race of the container's own that the next try is past
+# sandbox exec whose shell could not start (126) or was SIGKILLed as it
+# started (137) is a race of the sandbox's own that the next try is past
 # (ADR-0016). Sandcastle retries the same codes the same way.
 _TRANSIENT = frozenset({126, 137})
 _RETRIES = 2

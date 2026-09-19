@@ -20,7 +20,7 @@ __all__ = [
     "plan_exec",
     "plan_inspect",
     "plan_kill",
-    "plan_labelled",
+    "plan_list",
     "plan_ping",
     "resolve_transport",
 ]
@@ -33,8 +33,11 @@ WORKSPACE = "/workspace"
 RUN_ID_LABEL = "waystation.run-id"
 """Every sandbox carries it, so an orphan is findable by run (ADR-0014)."""
 
-_GROUPS = "/tmp/waystation-exec-"
-"""Where each exec records its process group, by the group's name."""
+
+def _group_record(group: str) -> tuple[str, str]:
+    """Where an exec records its group's pid, and where a kill marks it killed."""
+    record = f"/tmp/waystation-exec-{group}"
+    return f"{record}.pid", f"{record}.killed"
 
 
 def resolve_transport(
@@ -110,8 +113,8 @@ def plan_exec(
     that group for ``plan_kill`` to kill (ADR-0023). A group already marked
     killed starts nothing, so a kill that beats the record still lands.
     """
-    record = f"{_GROUPS}{group}"
-    wrapper = f'echo $$ > {record}.pid && [ ! -e {record}.killed ] && exec "$@"'
+    pid, killed = _group_record(group)
+    wrapper = f'echo $$ > {pid} && [ ! -e {killed} ] && exec "$@"'
     return (
         "docker",
         "exec",
@@ -137,10 +140,10 @@ def plan_kill(container: str, group: str) -> tuple[str, ...]:
     the mark: whichever runs first, the other sees it. A group that has
     already gone is no failure; the exit is non-zero only if docker's is.
     """
-    record = f"{_GROUPS}{group}"
+    pid, killed = _group_record(group)
     script = (
-        f": > {record}.killed; "
-        f'{{ read -r pid < {record}.pid && kill -KILL "-$pid"; }} 2>/dev/null; '
+        f": > {killed}; "
+        f'{{ read -r pid < {pid} && kill -KILL "-$pid"; }} 2>/dev/null; '
         "exit 0"
     )
     return ("docker", "exec", container, "sh", "-c", script)
@@ -154,7 +157,7 @@ def plan_destroy(*containers: str) -> tuple[str, ...]:
     return ("docker", "rm", "-f", "-v", *containers)
 
 
-def plan_labelled(run_id: str | None) -> tuple[str, ...]:
+def plan_list(run_id: str | None) -> tuple[str, ...]:
     """The id of every sandbox carrying ``run_id``, or any run id, running or not."""
     label = RUN_ID_LABEL if run_id is None else f"{RUN_ID_LABEL}={run_id}"
     return ("docker", "ps", "--all", "--quiet", "--filter", f"label={label}")

@@ -4,13 +4,13 @@ status: accepted
 
 # A copied workspace rides exec stdin as text, into a `/workspace` the image owns
 
-`clone_in(sandbox, ws)` bundles the workspace branch on the host and sends it base64 over one exec's stdin. Inside, the same exec clones it into the workspace root as the sandbox's own user, drops the remote, and sets the host's git identity. That root must be an empty directory the user can write. On Docker it is `/workspace`, and the image provides it: `RUN install -d -o <user> /workspace`. Waystation runs no root exec to create it.
+`clone_in(sandbox, ws)` bundles the workspace branch on the host and sends it base64 over one exec's stdin. Inside, the same exec clones it into the workspace root as the sandbox's own user and sets the host's git identity. That root must be an empty directory the user can write. On Docker it is `/workspace`, and the image provides it: `RUN install -d -o <user> /workspace`. Waystation runs no root exec to create it.
 
 Why text: `Sandbox.exec` takes `stdin: str` (ADR-0010). Widening it to bytes would change a contract every backend implements, all for one caller. Base64 costs a third more bytes on a path that is already one exec, and needs only `base64`, which coreutils and busybox both ship.
 
 Why the image: `docker run --workdir` creates a missing directory owned by root (checked: `root:root 755` on Docker 28), so the image's user cannot clone into it. Fixing that from waystation's side means a `docker exec -u 0` on every copied start. That is one more call, about 0.5 s on Docker Desktop, and a root path into a sandbox that runs as the image's non-root user. The image is already a purpose-built artefact that has to supply git and that user, so it supplies the directory too.
 
-Why one exec: every docker call costs about 0.5 s on Docker Desktop. Decoding, cloning, dropping the remote and setting the identity are one script.
+Why one exec: every docker call costs about 0.5 s on Docker Desktop. Decoding, cloning and setting the identity are one script.
 
 ## Considered options
 
@@ -24,6 +24,7 @@ Why one exec: every docker call costs about 0.5 s on Docker Desktop. Decoding, c
 ## Consequences
 
 - An image used for copy transport must own `/workspace`. Without it, the sandbox stage fails with `CommandFailed`, and its stderr says the directory is not writable by the image's user.
+- The exec is the setup ADR-0016 retries on exit 126 or 137, so it must be idempotent, and `git clone` is not: it refuses a directory an earlier try wrote to. The exec therefore makes a repository, fetches the branch from the bundle and resets onto it, all of which a second try can do over the first. It leaves a marker in `.git` saying the directory holds its own work, and any other content is still refused. There is no remote to drop, since nothing was cloned ([#38](https://github.com/jeffrichley/waystation/issues/38)).
 - Only commits travel. A `workspace_ready` hook's uncommitted writes reach a bound sandbox but not a copied one.
 - The workspace stage still clones into a host temp dir for every transport, and `clone_in` bundles from that clone. #18's lifecycle says copy skips the host clone. Keeping it means `prepare_workspace` stays blind to transport, the `workspace_ready` hook sees the same workspace either way, and a `--local` clone costs next to nothing.
 - `clone_in` bundles the workspace branch alone. Extra refs (#32) must join the bundle when they arrive, or a copied sandbox will lack them. Until then a copied workspace has no remote, and a bound one keeps its clone's `origin`.

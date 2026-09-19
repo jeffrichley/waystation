@@ -1,7 +1,9 @@
 """DockerSandbox's argv plans, checked without Docker (ADR-0010).
 
 These are the only Docker coverage on Windows CI, so they pin what each plan
-says: labels, user, transport, the environment allowlist and ``run_args``.
+says: labels, user, transport, the environment allowlist, ``run_args``, the
+process-group wrapper every exec runs under and the kill that names it, and
+what ``reap`` finds.
 """
 
 from __future__ import annotations
@@ -16,6 +18,8 @@ from waystation.sandbox._docker_plans import (
     plan_create,
     plan_destroy,
     plan_exec,
+    plan_kill,
+    plan_list,
     resolve_transport,
 )
 
@@ -36,6 +40,17 @@ def _create(
         bind_source=bind_source,
         run_args=run_args,
     )
+
+
+def _exec(
+    container: str,
+    argv: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    stdin: bool = False,
+    group: str = "g1",
+) -> tuple[str, ...]:
+    return plan_exec(container, argv, env=env or {}, stdin=stdin, group=group)
 
 
 def _flags_before_image(argv: tuple[str, ...]) -> tuple[str, ...]:
@@ -72,7 +87,7 @@ def test_a_sandbox_idles_detached_until_work_is_execd_into_it() -> None:
 @pytest.mark.unit
 def test_a_sandbox_runs_as_its_images_own_user() -> None:
     # The image's USER applies: no plan ever names another one.
-    for argv in (_create(), plan_exec("c", ["id"], env={}, stdin=False)):
+    for argv in (_create(), _exec("c", ["id"])):
         assert not {"-u", "--user"} & set(argv)
         assert not any(arg.startswith("--user=") for arg in argv)
 
@@ -130,25 +145,62 @@ def test_a_sandbox_starts_in_the_workspace_root() -> None:
 
 @pytest.mark.unit
 def test_every_exec_runs_in_the_workspace_root_of_its_container() -> None:
-    argv = plan_exec("box", ["git", "status"], env={}, stdin=False)
+    argv = _exec("box", ["git", "status"])
 
     assert argv[:2] == ("docker", "exec")
     assert ("--workdir", "/workspace") in pairwise(argv)
-    assert argv[-3:] == ("box", "git", "status")
+    assert "box" in argv
+    assert argv[-2:] == ("git", "status")
 
 
 @pytest.mark.unit
 def test_an_exec_keeps_stdin_open_only_when_it_is_given_some() -> None:
-    assert "-i" in plan_exec("box", ["cat"], env={}, stdin=True)
-    assert "-i" not in plan_exec("box", ["cat"], env={}, stdin=False)
+    assert "-i" in _exec("box", ["cat"], stdin=True)
+    assert "-i" not in _exec("box", ["cat"])
 
 
 @pytest.mark.unit
 def test_an_execs_own_environment_is_rendered_for_that_exec() -> None:
-    argv = plan_exec("box", ["env"], env={"GIT_INDEX_FILE": "x"}, stdin=False)
+    argv = _exec("box", ["env"], env={"GIT_INDEX_FILE": "x"})
 
     assert _env_flags(argv) == ["GIT_INDEX_FILE=x"]
     assert argv.index("box") > argv.index("-e")
+
+
+@pytest.mark.unit
+def test_an_execs_argv_reaches_the_container_as_it_was_given() -> None:
+    # The process-group wrapper takes it as arguments, never as script text,
+    # so nothing in it is expanded twice.
+    given = ["sh", "-c", 'echo "$HOME" $(id -u); rm -rf "$x"']
+
+    assert _exec("box", given)[-3:] == tuple(given)
+
+
+@pytest.mark.unit
+def test_a_cancelled_exec_is_killed_by_a_second_exec_naming_its_group() -> None:
+    kill = plan_kill("box", "g1")
+
+    assert kill[:2] == ("docker", "exec")
+    assert "box" in kill
+    assert any("g1" in arg for arg in kill)
+    assert any("g1" in arg for arg in _exec("box", ["true"], group="g1"))
+    assert not any("g1" in arg for arg in _exec("box", ["true"], group="g2"))
+
+
+@pytest.mark.unit
+def test_an_exec_and_its_kill_meet_in_an_order_that_cannot_miss() -> None:
+    # The docker tier runs these; on Windows CI this is all that holds them.
+    # The exec records its pid before it looks for the kill's mark, and the
+    # kill marks before it reads the pid, so whichever comes first, the other
+    # sees it. The exec becomes argv, keeping the pid, and the kill signals
+    # the negated pid: the whole group, not one process (ADR-0023).
+    wrapper = _exec("box", ["true"])[-3]
+    kill = plan_kill("box", "g1")[-1]
+
+    assert wrapper.index("$$ >") < wrapper.index("-e") < wrapper.index('exec "$@"')
+    assert wrapper.endswith('exec "$@"')
+    assert kill.index(": >") < kill.index("read")
+    assert 'kill -KILL "-$pid"' in kill
 
 
 @pytest.mark.unit
@@ -156,6 +208,27 @@ def test_teardown_forces_removal_and_never_stops() -> None:
     # stop burns a 10 s grace on an idle PID 1; rm -f does not (ADR-0014).
     # -v takes anonymous volumes an image declares along with the container.
     assert plan_destroy("box") == ("docker", "rm", "-f", "-v", "box")
+
+
+@pytest.mark.unit
+def test_teardown_can_remove_many_sandboxes_in_one_call() -> None:
+    assert plan_destroy("a", "b") == ("docker", "rm", "-f", "-v", "a", "b")
+
+
+@pytest.mark.unit
+def test_reaping_a_run_finds_its_sandboxes_by_label_running_or_not() -> None:
+    argv = plan_list("1a2b3c4d")
+
+    assert argv[:2] == ("docker", "ps")
+    assert {"--all", "--quiet"} <= set(argv)
+    assert ("--filter", "label=waystation.run-id=1a2b3c4d") in pairwise(argv)
+
+
+@pytest.mark.unit
+def test_reaping_every_run_finds_every_labelled_sandbox() -> None:
+    argv = plan_list(None)
+
+    assert ("--filter", "label=waystation.run-id") in pairwise(argv)
 
 
 @pytest.mark.unit

@@ -19,6 +19,8 @@ __all__ = [
     "plan_destroy",
     "plan_exec",
     "plan_inspect",
+    "plan_kill",
+    "plan_list",
     "plan_ping",
     "resolve_transport",
 ]
@@ -30,6 +32,12 @@ WORKSPACE = "/workspace"
 
 RUN_ID_LABEL = "waystation.run-id"
 """Every sandbox carries it, so an orphan is findable by run (ADR-0014)."""
+
+
+def _group_record(group: str) -> tuple[str, str]:
+    """Where an exec records its group's pid, and where a kill marks it killed."""
+    record = f"/tmp/waystation-exec-{group}"
+    return f"{record}.pid", f"{record}.killed"
 
 
 def resolve_transport(
@@ -94,8 +102,19 @@ def plan_exec(
     *,
     env: Mapping[str, str],
     stdin: bool,
+    group: str,
 ) -> tuple[str, ...]:
-    """``docker exec`` of ``argv`` in the workspace root, stdin open if given."""
+    """``docker exec`` of ``argv`` in the workspace root, stdin open if given.
+
+    Docker starts every exec as the leader of a session of its own, so the
+    pid of the ``sh`` it starts here names the exec's process group. The sh
+    records it under ``group``, then becomes ``argv`` — which it takes as
+    arguments, never as script text — so everything ``argv`` starts is in
+    that group for ``plan_kill`` to kill (ADR-0023). A group already marked
+    killed starts nothing, so a kill that beats the record still lands.
+    """
+    pid, killed = _group_record(group)
+    wrapper = f'echo $$ > {pid} && [ ! -e {killed} ] && exec "$@"'
     return (
         "docker",
         "exec",
@@ -104,16 +123,44 @@ def plan_exec(
         WORKSPACE,
         *_env_flags(env),
         container,
+        "sh",
+        "-c",
+        wrapper,
+        "waystation",
         *argv,
     )
 
 
-def plan_destroy(container: str) -> tuple[str, ...]:
+def plan_kill(container: str, group: str) -> tuple[str, ...]:
+    """A second ``docker exec`` that SIGKILLs ``group``, a cancelled exec's.
+
+    Killing the ``docker exec`` client leaves its process running in the
+    container (ADR-0023). This marks the group killed before it reads the
+    group's pid, and ``plan_exec``'s sh records the pid before it looks for
+    the mark: whichever runs first, the other sees it. A group that has
+    already gone is no failure; the exit is non-zero only if docker's is.
+    """
+    pid, killed = _group_record(group)
+    script = (
+        f": > {killed}; "
+        f'{{ read -r pid < {pid} && kill -KILL "-$pid"; }} 2>/dev/null; '
+        "exit 0"
+    )
+    return ("docker", "exec", container, "sh", "-c", script)
+
+
+def plan_destroy(*containers: str) -> tuple[str, ...]:
     """``docker rm -f``, never ``stop`` (ADR-0014).
 
     ``-v`` takes any anonymous volume the image declares along with it.
     """
-    return ("docker", "rm", "-f", "-v", container)
+    return ("docker", "rm", "-f", "-v", *containers)
+
+
+def plan_list(run_id: str | None) -> tuple[str, ...]:
+    """The id of every sandbox carrying ``run_id``, or any run id, running or not."""
+    label = RUN_ID_LABEL if run_id is None else f"{RUN_ID_LABEL}={run_id}"
+    return ("docker", "ps", "--all", "--quiet", "--filter", f"label={label}")
 
 
 def plan_inspect(image: str) -> tuple[str, ...]:

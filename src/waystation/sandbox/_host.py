@@ -137,7 +137,7 @@ class HostRunner:
                     # Exact, for git: a patch cut from it lands byte for byte.
                     full.append(decode(line_b))
                 # Readable, for people and parsers: a lone surrogate breaks a
-                # print, a UTF-8 log, or an Outcome's validation.
+                # print, a UTF-8 log, or an Outcome dumped to JSON.
                 text = line_b.decode("utf-8", errors="replace")
                 if tail is not None:
                     tail.append(text)

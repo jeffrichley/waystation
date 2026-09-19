@@ -8,13 +8,13 @@ status: accepted
 
 Why: a patch does not have to be UTF-8. Git treats a latin-1 file as text, because only a NUL makes a file binary, so `format-patch` writes its bytes raw. Collect cuts the series from an exec's stdout, and the runner used to decode that with `errors="replace"`. Every such byte reached the host as `EF BF BD`, on `NoSandbox` and on `DockerSandbox`, and the run still succeeded. Host git already decoded with `surrogateescape` (`_git.decode`). The sandbox path now matches it.
 
-Why decode twice: a surrogate escape keeps the byte, but it can't be printed. Printing to a UTF-8 stream, writing to a UTF-8 log file and validating with pydantic all reject a lone surrogate, and the error would show up far from the byte that caused it. Captured output goes to git. Everything else goes to people, or to an agent provider's `parse`, whose output becomes the Outcome.
+Why decode twice: a surrogate escape keeps the byte, but it can't be printed. Printing to a UTF-8 stream, writing to a UTF-8 log file and dumping a pydantic model to JSON all reject a lone surrogate, and the error would show up far from the byte that caused it. Pydantic validates one without complaint, so an Outcome would carry it until something tried to write it out. Captured output goes to git. Everything else goes to people, or to an agent provider's `parse`, whose output becomes the Outcome.
 
 ## Considered options
 
 - **Bytes on `Sandbox.exec`.** Rejected for the same reason ADR-0028 rejected bytes on stdin: every backend implements that contract, and changing it for one caller isn't worth it (ADR-0010).
 - **Base64 the series inside the sandbox**, as `clone_in` does with the bundle it sends in. Rejected. It protects only the exec that carries it: the squash's diff coming out, its `git apply` going back in, and any later caller would each need the same treatment. It also makes every series a third bigger, for a case most series never hit. Its one advantage is that it would keep collect safe from a third-party backend that decodes with `replace`. The protocol's docstring states the contract instead.
-- **`surrogateescape` everywhere, callbacks included.** Rejected: hooks, log handlers and Outcome validation would receive text they cannot encode.
+- **`surrogateescape` everywhere, callbacks included.** Rejected: hooks, log handlers and an Outcome dumped to JSON would receive text they cannot encode.
 - **Latin-1 for captured output.** It round-trips too. Rejected: it garbles every non-ASCII character of ordinary UTF-8 output, stderr included, and host git's `decode` already uses `surrogateescape`.
 
 ## Consequences

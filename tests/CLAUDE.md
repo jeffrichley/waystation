@@ -33,10 +33,12 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | Helper | Gives you |
 | --- | --- |
 | `git(repo, *args)` | run git in `repo`, stdout stripped, raises on non-zero |
+| `git_bytes(repo, *args)` | the same, but stdout exactly as git wrote it — for a test about bytes, where decoding would hide the bug |
 | `commit_on(repo, branch, files)` | a commit on `branch` (made at HEAD if missing) with the checkout put back — a target that moved, or a range for `PatchSeries.from_range`; returns the tip |
 | `host_state(repo)` | the host's refs, HEAD, index and tree in one value — compare before and after to prove something left the host untouched |
 | `init_host_repo(root)` | what `host_repo` is built from — call it directly only for a *second* repo, or one outside `tmp_path` |
 | `sh()` | the POSIX sh on this host (Git Bash on Windows) |
+| `printf_bytes(path, data)` | a sh command writing `data` to `path` byte for byte, as octal escapes — so a CR or a non-UTF-8 byte reaches the file, not just the command line |
 | `subjects(repo, revisions)` | the commit subjects in a range like `HEAD..waystation/<id>`, newest first — what a preserved or landed series holds |
 | `lifecycle(caplog)` | the records a run logged per lifecycle event (`waystation.run`), in order |
 | `workspaces(temp)` | the run workspaces left under a temp dir — assert `== []` to prove a run cleaned up |
@@ -44,7 +46,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `stalling_ref_hook(hooks, started, release)` | a `reference-transaction` hook that holds the first ref update git prepares until `release` exists; point a host at it with `core.hooksPath` |
 | `awaited(spec)` | a coroutine awaiting a `RunSpec`, for `asyncio.create_task` — reach for it when a test cancels or drives a run from outside |
 | `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series, `sandbox=` your own backend, and `shell="sh"` the container's own sh when that backend is Docker |
-| `ShellAgent(script)` | an agent that *is* a shell script — reach for it over `ScriptedAgent` when the test drives stderr, an exit code, or timing |
+| `ShellAgent(script)` | an agent that *is* a shell script — reach for it over `ScriptedAgent` when the test drives stderr, an exit code, timing, or bytes only `printf` can make; `shell="sh"` runs it in a container's own sh |
 | `PROMPT` | the prompt `a_run` uses; has a second line, so a test can prove the body stayed unlogged |
 | `OK_OUTCOME` | the Outcome a scripted agent reports when the test doesn't care |
 | `OUTCOME` / `OK_OUTCOME_LINE` | the marker prefix `ShellAgent` parses, and a ready-made reporting line |

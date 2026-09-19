@@ -205,6 +205,40 @@ async def test_a_queued_run_resolves_its_base_when_its_workspace_stage_starts(
     assert second.base_sha == first.report.target_after
 
 
+@pytest.mark.git
+async def test_consumers_sharing_one_fan_out_split_its_results_each_run_once(
+    host_repo: Path,
+) -> None:
+    started: list[str] = []
+    batch = [a_run(host_repo).on_run_start(lambda ctx: started.append(ctx.run_id))] * 2
+    results = fan_out(batch)
+
+    async def drain() -> list[RunResult[Summary]]:
+        return [result async for result in results]
+
+    first, second = await asyncio.gather(drain(), drain())
+
+    assert len(first) + len(second) == 2
+    assert len(started) == 2
+
+
+@pytest.mark.git
+async def test_a_wait_for_a_result_that_is_cancelled_loses_no_result(
+    host_repo: Path,
+) -> None:
+    gate = Gate()
+    results = fan_out([a_run(host_repo).on_sandbox_ready(lambda ctx: gate.hold())])
+
+    waiting = asyncio.create_task(anext(results))
+    await until(gate.reached.is_set, waiting)
+    waiting.cancel()  # what asyncio.wait_for does when it gives up
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    gate.release.set()
+
+    assert [type(result) async for result in results] == [RunSucceeded]
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize("cap", [0, -1])
 def test_a_cap_that_would_start_nothing_is_refused_at_the_call(cap: int) -> None:
@@ -220,13 +254,15 @@ async def test_leaving_the_block_early_stops_runs_in_flight_and_never_starts_que
     queued: list[str] = []
     never = a_run(host_repo).on_run_start(lambda ctx: queued.append(ctx.run_id))
 
-    async with fan_out([*stuck.runs(), never], max_concurrency=2):
+    async with fan_out([*stuck.runs(), never], max_concurrency=2) as results:
         await stuck.all_ready.wait()
 
     # By the time the block is left, every run it stopped has wound down.
     assert len(stuck.started) == 2
     stuck.assert_work_kept(isolated_tempdir)
     assert queued == []
+    # A stopped run reports nothing (ADR-0017), even to a late reader.
+    assert [result async for result in results] == []
 
 
 @pytest.mark.git

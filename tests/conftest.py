@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import shutil
 import subprocess
@@ -41,22 +42,39 @@ def clean_logging() -> Iterator[None]:
         logger.setLevel(level)
 
 
-def _docker_daemon_reachable() -> bool:
+@functools.cache
+def _no_linux_docker() -> str | None:
+    """Why the docker tier cannot run here, or ``None`` when it can.
+
+    Asked once per worker. The tier's image is Linux, so a daemon running
+    Windows containers cannot host it either. The reason says which it was.
+    """
     docker = shutil.which("docker")
     if docker is None:
-        return False
+        return "Docker daemon not reachable: no docker CLI on PATH"
     try:
         result = subprocess.run(
-            [docker, "info"],
+            [docker, "info", "--format", "{{.OSType}}"],
             check=False,
             capture_output=True,
+            text=True,
             timeout=10,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return "Docker daemon not reachable: `docker info` gave no answer in 10 s"
+    except OSError as exc:
+        return f"Docker daemon not reachable: {exc}"
+    if result.returncode != 0:
+        said = result.stderr.strip().splitlines() or [f"exit {result.returncode}"]
+        return f"Docker daemon not reachable: {said[-1]}"
+    os_type = result.stdout.strip()
+    if os_type != "linux":
+        return f"Docker daemon runs {os_type} containers; the docker tier needs linux"
+    return None
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    if item.get_closest_marker("docker") is not None and not _docker_daemon_reachable():
-        pytest.skip("Docker daemon not reachable")
+    if item.get_closest_marker("docker") is not None:
+        reason = _no_linux_docker()
+        if reason is not None:
+            pytest.skip(reason)

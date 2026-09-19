@@ -2,79 +2,23 @@
 
 from __future__ import annotations
 
-import asyncio
-import os
 from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from waystation.observability import SANDBOX, log_argv
-from waystation.sandbox.processes import (
-    ProcessStrategy,
-    ProcessTree,
-    host_processes,
-)
+from waystation.sandbox._host import HostRunner, allowlisted_env, discard_workspace
+from waystation.sandbox.processes import ProcessStrategy, host_processes
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
-from waystation.tails import TailBuffer
-from waystation.workspace import Workspace, remove_workspace
+from waystation.workspace import Workspace
 
-
-def _build_env(
-    *,
-    base: Sequence[str],
-    literal: Mapping[str, str],
-    pass_env: Sequence[str],
-) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for key in (*base, *pass_env):
-        value = os.environ.get(key)
-        if value is not None:
-            env[key] = value
-    env.update(literal)
-    return env
-
-
-async def _read_line(stream: asyncio.StreamReader) -> bytes:
-    """The next line, however long; ``b""`` at EOF.
-
-    ``readline`` raises on a line past the reader's limit (64 KiB by default)
-    and drops it. ``readuntil`` leaves an overrun buffered, so the line is
-    taken a limit's worth at a time and none is too long (ADR-0017).
-    """
-    parts: list[bytes] = []
-    while True:
-        try:
-            parts.append(await stream.readuntil(b"\n"))
-            break
-        except asyncio.LimitOverrunError as exc:
-            parts.append(await stream.readexactly(exc.consumed))
-        except asyncio.IncompleteReadError as exc:
-            parts.append(exc.partial)
-            break
-    return b"".join(parts)
-
-
-def _rmtree_retry(path: str | os.PathLike[str], *, attempts: int = 5) -> None:
-    """Remove a workspace dir; retry briefly on Windows file-lock races."""
-    import time
-
-    last: OSError | None = None
-    for i in range(attempts):
-        try:
-            remove_workspace(path)
-            return
-        except OSError as exc:
-            last = exc
-            time.sleep(0.05 * (i + 1))
-    SANDBOX.error("teardown failed while removing workspace %s: %s", path, last)
+__all__ = ["NoSandbox"]
 
 
 @dataclass(slots=True)
 class _HostSandbox:
     workspace: str
     _env: dict[str, str]
-    _strategy: ProcessStrategy
-    _trees: list[ProcessTree] = field(default_factory=list)
+    _runner: HostRunner
 
     async def exec(
         self,
@@ -89,100 +33,15 @@ class _HostSandbox:
         merged = dict(self._env)
         if env:
             merged.update(env)
-        log_argv(SANDBOX, argv)
-
-        popen_kwargs: dict[str, object] = {
-            "stdin": asyncio.subprocess.PIPE,
-            "stdout": asyncio.subprocess.PIPE,
-            "stderr": asyncio.subprocess.PIPE,
-            "cwd": self.workspace,
-            "env": merged,
-            **self._strategy.spawn_options(),
-        }
-        process = await asyncio.create_subprocess_exec(*argv, **popen_kwargs)  # type: ignore[arg-type]
-        tree = self._strategy.adopt(process)
-        self._trees.append(tree)
-
-        async def _pump(
-            stream: asyncio.StreamReader | None,
-            callback: LineCallback | None,
-            full: list[str] | None,
-            tail: TailBuffer | None,
-        ) -> None:
-            if stream is None:
-                return
-            while True:
-                line_b = await _read_line(stream)
-                if not line_b:
-                    break
-                text = line_b.decode("utf-8", errors="replace")
-                if full is not None:
-                    full.append(text)
-                if tail is not None:
-                    tail.append(text)
-                if callback is None:
-                    # Nobody asked to watch this exec, so it is setup rather
-                    # than the agent: its output belongs at DEBUG (issue #6).
-                    # The agent's lines are logged by whoever asked for them.
-                    SANDBOX.debug("%s", text.rstrip("\r\n"))
-                    continue
-                maybe = callback(text.rstrip("\r\n"))
-                if asyncio.iscoroutine(maybe):
-                    await maybe
-
-        stdout_full: list[str] | None = [] if capture else None
-        stderr_full: list[str] | None = [] if capture else None
-        stdout_tail = None if capture else TailBuffer()
-        stderr_tail = None if capture else TailBuffer()
-        assert process.stdout is not None
-        assert process.stderr is not None
-        pump_out = asyncio.create_task(
-            _pump(process.stdout, on_stdout, stdout_full, stdout_tail)
+        return await self._runner.run(
+            argv,
+            stdin=stdin,
+            capture=capture,
+            on_stdout=on_stdout,
+            on_stderr=on_stderr,
+            cwd=self.workspace,
+            env=merged,
         )
-        pump_err = asyncio.create_task(
-            _pump(process.stderr, on_stderr, stderr_full, stderr_tail)
-        )
-
-        if stdin is not None and process.stdin is not None:
-            process.stdin.write(stdin.encode("utf-8"))
-            await process.stdin.drain()
-            process.stdin.close()
-        elif process.stdin is not None:
-            process.stdin.close()
-
-        try:
-            exit_code = await process.wait()
-            await asyncio.gather(pump_out, pump_err)
-        except asyncio.CancelledError:
-            tree.kill()
-            with suppress(asyncio.CancelledError):
-                await process.wait()
-            pump_out.cancel()
-            pump_err.cancel()
-            with suppress(asyncio.CancelledError):
-                await asyncio.gather(pump_out, pump_err)
-            raise
-
-        if capture:
-            assert stdout_full is not None
-            assert stderr_full is not None
-            return ExecResult(
-                exit_code=exit_code,
-                stdout="".join(stdout_full),
-                stderr="".join(stderr_full),
-            )
-        assert stdout_tail is not None
-        assert stderr_tail is not None
-        return ExecResult(
-            exit_code=exit_code,
-            stdout=stdout_tail.text(),
-            stderr=stderr_tail.text(),
-        )
-
-    def release_trees(self) -> None:
-        for tree in self._trees:
-            tree.release()
-        self._trees.clear()
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,20 +63,14 @@ class NoSandbox:
         env: Mapping[str, str],
         pass_env: Sequence[str],
     ) -> AsyncIterator[Sandbox]:
-        merged_literal = {**dict(self.env), **dict(env)}
-        merged_pass = (*self.pass_env, *pass_env)
-        built = _build_env(
+        built = allowlisted_env(
             base=self.processes.base_env_keys(),
-            literal=merged_literal,
-            pass_env=merged_pass,
+            literal={**dict(self.env), **dict(env)},
+            pass_env=(*self.pass_env, *pass_env),
         )
-        sandbox = _HostSandbox(
-            workspace=str(ws.path),
-            _env=built,
-            _strategy=self.processes,
-        )
+        runner = HostRunner(self.processes)
         try:
-            yield sandbox
+            yield _HostSandbox(workspace=str(ws.path), _env=built, _runner=runner)
         finally:
-            sandbox.release_trees()
-            _rmtree_retry(ws.path)
+            runner.release()
+            discard_workspace(ws.path)

@@ -75,7 +75,12 @@ class ScriptedCommit:
 
 @dataclass(frozen=True, slots=True)
 class ScriptedAgent:
-    """Play back canned lines, commits, and an Outcome through ``sh -c``."""
+    """Play back canned lines, commits, and an Outcome through ``sh -c``.
+
+    ``shell`` is the sh the script runs under. ``None`` finds the host's (Git
+    Bash on Windows), which is what ``NoSandbox`` runs; a sandbox with an sh
+    of its own, such as ``DockerSandbox``'s image, is named — ``shell="sh"``.
+    """
 
     lines: Sequence[str] = ()
     outcome: Any = None
@@ -87,8 +92,11 @@ class ScriptedAgent:
     delay: float | None = None
     linger: bool = False
     linger_touch: str | None = None
+    shell: str | None = None
 
     def preflight(self) -> None:
+        if self.shell is not None:
+            return  # the sandbox's own sh; preflight looks only at the host
         try:
             _find_sh()
         except FileNotFoundError as exc:
@@ -124,7 +132,7 @@ class ScriptedAgent:
         parts.append(f"exit {int(self.exit_code)}")
         script = "\n".join(parts)
         return AgentCommand(
-            argv=(_find_sh(), "-c", script),
+            argv=(self.shell if self.shell is not None else _find_sh(), "-c", script),
             stdin=None,
             env=self.env,
             pass_env=self.pass_env,

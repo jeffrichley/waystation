@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from waystation._git import run_git
+from waystation._git import config_value, run_git
 from waystation.errors import StageError
 from waystation.results import Refused
 
@@ -62,8 +62,8 @@ async def prepare_workspace(
     resolved = await run_git(host, "rev-parse", "--verify", base, stage="workspace")
     base_sha = resolved.stdout.strip()
 
-    name = await _identity(host, "user.name")
-    email = await _identity(host, "user.email")
+    name = await config_value(host, "user.name", stage="workspace")
+    email = await config_value(host, "user.email", stage="workspace")
     if not name or not email:
         raise StageError(
             "workspace",
@@ -94,9 +94,3 @@ async def prepare_workspace(
         raise
 
     return Workspace(path=tmp, run_id=rid, base_sha=base_sha, host_repo=host)
-
-
-async def _identity(host: Path, key: str) -> str:
-    """The host's ``key`` from git config, or ``""`` when it has none."""
-    shown = await run_git(host, "config", "--get", key, stage="workspace", check=False)
-    return shown.stdout.strip() if shown.returncode == 0 else ""

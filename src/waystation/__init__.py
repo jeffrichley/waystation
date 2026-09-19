@@ -47,7 +47,13 @@ from waystation.results import (
     TimedOut,
     Timeouts,
 )
-from waystation.sandbox import ExecResult, NoSandbox, Sandbox, SandboxBackend
+from waystation.sandbox import (
+    DockerSandbox,
+    ExecResult,
+    NoSandbox,
+    Sandbox,
+    SandboxBackend,
+)
 from waystation.signals import handle_signals
 from waystation.workspace import Workspace, prepare_workspace
 
@@ -59,6 +65,7 @@ __all__ = [
     "AgentUsage",
     "CommandFailed",
     "Dashboard",
+    "DockerSandbox",
     "Errored",
     "EventLog",
     "ExecResult",

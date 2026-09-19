@@ -203,14 +203,18 @@ def a_run(
     *,
     commits: Sequence[ScriptedCommit] = (ScriptedCommit("add a file", {"a.txt": "x"}),),
     sandbox: SandboxBackend | None = None,
+    shell: str | None = None,
 ) -> RunSpec[Summary]:
     """A run that says one line, makes ``commits`` (one, by default), and reports.
 
-    It runs on ``NoSandbox`` unless given another ``sandbox``.
+    It runs on ``NoSandbox`` unless given another ``sandbox``; one that
+    brings its own sh, as ``DockerSandbox`` does, wants ``shell="sh"`` too.
     """
     return Flow(
         repo,
-        agent=ScriptedAgent(lines=["working"], outcome=OK_OUTCOME, commits=commits),
+        agent=ScriptedAgent(
+            lines=["working"], outcome=OK_OUTCOME, commits=commits, shell=shell
+        ),
         sandbox=sandbox if sandbox is not None else NoSandbox(),
     ).run(prompt)
 

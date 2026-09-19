@@ -92,13 +92,15 @@ WORKS_UNTIL_STOPPED = "\n".join(
         "git commit -q -m first",
         "printf 'wip\\n' > wip.txt",
         "echo ready",
-        "sleep 60 &",
-        "wait",
+        "while true; do sleep 0.05; done",
     ]
 )
-"""A ``ShellAgent`` script that commits, leaves work, says ``ready``, then waits.
+"""A ``ShellAgent`` script that commits, leaves work, says ``ready``, then works.
 
 Stopped, it leaves ``["WIP: salvaged uncommitted work", "first"]`` to keep.
+It works in short sleeps, never one long child: a kill that races a spawn
+on Windows can miss the child, and a missed ``sleep 60`` holds stdout open
+past the test's timeout, where a missed ``sleep 0.05`` is gone at once.
 """
 
 RECORDED_CLAUDE = Path(__file__).parent / "fixtures" / "claude_code"

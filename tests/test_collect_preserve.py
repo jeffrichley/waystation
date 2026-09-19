@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
-from helpers import commit_on, git
+from helpers import OK_OUTCOME, OK_OUTCOME_LINE, ShellAgent, commit_on, git
 from waystation import (
     AgentExited,
+    CommandFailed,
     Flow,
     NoSandbox,
     Refused,
@@ -202,6 +205,75 @@ async def test_collect_failing_after_agent_failure_is_logged_not_reported(
     assert isinstance(result.failure, AgentExited)
     assert result.failure.exit_code == 3
     assert any("collect" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.git
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows looks a program up on the host's PATH, not the one a "
+    "sandbox is given; there git finds its own sh wherever it is installed",
+)
+async def test_collect_needs_git_on_the_sandbox_path_and_no_sh(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    # Git runs collect's script with its own sh, so a host whose sh is not on
+    # PATH — Windows, with only Git\cmd there — collects all the same.
+    found = shutil.which("git")
+    assert found is not None
+    only_git = tmp_path / "only-git"
+    only_git.mkdir()
+    (only_git / "git").symlink_to(found)
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(
+            commits=(ScriptedCommit(message="kept", files={"KEPT": "yes\n"}),),
+            uncommitted={"LEFT": "over\n"},
+            outcome=Answer(summary="ok"),
+        ),
+        sandbox=NoSandbox(env={"PATH": str(only_git)}),
+    )
+
+    result = await flow.run("only git", outcome=Answer)
+
+    assert isinstance(result, RunSucceeded), result
+    assert result.series == Series(commits=2, salvaged=True)
+
+
+@pytest.mark.git
+@pytest.mark.parametrize(
+    ("agent", "command"),
+    [
+        # A corrupt index fails the first look, before anything else runs.
+        (
+            ScriptedAgent(uncommitted={".git/index": "garbage"}, outcome=OK_OUTCOME),
+            ("status", "--porcelain"),
+        ),
+        # format-patch alone reads format.*, so every check before it passes.
+        (
+            ShellAgent(
+                "git config format.numbered bogus && printf x > a.txt && "
+                f"git add a.txt && git commit -qm one && echo '{OK_OUTCOME_LINE}'"
+            ),
+            ("format-patch", "--stdout", "{base}..HEAD"),
+        ),
+    ],
+    ids=["status", "format-patch"],
+)
+async def test_a_git_failure_in_collect_names_its_command_and_only_its_stderr(
+    host_repo: Path, agent: Any, command: tuple[str, ...]
+) -> None:
+    result = await Flow(host_repo, agent=agent, sandbox=NoSandbox()).run("break git")
+
+    assert isinstance(result, RunFailed), result
+    assert result.stage == "collect"
+    failure = result.failure
+    assert isinstance(failure, CommandFailed)
+    assert result.base_sha is not None
+    expected = ("git", *(arg.format(base=result.base_sha) for arg in command))
+    assert failure.argv == expected
+    assert failure.exit_code == 128
+    # Git's own words and nothing before them: no other step's stderr.
+    assert failure.stderr_tail.startswith(("fatal: ", "error: ")), failure
 
 
 class _MergeAgent:

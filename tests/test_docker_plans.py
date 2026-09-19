@@ -16,6 +16,7 @@ from waystation.sandbox._docker_plans import (
     plan_create,
     plan_destroy,
     plan_exec,
+    plan_labelled,
     resolve_transport,
 )
 
@@ -156,6 +157,27 @@ def test_teardown_forces_removal_and_never_stops() -> None:
     # stop burns a 10 s grace on an idle PID 1; rm -f does not (ADR-0014).
     # -v takes anonymous volumes an image declares along with the container.
     assert plan_destroy("box") == ("docker", "rm", "-f", "-v", "box")
+
+
+@pytest.mark.unit
+def test_teardown_can_remove_many_sandboxes_in_one_call() -> None:
+    assert plan_destroy("a", "b") == ("docker", "rm", "-f", "-v", "a", "b")
+
+
+@pytest.mark.unit
+def test_reaping_a_run_finds_its_sandboxes_by_label_running_or_not() -> None:
+    argv = plan_labelled("1a2b3c4d")
+
+    assert argv[:2] == ("docker", "ps")
+    assert {"--all", "--quiet"} <= set(argv)
+    assert ("--filter", "label=waystation.run-id=1a2b3c4d") in pairwise(argv)
+
+
+@pytest.mark.unit
+def test_reaping_every_run_finds_every_labelled_sandbox() -> None:
+    argv = plan_labelled(None)
+
+    assert ("--filter", "label=waystation.run-id") in pairwise(argv)
 
 
 @pytest.mark.unit

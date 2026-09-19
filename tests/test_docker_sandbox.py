@@ -8,8 +8,10 @@ build one — missing setup is never mistaken for a pass.
 from __future__ import annotations
 
 import logging
+import secrets
 import subprocess
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Literal
 
@@ -66,14 +68,54 @@ async def image() -> str:
 
 
 def _labelled(run_id: str) -> list[str]:
-    """Containers carrying ``run_id``'s label, running or not."""
+    """Containers carrying ``run_id``'s label, running or not, by full id."""
     listed = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", f"label=waystation.run-id={run_id}"],
+        [
+            "docker",
+            "ps",
+            "-aq",
+            "--no-trunc",
+            "--filter",
+            f"label=waystation.run-id={run_id}",
+        ],
         check=True,
         capture_output=True,
         text=True,
     )
     return listed.stdout.split()
+
+
+@pytest.fixture
+def orphan() -> Iterator[Callable[[str], str]]:
+    """Make a sandbox labelled with a run id, as a run killed too hard leaves one.
+
+    Returns its full id. Whatever the test leaves is removed afterwards.
+    """
+    made: list[str] = []
+
+    def make(run_id: str) -> str:
+        started = subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--label",
+                f"waystation.run-id={run_id}",
+                "--entrypoint",
+                "sleep",
+                TEST_IMAGE,
+                "infinity",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        made.append(started.stdout.strip())
+        return made[-1]
+
+    yield make
+    if made:
+        subprocess.run(["docker", "rm", "-f", *made], check=False, capture_output=True)
 
 
 def _docker_calls(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -292,3 +334,40 @@ async def test_no_docker_cli_fails_preflight_saying_to_install_it(
 
     with pytest.raises(PreflightError, match="install Docker"):
         await DockerSandbox(TEST_IMAGE).preflight()
+
+
+@pytest.mark.docker
+async def test_reap_removes_one_runs_sandboxes_and_says_how_many(
+    image: str, orphan: Callable[[str], str]
+) -> None:
+    run_id, other = secrets.token_hex(4), secrets.token_hex(4)
+    orphan(run_id)
+    orphan(run_id)
+    kept = orphan(other)
+
+    removed = await DockerSandbox.reap(run_id)
+
+    assert removed == 2
+    assert _labelled(run_id) == []
+    assert _labelled(other) == [kept]
+
+
+@pytest.mark.docker
+async def test_reaping_a_run_with_no_sandboxes_removes_nothing(image: str) -> None:
+    assert await DockerSandbox.reap(secrets.token_hex(4)) == 0
+
+
+@pytest.mark.docker
+async def test_nothing_reaps_an_orphan_but_you(
+    host_repo: Path, image: str, orphan: Callable[[str], str]
+) -> None:
+    # Preflight and teardown never reap: the orphan could be a concurrent
+    # flow's live sandbox (ADR-0014).
+    run_id = secrets.token_hex(4)
+    left = orphan(run_id)
+
+    await DockerSandbox(image).preflight()
+    result = await a_run(host_repo, sandbox=DockerSandbox(image), shell="sh")
+
+    assert isinstance(result, RunSucceeded), result
+    assert _labelled(run_id) == [left]

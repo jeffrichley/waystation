@@ -19,6 +19,7 @@ __all__ = [
     "plan_destroy",
     "plan_exec",
     "plan_inspect",
+    "plan_labelled",
     "plan_ping",
     "resolve_transport",
 ]
@@ -108,12 +109,18 @@ def plan_exec(
     )
 
 
-def plan_destroy(container: str) -> tuple[str, ...]:
+def plan_destroy(*containers: str) -> tuple[str, ...]:
     """``docker rm -f``, never ``stop`` (ADR-0014).
 
     ``-v`` takes any anonymous volume the image declares along with it.
     """
-    return ("docker", "rm", "-f", "-v", container)
+    return ("docker", "rm", "-f", "-v", *containers)
+
+
+def plan_labelled(run_id: str | None) -> tuple[str, ...]:
+    """The id of every sandbox carrying ``run_id``, or any run id, running or not."""
+    label = RUN_ID_LABEL if run_id is None else f"{RUN_ID_LABEL}={run_id}"
+    return ("docker", "ps", "--all", "--quiet", "--filter", f"label={label}")
 
 
 def plan_inspect(image: str) -> tuple[str, ...]:

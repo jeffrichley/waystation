@@ -20,6 +20,7 @@ from waystation.sandbox._docker_plans import (
     plan_destroy,
     plan_exec,
     plan_inspect,
+    plan_labelled,
     plan_ping,
     resolve_transport,
 )
@@ -124,11 +125,7 @@ class DockerSandbox:
         if answered.exit_code != 0:
             raise PreflightError(
                 "Docker daemon not reachable: start Docker, then retry",
-                failure=CommandFailed(
-                    argv=ping,
-                    exit_code=answered.exit_code,
-                    stderr_tail=bound_tail(answered.stderr),
-                ),
+                failure=_failed(ping, answered),
             )
         detail = (
             f"image {self.image!r} is not on this host, and waystation never "
@@ -138,6 +135,23 @@ class DockerSandbox:
         raise PreflightError(
             detail, failure=Refused(reason="image_missing", detail=detail)
         )
+
+    @staticmethod
+    async def reap(run_id: str | None = None) -> int:
+        """Remove the sandboxes waystation made, or only ``run_id``'s; say how many.
+
+        Nothing calls it. A run removes its own sandbox, so one still here is
+        an orphan of a run killed too hard to tear down — or the live sandbox
+        of a flow running now, which only you can tell apart (ADR-0014). Name
+        the run when you can.
+
+        Raises ``StageError("sandbox", CommandFailed)`` when docker fails.
+        """
+        found = await _docker_or_raise(plan_labelled(run_id))
+        ids = found.stdout.split()
+        if ids:
+            await _docker_or_raise(plan_destroy(*ids))
+        return len(ids)
 
     @asynccontextmanager
     async def start(
@@ -168,16 +182,7 @@ class DockerSandbox:
             run_args=self.run_args,
         )
         try:
-            created = await _docker(create)
-            if created.exit_code != 0:
-                raise StageError(
-                    "sandbox",
-                    CommandFailed(
-                        argv=create,
-                        exit_code=created.exit_code,
-                        stderr_tail=bound_tail(created.stderr),
-                    ),
-                )
+            await _docker_or_raise(create)
             if transport == "copy":
                 await clone_in(container, ws)
             yield container
@@ -196,6 +201,20 @@ async def _docker(argv: Sequence[str]) -> ExecResult:
         return await runner.run(argv)
     finally:
         runner.release()
+
+
+async def _docker_or_raise(argv: Sequence[str]) -> ExecResult:
+    """One docker CLI call that must succeed, or the sandbox stage fails."""
+    result = await _docker(argv)
+    if result.exit_code != 0:
+        raise StageError("sandbox", _failed(argv, result))
+    return result
+
+
+def _failed(argv: Sequence[str], result: ExecResult) -> CommandFailed:
+    return CommandFailed(
+        argv=argv, exit_code=result.exit_code, stderr_tail=bound_tail(result.stderr)
+    )
 
 
 async def _destroy(name: str) -> None:

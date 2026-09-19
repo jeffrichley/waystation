@@ -10,7 +10,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | --- | --- | --- |
 | `unit` | nothing | pure logic; no git, no Docker, no network |
 | `git` | a real `git` binary and temp repos | **anything that shells out to git** |
-| `docker` | a reachable Docker daemon | `conftest.py` skips it when there isn't one |
+| `docker` | a Linux Docker daemon and the `waystation-test` image | `conftest.py` skips it without such a daemon; a missing image fails, saying to run `just test-image` |
 | `live` | real agent credentials and money | never selected by default or in CI |
 
 `--strict-markers` is on, so a typo fails collection rather than silently matching nothing. `addopts` carries `-m "not live"`.
@@ -43,7 +43,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `until(ready, task)` | wait until `ready()` holds — a run reached a known point, say a stalled git — failing at once if the run ends first |
 | `stalling_ref_hook(hooks, started, release)` | a `reference-transaction` hook that holds the first ref update git prepares until `release` exists; point a host at it with `core.hooksPath` |
 | `awaited(spec)` | a coroutine awaiting a `RunSpec`, for `asyncio.create_task` — reach for it when a test cancels or drives a run from outside |
-| `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series, `sandbox=` your own backend |
+| `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series, `sandbox=` your own backend, and `shell="sh"` the container's own sh when that backend is Docker |
 | `ShellAgent(script)` | an agent that *is* a shell script — reach for it over `ScriptedAgent` when the test drives stderr, an exit code, or timing |
 | `PROMPT` | the prompt `a_run` uses; has a second line, so a test can prove the body stayed unlogged |
 | `OK_OUTCOME` | the Outcome a scripted agent reports when the test doesn't care |

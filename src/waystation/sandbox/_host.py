@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 
+from waystation._git import decode, encode
 from waystation.observability import SANDBOX, log_argv
 from waystation.sandbox.processes import ProcessStrategy, ProcessTree
 from waystation.sandbox.protocol import ExecResult, LineCallback
@@ -103,7 +104,9 @@ class HostRunner:
 
         Cancelling it kills the process's tree first (ADR-0023); a tree still
         held when the sandbox goes is let go by ``release``. ``capture=False``
-        keeps only the tails. ``env=None`` inherits the host's.
+        keeps only the tails. ``env=None`` inherits the host's. Captured
+        output keeps every byte; callbacks and tails read one that is not
+        UTF-8 as U+FFFD, as ``Sandbox.exec`` promises (ADR-0030).
         """
         log_argv(SANDBOX, argv)
         popen_kwargs: dict[str, object] = {
@@ -130,9 +133,12 @@ class HostRunner:
                 line_b = await _read_line(stream)
                 if not line_b:
                     break
-                text = line_b.decode("utf-8", errors="replace")
                 if full is not None:
-                    full.append(text)
+                    # Exact, for git: a patch cut from it lands byte for byte.
+                    full.append(decode(line_b))
+                # Readable, for people and parsers: a lone surrogate breaks a
+                # print, a UTF-8 log, or an Outcome dumped to JSON.
+                text = line_b.decode("utf-8", errors="replace")
                 if tail is not None:
                     tail.append(text)
                 if callback is None:
@@ -165,7 +171,7 @@ class HostRunner:
                     # A process may exit without reading all it was given; its
                     # exit code says why, not the pipe that closed under the write.
                     with suppress(BrokenPipeError, ConnectionResetError):
-                        process.stdin.write(stdin.encode("utf-8"))
+                        process.stdin.write(encode(stdin))
                         await process.stdin.drain()
                 process.stdin.close()
             exit_code = await process.wait()

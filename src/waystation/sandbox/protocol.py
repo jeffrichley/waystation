@@ -14,6 +14,8 @@ LineCallback = Callable[[str], Awaitable[None] | None]
 
 @dataclass(frozen=True, slots=True)
 class ExecResult:
+    """How an exec ended: its exit code, and its output or the tails of it."""
+
     exit_code: int
     stdout: str
     stderr: str
@@ -32,7 +34,17 @@ class Sandbox(Protocol):
         capture: bool = True,
         on_stdout: LineCallback | None = None,
         on_stderr: LineCallback | None = None,
-    ) -> ExecResult: ...
+    ) -> ExecResult:
+        """Run ``argv`` in the sandbox; each output line to its callback.
+
+        Captured output is exact: a byte that is not UTF-8 — a latin-1 file
+        in a patch, say — stays a surrogate escape (UTF-8 with
+        ``surrogateescape``), so git gets it back and the patch lands as
+        committed. ``stdin`` is encoded the same way. The callbacks, and the
+        tails ``capture=False`` keeps, are for people and parsers: they read
+        such a byte as U+FFFD (ADR-0030).
+        """
+        ...
 
 
 @runtime_checkable

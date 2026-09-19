@@ -37,6 +37,7 @@ from waystation import (
     ScriptedAgent,
     prepare_workspace,
 )
+from waystation.sandbox import clone_in
 
 TEST_IMAGE = "waystation-test"
 MISSING_IMAGE = "waystation-test-missing:never"
@@ -275,6 +276,25 @@ async def test_an_exec_streams_stdin_in_and_lines_out_as_they_come(
     assert result.exit_code == 0
     assert lines == ["one", "two"]
     assert result.stdout == "one\ntwo\n"  # capture=False keeps the tail
+
+
+@pytest.mark.docker
+async def test_a_copy_runs_again_over_its_own_work_in_the_container(
+    host_repo: Path, image: str
+) -> None:
+    # A copy that exits 137 is tried again, so it must carry on over what an
+    # earlier try left there (ADR-0016).
+    ws = await prepare_workspace(host_repo)
+
+    async with DockerSandbox(image, transport="copy").start(
+        ws, env={}, pass_env=()
+    ) as sandbox:
+        await clone_in(sandbox, ws)
+        shown = await sandbox.exec(
+            ["sh", "-c", "git rev-parse --abbrev-ref HEAD; git status --porcelain"]
+        )
+
+    assert shown.stdout.splitlines() == [f"waystation/{ws.run_id}"]
 
 
 @pytest.mark.docker

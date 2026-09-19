@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from helpers import ShellAgent
 from waystation import (
     AgentExited,
     Errored,
@@ -69,6 +70,26 @@ async def test_nonzero_exit_returns_agent_exited_with_outcome(
     assert result.failure.outcome == Answer(summary="kept")
     assert result.agent is not None
     assert result.agent.exit_code == 7
+
+
+@pytest.mark.git
+@pytest.mark.parametrize("code", [126, 137])
+async def test_an_agent_that_exits_126_or_137_is_never_run_again(
+    host_repo: Path, tmp_path: Path, code: int
+) -> None:
+    # Only waystation's own setup is retried; an agent's run is prompt
+    # content, and retrying it is the flow's call (ADR-0016).
+    tries = tmp_path / "tries"
+    agent = ShellAgent(f"echo try >> '{tries.as_posix()}'; exit {code}")
+    flow = Flow(host_repo, agent=agent, sandbox=NoSandbox())
+
+    result = await flow.run("once", outcome=Answer)
+
+    assert isinstance(result, RunFailed)
+    assert result.stage == "agent"
+    assert isinstance(result.failure, AgentExited)
+    assert result.failure.exit_code == code
+    assert tries.read_text(encoding="utf-8").splitlines() == ["try"]
 
 
 @pytest.mark.git

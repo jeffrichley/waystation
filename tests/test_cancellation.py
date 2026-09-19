@@ -149,7 +149,7 @@ async def test_a_cancellation_during_collect_waits_for_the_series_and_never_inte
     host_repo: Path, isolated_tempdir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     gate = Gate()
-    spec = a_run(host_repo, sandbox=GatedSandbox(gate, at="format-patch"))
+    spec = a_run(host_repo, sandbox=GatedSandbox(gate, at="collect"))
 
     with caplog.at_level(logging.INFO, logger="waystation"):
         run_id = await _cancel_at(gate, spec.integrate("feature"))
@@ -243,7 +243,7 @@ async def test_a_failure_a_cancelled_run_can_no_longer_report_is_logged(
         commits=(ScriptedCommit("add a file", {"a.txt": "x"}),),
     )
     spec: RunSpec[Summary] = Flow(
-        host_repo, agent=agent, sandbox=GatedSandbox(gate, at="format-patch")
+        host_repo, agent=agent, sandbox=GatedSandbox(gate, at="collect")
     ).run("fail, then be cancelled")
 
     with caplog.at_level(logging.INFO, logger="waystation"):

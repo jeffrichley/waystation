@@ -299,11 +299,14 @@ class Gate:
 
 
 class _GatedBox:
-    """A live sandbox whose ``git <command>`` waits at the gate first."""
+    """A live sandbox whose git execs wait at the gate first.
 
-    def __init__(self, inner: Sandbox, gate: Gate, command: str) -> None:
+    They are collect's: the agents these tests run are shell scripts.
+    """
+
+    def __init__(self, inner: Sandbox, gate: Gate) -> None:
         self.workspace = inner.workspace
-        self._inner, self._gate, self._command = inner, gate, command
+        self._inner, self._gate = inner, gate
 
     async def exec(
         self,
@@ -315,7 +318,7 @@ class _GatedBox:
         on_stdout: LineCallback | None = None,
         on_stderr: LineCallback | None = None,
     ) -> ExecResult:
-        if list(argv[:2]) == ["git", self._command]:
+        if argv[0] == "git":
             await self._gate.hold()
         return await self._inner.exec(
             argv,
@@ -332,7 +335,7 @@ class GatedSandbox:
     """``NoSandbox``, held at one point of its life until the test lets it go."""
 
     gate: Gate
-    at: Literal["start", "format-patch", "teardown"]
+    at: Literal["start", "collect", "teardown"]
     inner: NoSandbox = field(default_factory=NoSandbox)
 
     async def preflight(self) -> None:
@@ -345,9 +348,7 @@ class GatedSandbox:
         if self.at == "start":
             await self.gate.hold()
         async with self.inner.start(ws, env=env, pass_env=pass_env) as box:
-            yield (
-                box if self.at != "format-patch" else _GatedBox(box, self.gate, self.at)
-            )
+            yield box if self.at != "collect" else _GatedBox(box, self.gate)
             if self.at == "teardown":
                 await self.gate.hold()
 

@@ -207,6 +207,48 @@ async def test_collect_failing_after_agent_failure_is_logged_not_reported(
     assert any("collect" in record.getMessage() for record in caplog.records)
 
 
+def _git_execs(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Each git command line the sandbox ran: collect's, as the agent runs in sh."""
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "waystation.sandbox" and r.getMessage().startswith("git ")
+    ]
+
+
+@pytest.mark.git
+@pytest.mark.parametrize(
+    ("left", "execs"),
+    [({}, 1), ({"LEFT": "over\n"}, 4)],
+    ids=["committed", "salvaged"],
+)
+async def test_collect_takes_one_exec_and_a_salvage_only_its_own_commit(
+    host_repo: Path,
+    caplog: pytest.LogCaptureFixture,
+    left: dict[str, str],
+    execs: int,
+) -> None:
+    # An exec is a `docker exec` on DockerSandbox, ~0.5 s on Docker Desktop:
+    # the checks and the series are one, and a salvage adds its add and
+    # commit and a second look (ADR-0029).
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(
+            commits=(ScriptedCommit(message="kept", files={"KEPT": "yes\n"}),),
+            uncommitted=left,
+            outcome=Answer(summary="ok"),
+        ),
+        sandbox=NoSandbox(),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="waystation.sandbox"):
+        result = await flow.run("count", outcome=Answer)
+
+    assert isinstance(result, RunSucceeded), result
+    assert result.series == Series(commits=1 + len(left), salvaged=bool(left))
+    assert len(_git_execs(caplog)) == execs
+
+
 @pytest.mark.git
 @pytest.mark.skipif(
     sys.platform == "win32",

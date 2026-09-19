@@ -65,11 +65,14 @@ class Gate:
 
 
 class _GatedBox:
-    """A live sandbox whose ``git <command>`` waits at the gate first."""
+    """A live sandbox whose git execs wait at the gate first.
 
-    def __init__(self, inner: Sandbox, gate: Gate, command: str) -> None:
+    They are collect's: the agents these tests run are shell scripts.
+    """
+
+    def __init__(self, inner: Sandbox, gate: Gate) -> None:
         self.workspace = inner.workspace
-        self._inner, self._gate, self._command = inner, gate, command
+        self._inner, self._gate = inner, gate
 
     async def exec(
         self,
@@ -81,7 +84,7 @@ class _GatedBox:
         on_stdout: LineCallback | None = None,
         on_stderr: LineCallback | None = None,
     ) -> ExecResult:
-        if list(argv[:2]) == ["git", self._command]:
+        if argv[0] == "git":
             await self._gate.hold()
         return await self._inner.exec(
             argv,
@@ -98,7 +101,7 @@ class GatedSandbox:
     """``NoSandbox``, held at one point of its life until the test lets it go."""
 
     gate: Gate
-    at: Literal["start", "format-patch", "teardown"]
+    at: Literal["start", "collect", "teardown"]
     inner: NoSandbox = field(default_factory=NoSandbox)
 
     async def preflight(self) -> None:
@@ -111,9 +114,7 @@ class GatedSandbox:
         if self.at == "start":
             await self.gate.hold()
         async with self.inner.start(ws, env=env, pass_env=pass_env) as box:
-            yield (
-                box if self.at != "format-patch" else _GatedBox(box, self.gate, self.at)
-            )
+            yield box if self.at != "collect" else _GatedBox(box, self.gate)
             if self.at == "teardown":
                 await self.gate.hold()
 
@@ -225,7 +226,7 @@ async def test_a_cancellation_during_collect_waits_for_the_series_and_never_inte
     host_repo: Path, isolated_tempdir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     gate = Gate()
-    spec = a_run(host_repo, sandbox=GatedSandbox(gate, at="format-patch"))
+    spec = a_run(host_repo, sandbox=GatedSandbox(gate, at="collect"))
 
     with caplog.at_level(logging.INFO, logger="waystation"):
         run_id = await _cancel_at(gate, spec.integrate("feature"))
@@ -319,7 +320,7 @@ async def test_a_failure_a_cancelled_run_can_no_longer_report_is_logged(
         commits=(ScriptedCommit("add a file", {"a.txt": "x"}),),
     )
     spec: RunSpec[Summary] = Flow(
-        host_repo, agent=agent, sandbox=GatedSandbox(gate, at="format-patch")
+        host_repo, agent=agent, sandbox=GatedSandbox(gate, at="collect")
     ).run("fail, then be cancelled")
 
     with caplog.at_level(logging.INFO, logger="waystation"):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,12 +59,11 @@ def _split_format_patch(stdout: str) -> tuple[str, ...]:
 async def _sandbox_git(
     sandbox: Sandbox,
     *args: str,
-    check: bool = True,
     env: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     argv = ["git", *args]
     result = await sandbox.exec(argv, env=env, capture=True)
-    if check and result.exit_code != 0:
+    if result.exit_code != 0:
         raise StageError(
             "collect",
             CommandFailed(
@@ -89,37 +89,114 @@ async def collect(
     salvage: bool = True,
 ) -> CollectResult:
     """Salvage, check linearity, and emit a ``PatchSeries`` via format-patch."""
-    salvaged = False
-    if salvage:
-        _, status, _ = await _sandbox_git(sandbox, "status", "--porcelain")
-        if status.strip():
-            await _salvage(sandbox, workspace)
-            salvaged = True
-
     base = workspace.base_sha
-    _, merges, _ = await _sandbox_git(sandbox, "rev-list", "--merges", f"{base}..HEAD")
-    ancestor_code, _, _ = await _sandbox_git(
-        sandbox, "merge-base", "--is-ancestor", base, "HEAD", check=False
-    )
-    nonlinear = bool(merges.strip()) or ancestor_code != 0
+    salvaged = False
+    verdict, patches = await _survey(sandbox, base, status=salvage)
+    if verdict == "dirty":
+        await _salvage(sandbox, workspace)
+        salvaged = True
+        verdict, patches = await _survey(sandbox, base, status=False)
 
-    if nonlinear:
+    if verdict == "nonlinear":
         patch_series = await _squash_series(sandbox, workspace)
-        return CollectResult(
-            series_meta=Series(commits=patch_series.commits, salvaged=salvaged),
-            patch_series=patch_series,
-            squashed=True,
-        )
-
-    _, stdout, _ = await _sandbox_git(
-        sandbox, "format-patch", "--stdout", f"{base}..HEAD"
-    )
-    patch_series = PatchSeries.from_format_patch(base, stdout)
+    else:
+        patch_series = PatchSeries.from_format_patch(base, patches)
     return CollectResult(
         series_meta=Series(commits=patch_series.commits, salvaged=salvaged),
         patch_series=patch_series,
-        squashed=False,
+        squashed=verdict == "nonlinear",
     )
+
+
+# Collect's look at the workspace runs as this git alias. Git runs a `!` alias
+# with its own sh, which a Windows host has even where no `sh` is on PATH, so
+# a sandbox needs git and nothing else (ADR-0029).
+_SURVEY = "waystation-collect"
+
+
+async def _survey(sandbox: Sandbox, base: str, *, status: bool) -> tuple[str, str]:
+    """One exec that looks the workspace over: its verdict, and the series if linear.
+
+    The verdict is ``dirty`` (only when ``status``), ``nonlinear`` or
+    ``linear``; the series is ``format-patch``'s output, as it would be from
+    an exec of its own. Every exec is a ``docker exec`` on DockerSandbox,
+    about 0.5 s on Docker Desktop, so the checks and the series are one.
+
+    A git command that fails fails collect as it would alone: a
+    ``CommandFailed`` with its argv, its exit code and only its stderr.
+    """
+    script, steps = _survey_script(base, status=status)
+    argv = ("git", "-c", f"alias.{_SURVEY}=!{script}", _SURVEY)
+    result = await sandbox.exec(argv, capture=True)
+    if result.exit_code != 0:
+        failed, stderr = _failed_step(steps, result.stderr) or (argv, result.stderr)
+        raise StageError(
+            "collect",
+            CommandFailed(
+                argv=failed, exit_code=result.exit_code, stderr_tail=bound_tail(stderr)
+            ),
+        )
+    verdict, _, patches = result.stdout.partition("\n")
+    return verdict, patches
+
+
+def _survey_script(
+    base: str, *, status: bool
+) -> tuple[str, tuple[tuple[str, ...], ...]]:
+    """The survey's script, and the argv of each step it runs, in order.
+
+    Each step says on stderr that it starts, so the stderr of the one that
+    failed is the stderr after its mark. Nothing reaches stdout before the
+    verdict, and nothing but ``format-patch`` after it.
+    """
+    commits = f"{base}..HEAD"
+    dirty = ("git", "status", "--porcelain")
+    merges = ("git", "rev-list", "--merges", commits)
+    descends = ("git", "merge-base", "--is-ancestor", base, "HEAD")
+    series = ("git", "format-patch", "--stdout", commits)
+    lines: list[str] = []
+    if status:
+        lines += [
+            _mark(dirty),
+            f"out=$({shlex.join(dirty)}) || exit",
+            '[ -z "$out" ] || { echo dirty; exit 0; }',
+        ]
+    lines += [
+        _mark(merges),
+        f"out=$({shlex.join(merges)}) || exit",
+        # Any exit of merge-base but 0 is nonlinear: not an ancestor, or no
+        # telling whether it is.
+        _mark(descends),
+        f'if [ -n "$out" ] || ! {shlex.join(descends)}; then',
+        "  echo nonlinear; exit 0",
+        "fi",
+        "echo linear",
+        _mark(series),
+        f"exec {shlex.join(series)}",
+    ]
+    steps = ((dirty,) if status else ()) + (merges, descends, series)
+    return "\n".join(lines), steps
+
+
+def _marker(argv: tuple[str, ...]) -> str:
+    """The line a step writes to stderr as it starts."""
+    return f"waystation: {shlex.join(argv)}"
+
+
+def _mark(argv: tuple[str, ...]) -> str:
+    return f"printf '%s\\n' {shlex.quote(_marker(argv))} >&2"
+
+
+def _failed_step(
+    steps: tuple[tuple[str, ...], ...], stderr: str
+) -> tuple[tuple[str, ...], str] | None:
+    """The last step that started, and the stderr it wrote; ``None`` if none did."""
+    for argv in reversed(steps):
+        marker = _marker(argv) + "\n"
+        at = stderr.rfind(marker)
+        if at >= 0:
+            return argv, stderr[at + len(marker) :]
+    return None
 
 
 async def _salvage(sandbox: Sandbox, workspace: Workspace) -> None:

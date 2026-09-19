@@ -273,6 +273,23 @@ async def test_a_sandbox_starts_and_stops_in_as_few_docker_calls_as_it_can(
 
 
 @pytest.mark.docker
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_a_run_in_docker_spends_one_exec_on_its_agent_and_one_on_collect(
+    host_repo: Path, image: str, caplog: pytest.LogCaptureFixture, transport: Chosen
+) -> None:
+    # Collect's checks and its series are one exec, not one each (ADR-0029);
+    # a copy spends one more getting the workspace in.
+    sandbox = DockerSandbox(image, transport=transport)
+
+    with caplog.at_level(logging.DEBUG, logger="waystation.sandbox"):
+        result = await a_run(host_repo, sandbox=sandbox, shell="sh")
+
+    assert isinstance(result, RunSucceeded), result
+    called = [call.split()[:2] for call in _docker_calls(caplog)]
+    assert called.count(["docker", "exec"]) == (3 if transport == "copy" else 2)
+
+
+@pytest.mark.docker
 async def test_an_exec_streams_stdin_in_and_lines_out_as_they_come(
     host_repo: Path, image: str
 ) -> None:

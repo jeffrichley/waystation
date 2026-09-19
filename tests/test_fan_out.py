@@ -11,7 +11,7 @@ their work and tear down (ADR-0017), and never starts the queued ones.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -268,6 +268,32 @@ async def test_a_consumer_cancelled_in_the_block_stops_its_runs_before_it_ends(
 
 
 @pytest.mark.git
+def test_ctrl_c_on_a_bare_iteration_still_keeps_every_runs_work(
+    host_repo: Path, isolated_tempdir: Path
+) -> None:
+    """A bare ``async for`` has no block to leave: ``asyncio.run`` stops the rest."""
+    stuck = Stuck(host_repo, count=2)
+
+    async def flow_script() -> None:
+        consumer = asyncio.current_task()
+        assert consumer is not None
+
+        async def ctrl_c() -> None:
+            await stuck.all_ready.wait()
+            consumer.cancel()  # what asyncio.run does with the first Ctrl-C
+
+        pressed = asyncio.create_task(ctrl_c())
+        async for result in fan_out(stuck.runs()):
+            pytest.fail(f"a run that works until stopped ended: {result!r}")
+        pressed.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(flow_script())
+
+    stuck.assert_work_kept(isolated_tempdir)
+
+
+@pytest.mark.git
 async def test_each_distinct_agent_and_sandbox_spec_is_preflighted_once(
     host_repo: Path,
 ) -> None:
@@ -289,9 +315,23 @@ async def test_each_distinct_agent_and_sandbox_spec_is_preflighted_once(
     assert sorted(checked) == ["agent a", "agent b", "sandbox x", "sandbox y"]
 
 
+async def _iterated(batch: Iterable[RunSpec[Summary]]) -> None:
+    async for _ in fan_out(batch):
+        pytest.fail("a batch that failed preflight yielded a result")
+
+
+async def _entered(batch: Iterable[RunSpec[Summary]]) -> None:
+    async with fan_out(batch):
+        pytest.fail("a batch that failed preflight entered its block")
+
+
 @pytest.mark.git
+@pytest.mark.parametrize("consume", [_iterated, _entered], ids=["for", "with"])
 async def test_a_problem_anywhere_in_the_batch_stops_it_before_any_run_starts(
-    host_repo: Path, tmp_path: Path, isolated_tempdir: Path
+    host_repo: Path,
+    tmp_path: Path,
+    isolated_tempdir: Path,
+    consume: Callable[[Iterable[RunSpec[Summary]]], Awaitable[None]],
 ) -> None:
     started: list[str] = []
     missing = tmp_path / "prompts" / "never-written.md"
@@ -303,8 +343,7 @@ async def test_a_problem_anywhere_in_the_batch_stops_it_before_any_run_starts(
 
     before = host_state(host_repo)
     with pytest.raises(PreflightError) as refused:
-        async for _ in fan_out(batch()):
-            pytest.fail("a batch that failed preflight yielded a result")
+        await consume(batch())
 
     assert str(missing) in str(refused.value)
     assert started == []

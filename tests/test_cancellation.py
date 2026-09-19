@@ -9,16 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import pytest
 
 from helpers import (
     OK_OUTCOME,
+    Gate,
+    GatedSandbox,
     ShellAgent,
     a_run,
     awaited,
@@ -30,7 +30,6 @@ from helpers import (
     workspaces,
 )
 from waystation import (
-    ExecResult,
     Flow,
     GitRepo,
     Integration,
@@ -40,82 +39,11 @@ from waystation import (
     RunContext,
     RunResult,
     RunSpec,
-    Sandbox,
     ScriptedAgent,
     ScriptedCommit,
     Summary,
-    Workspace,
 )
 from waystation.agents import AgentLine
-from waystation.sandbox.protocol import LineCallback
-
-
-@dataclass(frozen=True)
-class Gate:
-    """A point a test holds a run at, cancels it there, then lets it go on."""
-
-    reached: asyncio.Event = field(default_factory=asyncio.Event)
-    release: asyncio.Event = field(default_factory=asyncio.Event)
-    passed: asyncio.Event = field(default_factory=asyncio.Event)
-
-    async def hold(self) -> None:
-        self.reached.set()
-        await self.release.wait()
-        self.passed.set()
-
-
-class _GatedBox:
-    """A live sandbox whose ``git <command>`` waits at the gate first."""
-
-    def __init__(self, inner: Sandbox, gate: Gate, command: str) -> None:
-        self.workspace = inner.workspace
-        self._inner, self._gate, self._command = inner, gate, command
-
-    async def exec(
-        self,
-        argv: Sequence[str],
-        *,
-        stdin: str | None = None,
-        env: Mapping[str, str] | None = None,
-        capture: bool = True,
-        on_stdout: LineCallback | None = None,
-        on_stderr: LineCallback | None = None,
-    ) -> ExecResult:
-        if list(argv[:2]) == ["git", self._command]:
-            await self._gate.hold()
-        return await self._inner.exec(
-            argv,
-            stdin=stdin,
-            env=env,
-            capture=capture,
-            on_stdout=on_stdout,
-            on_stderr=on_stderr,
-        )
-
-
-@dataclass(frozen=True)
-class GatedSandbox:
-    """``NoSandbox``, held at one point of its life until the test lets it go."""
-
-    gate: Gate
-    at: Literal["start", "format-patch", "teardown"]
-    inner: NoSandbox = field(default_factory=NoSandbox)
-
-    async def preflight(self) -> None:
-        await self.inner.preflight()
-
-    @asynccontextmanager
-    async def start(
-        self, ws: Workspace, *, env: Mapping[str, str], pass_env: Sequence[str]
-    ) -> AsyncIterator[Sandbox]:
-        if self.at == "start":
-            await self.gate.hold()
-        async with self.inner.start(ws, env=env, pass_env=pass_env) as box:
-            yield (
-                box if self.at != "format-patch" else _GatedBox(box, self.gate, self.at)
-            )
-            if self.at == "teardown":
-                await self.gate.hold()
 
 
 @dataclass(frozen=True)

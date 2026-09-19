@@ -21,6 +21,8 @@ import pytest
 from helpers import (
     OK_OUTCOME,
     PROMPT,
+    Gate,
+    GatedSandbox,
     ShellAgent,
     a_run,
     git,
@@ -40,6 +42,7 @@ from waystation import (
     RunResult,
     RunSpec,
     RunSucceeded,
+    SandboxBackend,
     ScriptedAgent,
     Summary,
     fan_out,
@@ -97,13 +100,14 @@ class Stuck:
 
     repo: Path
     count: int
+    sandbox: SandboxBackend = field(default_factory=NoSandbox)
     started: list[str] = field(default_factory=list)
     working: set[str] = field(default_factory=set)
     all_ready: asyncio.Event = field(default_factory=asyncio.Event)
 
     def runs(self) -> list[RunSpec[Summary]]:
         spec: RunSpec[Summary] = (
-            Flow(self.repo, agent=_WORKS_UNTIL_STOPPED, sandbox=NoSandbox())
+            Flow(self.repo, agent=_WORKS_UNTIL_STOPPED, sandbox=self.sandbox)
             .run("work until stopped")
             .on_run_start(lambda ctx: self.started.append(ctx.run_id))
             .on_agent_output(self._watch)
@@ -265,6 +269,39 @@ async def test_a_consumer_cancelled_in_the_block_stops_its_runs_before_it_ends(
         await consumer
 
     stuck.assert_work_kept(isolated_tempdir)
+
+
+@pytest.mark.git
+async def test_a_consumer_cancelled_as_the_block_winds_down_waits_for_it(
+    host_repo: Path, isolated_tempdir: Path
+) -> None:
+    gate = Gate()
+    stuck = Stuck(host_repo, count=1, sandbox=GatedSandbox(gate, at="teardown"))
+
+    async def consume() -> None:
+        async with fan_out(stuck.runs()):
+            await stuck.all_ready.wait()
+
+    consumer = asyncio.create_task(consume())
+    await until(gate.reached.is_set, consumer)  # left; the run's teardown is held
+    consumer.cancel()
+    for _ in range(10):  # ample turns for a cancellation to end a task
+        await asyncio.sleep(0)
+    assert not consumer.done(), "the block was left with a run still winding down"
+
+    gate.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await consumer
+    stuck.assert_work_kept(isolated_tempdir)
+
+
+@pytest.mark.git
+async def test_an_empty_batch_yields_nothing_in_either_form() -> None:
+    nothing: list[RunSpec[Summary]] = []
+
+    assert [result async for result in fan_out(nothing)] == []
+    async with fan_out(nothing) as results:
+        assert [result async for result in results] == []
 
 
 @pytest.mark.git

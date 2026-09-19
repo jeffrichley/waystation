@@ -32,4 +32,4 @@ Why the failure mapping survives: before each step, the script writes a line to 
 - A cancelled survey is killed like any exec (ADR-0023). Its `sh` and gits are in the exec's process tree, and in its process group in a container.
 - The tests' cancellation gate held collect at `git format-patch`, which a committed run no longer runs alone. It now holds collect's first git exec, since the tests' agents are shell scripts.
 
-Decided on the [#37](https://github.com/jeffrichley/waystation/issues/37) follow-up.
+Decided on the [#37](https://github.com/jeffrichley/waystation/issues/37) follow-up, in [#67](https://github.com/jeffrichley/waystation/pull/67).

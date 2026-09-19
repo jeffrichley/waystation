@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -11,7 +12,14 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from helpers import OK_OUTCOME, OK_OUTCOME_LINE, PROMPT, ShellAgent, a_run
+from helpers import (
+    OK_OUTCOME,
+    OK_OUTCOME_LINE,
+    PROMPT,
+    WORKS_UNTIL_STOPPED,
+    ShellAgent,
+    a_run,
+)
 from waystation import (
     Errored,
     EventLog,
@@ -19,9 +27,12 @@ from waystation import (
     NoSandbox,
     RunFailed,
     RunLogFiles,
+    RunSpec,
     RunSucceeded,
     ScriptedAgent,
+    Summary,
     configure_logging,
+    fan_out,
     observers,
 )
 from waystation.agents import AgentLine
@@ -170,6 +181,71 @@ async def test_the_run_file_is_readable_while_the_run_is_still_going(
     assert not any("exit code" in text for text in midrun), (
         "the footer is only written once the output has drained"
     )
+
+
+def _attached() -> tuple[list[logging.Handler], int]:
+    """What a run file attaches to the ``waystation`` logger, and holds it at."""
+    root = logging.getLogger("waystation")
+    return list(root.handlers), root.level
+
+
+@pytest.mark.git
+async def test_leaving_a_fan_out_early_finishes_every_run_file(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    """A cancelled run fires no run_end (ADR-0017), yet its file still ends."""
+    logs = tmp_path / "logs"
+    before = _attached()
+    working: set[str] = set()
+    both = asyncio.Event()
+
+    def watch(ctx: RunContext, line: AgentLine) -> None:
+        if line.raw == "ready":
+            working.add(ctx.run_id)
+            if len(working) == 2:
+                both.set()
+
+    spec: RunSpec[Summary] = (
+        Flow(
+            host_repo,
+            agent=ShellAgent(WORKS_UNTIL_STOPPED),
+            sandbox=NoSandbox(),
+            hooks=[RunLogFiles(logs)],
+        )
+        .run("work until stopped")
+        .on_agent_output(watch)
+    )
+    async with fan_out([spec, spec]):
+        await both.wait()
+
+    for run_id in working:
+        lines = (logs / f"{run_id}.log").read_text(encoding="utf-8").splitlines()
+        assert any("run cancelled during agent" in line for line in lines)
+        assert lines[-1] == "--- no result ---"
+    assert _attached() == before, "no handler left attached, no level left held"
+
+
+@pytest.mark.git
+async def test_the_block_finishes_a_run_file_whose_task_outlived_the_run(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    logs = tmp_path / "logs"
+    before = _attached()
+
+    def cancel_this_run(ctx: RunContext) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+
+    with RunLogFiles(logs) as files:
+        with pytest.raises(asyncio.CancelledError):
+            await a_run(host_repo).hooks(files).on_run_start(cancel_this_run)
+        (log,) = logs.glob("*.log")
+        # This task goes on, so nothing has ended the file yet.
+        assert "--- no result ---" not in log.read_text(encoding="utf-8")
+
+    assert log.read_text(encoding="utf-8").splitlines()[-1] == "--- no result ---"
+    assert _attached() == before
 
 
 def events_in(path: Path) -> list[dict[str, Any]]:

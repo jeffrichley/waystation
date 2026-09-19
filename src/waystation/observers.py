@@ -12,6 +12,7 @@ hook vocabulary the same one.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
@@ -187,10 +188,24 @@ class _FlushingFile:
 
 
 class _OpenRunFile(NamedTuple):
-    """A run's file and the handler feeding it; they open and close together."""
+    """A run's file, the handler feeding it, and the watch on the task running it.
+
+    They open and close together. ``task`` is ``None`` for a hook called by
+    hand, with no run around it.
+    """
 
     file: _FlushingFile
     handler: _RunFileHandler
+    task: asyncio.Task[Any] | None
+    on_task_done: Callable[[asyncio.Task[Any]], None]
+
+
+def _running_task() -> asyncio.Task[Any] | None:
+    """The task a hook is running in, or ``None`` outside an event loop."""
+    try:
+        return asyncio.current_task()
+    except RuntimeError:  # no running loop: a hook called by hand
+        return None
 
 
 class _RunFileHandler(logging.Handler):
@@ -279,6 +294,11 @@ def _safely[**P](
     return cast("Callable[Concatenate[Any, P], None]", guarded)
 
 
+# The last line of a file whose run never fired run_end: cancelled, most
+# likely, whose log line just above says where its series went.
+_NO_RESULT_FOOTER = "--- no result ---"
+
+
 class RunLogFiles(HookBundle):
     """One tail-able file per run under ``directory``, named for the run.
 
@@ -288,7 +308,12 @@ class RunLogFiles(HookBundle):
     flushed as it lands so ``tail -f`` keeps up with a run in flight.
 
     Registered like any bundle: ``Flow(hooks=[RunLogFiles("logs/")])``, or per
-    run with ``.hooks(...)``.
+    run with ``.hooks(...)``. A file ends with a footer saying how its run
+    ended. A cancelled run has no result to say (ADR-0017), so its file ends
+    ``--- no result ---`` once the task that ran it ends — at once for a
+    fan-out's runs, which each run in a task of their own. Opened as a block,
+    ``with RunLogFiles("logs/") as files:``, it ends every file still open
+    when the block does, whatever task ran it (ADR-0026).
     """
 
     def __init__(self, directory: Path | str) -> None:
@@ -304,12 +329,22 @@ class RunLogFiles(HookBundle):
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)-7s %(message)s")
         )
-        # Recorded before the level is held, so on_run_end always finds the
-        # entry and always gives the level back.
-        self._open[ctx.run_id] = _OpenRunFile(file, handler)
+        run_id = ctx.run_id
+        task = _running_task()
+
+        def on_task_done(done: asyncio.Task[Any]) -> None:
+            # Still open once the task that ran it has ended, so run_end
+            # never came: a cancelled run's last word is its task ending.
+            self._finish(run_id, _NO_RESULT_FOOTER)
+
+        # Recorded before the level is held, so whatever ends the file always
+        # finds the entry and always gives the level back.
+        self._open[run_id] = _OpenRunFile(file, handler, task, on_task_done)
+        if task is not None:
+            task.add_done_callback(on_task_done)
         _DEBUG_WHILE_WATCHED.acquire()
         logging.getLogger(PACKAGE).addHandler(handler)
-        file.write(f"=== run {ctx.run_id} on {ctx.repo} ===")
+        file.write(f"=== run {run_id} on {ctx.repo} ===")
         file.write(f"--- prompt ({len(ctx.prompt)} chars) ---")
         file.write(ctx.prompt)
         file.write("--- output ---")
@@ -331,12 +366,40 @@ class RunLogFiles(HookBundle):
         ctx: RunContext,
         result: RunResult[Any],
     ) -> None:
-        open_file = self._open.pop(ctx.run_id, None)
+        self._finish(ctx.run_id, _footer(result))
+
+    def close(self) -> None:
+        """End every file still open with ``--- no result ---``.
+
+        A file closes by itself when its run ends, or when the task that ran
+        it does. What is left is a run cancelled inside a task that went on —
+        under ``asyncio.timeout``, say — or one still going. A run that starts
+        afterwards opens its own file as usual.
+        """
+        for run_id in list(self._open):
+            self._finish(run_id, _NO_RESULT_FOOTER)
+
+    def __enter__(self) -> RunLogFiles:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    # Guarded like the hooks: a full disk costs a log line, never the work or
+    # the exception a block is already raising (ADR-0026).
+    @_safely
+    def _finish(self, run_id: str, footer: str) -> None:
+        """Write ``footer``, detach the run's handler, give the level back."""
+        # Popped first, so whichever of run_end, the task ending and close
+        # comes first finishes the file, and the others find nothing.
+        open_file = self._open.pop(run_id, None)
         if open_file is None:
             return
-        file, handler = open_file
+        file, handler, task, on_task_done = open_file
         try:
-            file.write(_footer(result))
+            if task is not None:
+                task.remove_done_callback(on_task_done)
+            file.write(footer)
         finally:
             logging.getLogger(PACKAGE).removeHandler(handler)
             _DEBUG_WHILE_WATCHED.release()

@@ -658,6 +658,34 @@ async def test_an_output_line_of_any_length_reaches_on_agent_output_intact(
 
 
 @pytest.mark.git
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+async def test_an_output_line_that_is_not_utf8_reaches_on_agent_output_readable(
+    host_repo: Path, stream: str
+) -> None:
+    # Only captured output keeps such a byte exact, for git. A hook reads a
+    # line as a person would, so it gets U+FFFD, never a lone surrogate it
+    # could not print. printf makes the byte: a raw one in a Windows command
+    # line may not reach Git Bash's sh.
+    redirect = " >&2" if stream == "stderr" else ""
+    seen: list[AgentLine] = []
+
+    def record(ctx: RunContext, line: AgentLine) -> None:
+        seen.append(line)
+
+    flow = Flow(
+        host_repo,
+        agent=ShellAgent(f"printf 'caf\\351\\n'{redirect}; echo '{OK_OUTCOME_LINE}'"),
+        sandbox=NoSandbox(),
+    )
+
+    result = await flow.run("latin-1", outcome=Answer).on_agent_output(record)
+
+    assert isinstance(result, RunSucceeded)
+    lines = [line.raw for line in seen if line.stream == stream]
+    assert lines[0] == "caf\N{REPLACEMENT CHARACTER}"
+
+
+@pytest.mark.git
 @pytest.mark.asyncio
 async def test_agent_output_hooks_never_overlap_across_streams(
     host_repo: Path,

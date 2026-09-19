@@ -14,9 +14,17 @@ def bound_tail(
     max_lines: int = DEFAULT_MAX_LINES,
     max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> str:
-    """Last ``max_lines`` lines or ``max_bytes`` bytes, whichever is smaller."""
+    """Last ``max_lines`` lines or ``max_bytes`` bytes, whichever is smaller.
+
+    A tail is for people. Captured output keeps a byte that is not UTF-8 as a
+    surrogate escape, so git gets it back; here it reads as U+FFFD, since a
+    lone surrogate cannot be printed or written to a UTF-8 log.
+    """
     if not text:
         return ""
+    text = text.encode("utf-8", errors="surrogateescape").decode(
+        "utf-8", errors="replace"
+    )
     lines = text.splitlines(keepends=True)
     selected: deque[str] = deque()
     size = 0

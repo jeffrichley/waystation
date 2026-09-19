@@ -153,14 +153,16 @@ async def run_exec(
         _pump(process.stderr, on_stderr, stderr_full, stderr_tail)
     )
 
-    if stdin is not None and process.stdin is not None:
-        process.stdin.write(stdin.encode("utf-8"))
-        await process.stdin.drain()
-        process.stdin.close()
-    elif process.stdin is not None:
-        process.stdin.close()
-
     try:
+        # Inside the try: a cancellation mid-write kills the tree like any other.
+        if process.stdin is not None:
+            if stdin is not None:
+                # A process may exit without reading all it was given; its
+                # exit code says why, not the pipe that closed under the write.
+                with suppress(BrokenPipeError, ConnectionResetError):
+                    process.stdin.write(stdin.encode("utf-8"))
+                    await process.stdin.drain()
+            process.stdin.close()
         exit_code = await process.wait()
         await asyncio.gather(pump_out, pump_err)
     except asyncio.CancelledError:

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from waystation import (
     Flow,
@@ -31,6 +32,7 @@ from waystation.agents import (
     AgentCommand,
     AgentEvent,
     AgentText,
+    AgentUsage,
     OutcomeReported,
 )
 
@@ -39,7 +41,10 @@ __all__ = [
     "OK_OUTCOME_LINE",
     "OUTCOME",
     "PROMPT",
+    "RECORDED_CLAUDE",
+    "USAGE",
     "ShellAgent",
+    "Total",
     "a_run",
     "awaited",
     "commit_on",
@@ -47,6 +52,7 @@ __all__ = [
     "host_state",
     "init_host_repo",
     "lifecycle",
+    "recorded_claude",
     "sh",
     "stalling_ref_hook",
     "subjects",
@@ -63,8 +69,26 @@ OUTCOME = "OUTCOME "
 OK_OUTCOME_LINE = OUTCOME + '{"summary": "ok"}'
 """A whole reporting line, for a script that only needs to finish cleanly."""
 
+USAGE = "USAGE "
+"""The marker line ``ShellAgent`` reports token usage on: ``AgentUsage`` as JSON."""
+
 PROMPT = "Do the thing.\nWith detail on a second line."
 """A prompt with a second line, so a test can prove the body stayed unlogged."""
+
+RECORDED_CLAUDE = Path(__file__).parent / "fixtures" / "claude_code"
+"""Real Claude Code stdout, one ``<scenario>.jsonl`` per recorded run."""
+
+
+class Total(BaseModel):
+    """The Outcome the ``success`` recording reports: ``numbers.txt``'s sum."""
+
+    total: int
+
+
+def recorded_claude(scenario: str) -> tuple[str, ...]:
+    """The stdout of a real Claude Code run, as ``test_claude_code_live`` saved it."""
+    path = RECORDED_CLAUDE / f"{scenario}.jsonl"
+    return tuple(path.read_text(encoding="utf-8").splitlines())
 
 
 def git(repo: Path, *args: str) -> str:
@@ -229,6 +253,8 @@ async def awaited(spec: RunSpec[Any]) -> RunResult[Any]:
 class ShellAgent:
     """An agent that is a shell script; an ``OUTCOME <json>`` line reports.
 
+    A ``USAGE <json>`` line reports token usage, as an ``AgentUsage``.
+
     Reach for this over ``ScriptedAgent`` when the test needs to control the
     script itself — writing to stderr, say, or exiting mid-stream.
     """
@@ -244,4 +270,6 @@ class ShellAgent:
     def parse(self, line: str) -> Sequence[AgentEvent]:
         if line.startswith(OUTCOME):
             return (OutcomeReported(json.loads(line.removeprefix(OUTCOME))),)
+        if line.startswith(USAGE):
+            return (AgentUsage(**json.loads(line.removeprefix(USAGE))),)
         return (AgentText(line),) if line else ()

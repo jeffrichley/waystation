@@ -662,7 +662,7 @@ class RunSpec[OutcomeT]:
             except Exception as exc:
                 record.fail(_as_stage_error("agent", exc))
         if record.agent is None:
-            # Stopped (a bound fired, or a line raised): no exit code.
+            # A line raised, so run_agent had no exit to report: no exit code.
             record.agent = AgentExit(
                 exit_code=-1, elapsed=record.elapsed["agent"], hanging=False
             )

@@ -12,6 +12,7 @@ from waystation.agents import (
     outcome_instructions,
     run_agent,
 )
+from waystation.agents.claude_code import ClaudeCode
 from waystation.collect import PatchSeries, collect
 from waystation.errors import PreflightError, StageError, WaystationError
 from waystation.flow import Flow, RunSpec
@@ -63,6 +64,7 @@ __all__ = [
     "AgentExited",
     "AgentProvider",
     "AgentUsage",
+    "ClaudeCode",
     "CommandFailed",
     "Dashboard",
     "DockerSandbox",

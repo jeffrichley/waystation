@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
+from waystation.results import AgentUsage
+
 
 @dataclass(frozen=True, slots=True)
 class AgentCommand:
@@ -33,7 +35,8 @@ class AgentToolUse:
     input: Mapping[str, Any]
 
 
-AgentEvent = OutcomeReported | AgentText | AgentToolUse
+# AgentUsage is also the value AgentExit carries: the last one reported wins.
+AgentEvent = OutcomeReported | AgentText | AgentToolUse | AgentUsage
 
 
 @dataclass(frozen=True, slots=True)

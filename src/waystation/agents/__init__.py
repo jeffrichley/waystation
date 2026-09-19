@@ -14,6 +14,7 @@ from waystation.agents.protocol import (
 )
 from waystation.agents.run_agent import run_agent
 from waystation.agents.scripted import ScriptedAgent, ScriptedCommit
+from waystation.results import AgentUsage
 
 __all__ = [
     "AgentCommand",
@@ -22,6 +23,7 @@ __all__ = [
     "AgentProvider",
     "AgentText",
     "AgentToolUse",
+    "AgentUsage",
     "OutcomeReported",
     "ScriptedAgent",
     "ScriptedCommit",

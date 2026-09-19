@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
-from helpers import awaited, until
+from helpers import USAGE, ShellAgent, awaited, until
 from waystation import (
     Flow,
     NoSandbox,
@@ -25,6 +26,7 @@ from waystation import (
     TimedOut,
     Timeouts,
 )
+from waystation.agents import AgentUsage
 from waystation.agents.outcome import OUTCOME_MARKER
 from waystation.agents.protocol import AgentCommand, AgentEvent
 from waystation.agents.scripted import ScriptedAgent as ScriptedParser
@@ -172,6 +174,8 @@ class ParseOnlyAgent:
         return AgentCommand(argv=("true",), stdin=None, env={}, pass_env=())
 
     def parse(self, line: str) -> Sequence[AgentEvent]:
+        if line.startswith(USAGE):
+            return ShellAgent("").parse(line)
         return ScriptedParser().parse(line)
 
 
@@ -256,6 +260,49 @@ async def test_completion_grace_succeeds_hanging(host_repo: Path) -> None:
     assert result.outcome.summary == "done"
     assert result.agent is not None
     assert result.agent.hanging is True
+
+
+USED = AgentUsage(input_tokens=40, output_tokens=9, cost_usd=0.02, turns=2)
+USED_LINE = USAGE + json.dumps(asdict(USED))
+
+
+@pytest.mark.git
+async def test_a_timed_out_agent_keeps_the_usage_it_reported(host_repo: Path) -> None:
+    clock = ManualClock()
+    flow = Flow(
+        host_repo,
+        agent=ParseOnlyAgent(),
+        sandbox=ClockSandbox(lines=((0.0, USED_LINE), (10.0, "late"))),
+        # The wall, not silence: silence re-arms on the usage line, and a
+        # re-armed timer can park after the clock has already moved.
+        timeouts=Timeouts(agent_wall=2.0),
+    )
+    result = await _drive(clock, awaited(flow.run("p", outcome=Answer)), steps=(2.0,))
+    assert isinstance(result, RunFailed)
+    assert isinstance(result.failure, TimedOut)
+    assert result.agent is not None
+    assert result.agent.usage == USED
+
+
+@pytest.mark.git
+async def test_a_hanging_agent_keeps_the_usage_it_reported(host_repo: Path) -> None:
+    clock = ManualClock()
+    outcome = f'{OUTCOME_MARKER} {{"summary": "done"}}'
+    flow = Flow(
+        host_repo,
+        agent=ParseOnlyAgent(),
+        sandbox=ClockSandbox(
+            lines=((0.0, USED_LINE), (0.0, outcome)), hang_after=100.0
+        ),
+        timeouts=Timeouts(completion_grace=1.0),
+    )
+    result = await _drive(
+        clock, awaited(flow.run("p", outcome=Answer)), steps=(0.0, 0.0, 1.0)
+    )
+    assert isinstance(result, RunSucceeded)
+    assert result.agent is not None
+    assert result.agent.hanging is True
+    assert result.agent.usage == USED
 
 
 @pytest.mark.unit

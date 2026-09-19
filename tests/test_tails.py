@@ -33,3 +33,22 @@ def test_tail_buffer_rolls_under_limits() -> None:
     text = buf.text()
     assert text == "7\n8\n9\n"
     assert len(text.encode("utf-8")) <= 100
+
+
+@pytest.mark.unit
+def test_bound_tail_reads_a_byte_that_is_not_utf8_as_a_replacement_character() -> None:
+    # Captured output keeps such a byte as a surrogate escape, so git gets it
+    # back; a tail is for people, and a lone surrogate cannot even be printed.
+    escaped = b"caf\xe9\n".decode("utf-8", errors="surrogateescape")
+
+    assert bound_tail(escaped) == "caf\N{REPLACEMENT CHARACTER}\n"
+
+
+@pytest.mark.unit
+def test_bound_tail_clips_a_line_with_a_byte_that_is_not_utf8_to_its_limit() -> None:
+    escaped = (b"x" * 5000 + b"\xff").decode("utf-8", errors="surrogateescape")
+
+    out = bound_tail(escaped, max_bytes=2048)
+
+    assert out.endswith("\N{REPLACEMENT CHARACTER}")
+    assert len(out.encode("utf-8")) <= 2048

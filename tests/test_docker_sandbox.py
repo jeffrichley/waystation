@@ -20,10 +20,14 @@ import pytest
 
 from helpers import (
     OK_OUTCOME,
+    OK_OUTCOME_LINE,
     PROMPT,
+    ShellAgent,
     a_run,
     awaited,
     git,
+    git_bytes,
+    printf_bytes,
     subjects,
     until,
     workspaces,
@@ -175,6 +179,28 @@ async def test_work_left_uncommitted_in_docker_is_salvaged(
     assert subjects(host_repo, f"HEAD..{result.preserved}") == [
         "WIP: salvaged uncommitted work"
     ]
+
+
+@pytest.mark.docker
+async def test_text_that_is_not_utf8_leaves_a_container_as_it_was_committed(
+    host_repo: Path, image: str
+) -> None:
+    # docker exec streams the series raw; keeping its bytes is the host's
+    # job, the same one for every backend.
+    latin_1 = b"caf\xe9\n\xff\n"
+    agent = ShellAgent(
+        f"{printf_bytes('latin1.txt', latin_1)} && "
+        f"git add -A && git commit -qm latin1 && echo '{OK_OUTCOME_LINE}'",
+        shell="sh",
+    )
+
+    result = await Flow(host_repo, agent=agent, sandbox=DockerSandbox(image)).run(
+        "latin-1"
+    )
+
+    assert isinstance(result, RunSucceeded), result
+    kept = f"{result.preserved}:latin1.txt"
+    assert git_bytes(host_repo, "cat-file", "blob", kept) == latin_1
 
 
 @pytest.mark.docker

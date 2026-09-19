@@ -58,9 +58,11 @@ __all__ = [
     "branches",
     "commit_on",
     "git",
+    "git_bytes",
     "host_state",
     "init_host_repo",
     "lifecycle",
+    "printf_bytes",
     "recorded_claude",
     "sh",
     "stalling_ref_hook",
@@ -135,6 +137,24 @@ def branches(repo: Path, pattern: str) -> list[str]:
     """The short names of the branches in ``repo`` matching ``pattern``."""
     listed = git(repo, "branch", "--list", "--format=%(refname:short)", pattern)
     return listed.splitlines()
+
+
+def git_bytes(repo: Path, *args: str) -> bytes:
+    """Run git in ``repo`` and return its stdout as git wrote it, byte for byte."""
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True
+    ).stdout
+
+
+def printf_bytes(path: str, data: bytes) -> str:
+    """A sh command that writes ``data`` to ``path``, byte for byte.
+
+    Every byte goes as an octal escape, so the command line is plain ASCII: a
+    CR or a non-ASCII byte in a Windows command line may not reach Git Bash's
+    sh intact.
+    """
+    escaped = "".join(f"\\{byte:03o}" for byte in data)
+    return f"printf '{escaped}' > {path}"
 
 
 def subjects(repo: Path, revisions: str) -> list[str]:
@@ -362,16 +382,19 @@ class ShellAgent:
     A ``USAGE <json>`` line reports token usage, as an ``AgentUsage``.
 
     Reach for this over ``ScriptedAgent`` when the test needs to control the
-    script itself — writing to stderr, say, or exiting mid-stream.
+    script itself — writing to stderr, say, or exiting mid-stream. It runs in
+    this host's sh unless given another ``shell``: a backend that brings its
+    own sh, as ``DockerSandbox`` does, wants ``shell="sh"``.
     """
 
     script: str
+    shell: str | None = None
 
     def preflight(self) -> None:
         return None
 
     def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
-        return AgentCommand(argv=(sh(), "-c", self.script))
+        return AgentCommand(argv=(self.shell or sh(), "-c", self.script))
 
     def parse(self, line: str) -> Sequence[AgentEvent]:
         if line.startswith(OUTCOME):

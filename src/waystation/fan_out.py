@@ -12,6 +12,7 @@ import contextlib
 from collections.abc import Iterable
 from typing import Self
 
+from waystation._cancellation import run_to_end
 from waystation.flow import RunSpec, preflight
 from waystation.results import RunResult
 
@@ -34,6 +35,28 @@ class _FanOut[OutcomeT]:
             asyncio.Queue()
         )
         self._yielded = 0
+
+    async def __aenter__(self) -> Self:
+        await self._start()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        """Stop the runs still going, and return once each has wound down.
+
+        A run in flight keeps what its agent left and tears its sandbox down
+        before its cancellation finishes (ADR-0017); a queued run never
+        begins. Cancelling the consumer meanwhile waits for that too and is
+        raised afterwards, the way ``asyncio.TaskGroup`` leaves.
+        """
+        runs = self._runs or []
+        for run in runs:
+            run.cancel()
+        if not runs:
+            return
+        waited: list[asyncio.CancelledError] = []
+        await run_to_end(asyncio.wait(runs), waited.append)
+        if waited:
+            raise waited[0]
 
     def __aiter__(self) -> Self:
         return self

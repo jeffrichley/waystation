@@ -21,10 +21,13 @@ import pytest
 from helpers import (
     OK_OUTCOME,
     PROMPT,
+    ShellAgent,
     a_run,
     git,
     host_state,
     init_host_repo,
+    subjects,
+    until,
     workspaces,
 )
 from waystation import (
@@ -41,6 +44,7 @@ from waystation import (
     Summary,
     fan_out,
 )
+from waystation.agents import AgentLine
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,59 @@ def _kept(repo: Path) -> list[str]:
     """The preservation branches in ``repo``."""
     listed = git(repo, "branch", "--list", "--format=%(refname:short)", "waystation/*")
     return listed.splitlines()
+
+
+# Commits, leaves work uncommitted, says so, then works until it is stopped.
+_WORKS_UNTIL_STOPPED = ShellAgent(
+    "\n".join(
+        [
+            "set -e",
+            "printf 'a\\n' > a.txt",
+            "git add a.txt",
+            "git commit -q -m first",
+            "printf 'wip\\n' > wip.txt",
+            "echo ready",
+            "while true; do sleep 0.05; done",
+        ]
+    )
+)
+
+
+@dataclass
+class Stuck:
+    """Runs that work until stopped; ``all_ready`` once ``count`` are working."""
+
+    repo: Path
+    count: int
+    started: list[str] = field(default_factory=list)
+    working: set[str] = field(default_factory=set)
+    all_ready: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def runs(self) -> list[RunSpec[Summary]]:
+        spec: RunSpec[Summary] = (
+            Flow(self.repo, agent=_WORKS_UNTIL_STOPPED, sandbox=NoSandbox())
+            .run("work until stopped")
+            .on_run_start(lambda ctx: self.started.append(ctx.run_id))
+            .on_agent_output(self._watch)
+        )
+        return [spec] * self.count
+
+    def _watch(self, ctx: RunContext, line: AgentLine) -> None:
+        if line.raw == "ready":
+            self.working.add(ctx.run_id)
+            if len(self.working) == self.count:
+                self.all_ready.set()
+
+    def assert_work_kept(self, temp: Path) -> None:
+        """Each run was stopped, its work kept on its branch, its sandbox gone."""
+        branches = [f"waystation/{run_id}" for run_id in self.started]
+        assert sorted(_kept(self.repo)) == sorted(branches)
+        for branch in branches:
+            assert subjects(self.repo, f"HEAD..{branch}") == [
+                "WIP: salvaged uncommitted work",
+                "first",
+            ]
+        assert workspaces(temp) == []
 
 
 @pytest.mark.git
@@ -171,6 +228,43 @@ async def test_a_queued_run_resolves_its_base_when_its_workspace_stage_starts(
 def test_a_cap_that_would_start_nothing_is_refused_at_the_call(cap: int) -> None:
     with pytest.raises(ValueError, match="max_concurrency"):
         fan_out([], max_concurrency=cap)
+
+
+@pytest.mark.git
+async def test_leaving_the_block_early_stops_runs_in_flight_and_never_starts_queued(
+    host_repo: Path, isolated_tempdir: Path
+) -> None:
+    stuck = Stuck(host_repo, count=2)
+    queued: list[str] = []
+    never = a_run(host_repo).on_run_start(lambda ctx: queued.append(ctx.run_id))
+
+    async with fan_out([*stuck.runs(), never], max_concurrency=2):
+        await stuck.all_ready.wait()
+
+    # By the time the block is left, every run it stopped has wound down.
+    assert len(stuck.started) == 2
+    stuck.assert_work_kept(isolated_tempdir)
+    assert queued == []
+
+
+@pytest.mark.git
+async def test_a_consumer_cancelled_in_the_block_stops_its_runs_before_it_ends(
+    host_repo: Path, isolated_tempdir: Path
+) -> None:
+    stuck = Stuck(host_repo, count=2)
+
+    async def consume() -> None:
+        async with fan_out(stuck.runs()) as results:
+            async for result in results:
+                pytest.fail(f"a run that works until stopped ended: {result!r}")
+
+    consumer = asyncio.create_task(consume())
+    await until(stuck.all_ready.is_set, consumer)
+    consumer.cancel()  # what Ctrl-C does to the task awaiting the batch
+    with pytest.raises(asyncio.CancelledError):
+        await consumer
+
+    stuck.assert_work_kept(isolated_tempdir)
 
 
 @pytest.mark.git

@@ -78,11 +78,18 @@ class _Container:
             raise
 
     async def _kill(self, group: str) -> None:
-        """Kill a cancelled exec's group; a failure is logged, never raised."""
-        killed = await self._runner.run(plan_kill(self.name, group))
+        """Kill a cancelled exec's group; a failure is logged, never raised.
+
+        Raising would put an error where the cancellation belongs (ADR-0017).
+        """
+        try:
+            killed = await self._runner.run(plan_kill(self.name, group))
+        except Exception:
+            SANDBOX.exception("failed to kill a cancelled exec in %s", self.name)
+            return
         if killed.exit_code != 0:
             SANDBOX.error(
-                "failed to kill a cancelled exec in container %s: %s",
+                "failed to kill a cancelled exec in %s: %s",
                 self.name,
                 bound_tail(killed.stderr),
             )

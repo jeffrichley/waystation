@@ -25,6 +25,8 @@ Why one exec: every docker call costs about 0.5 s on Docker Desktop. Decoding, c
 
 - An image used for copy transport must own `/workspace`. Without it, the sandbox stage fails with `CommandFailed`, and its stderr says the directory is not writable by the image's user.
 - Only commits travel. A `workspace_ready` hook's uncommitted writes reach a bound sandbox but not a copied one.
+- The workspace stage still clones into a host temp dir for every transport, and `clone_in` bundles from that clone. #18's lifecycle says copy skips the host clone. Keeping it means `prepare_workspace` stays blind to transport, the `workspace_ready` hook sees the same workspace either way, and a `--local` clone costs next to nothing.
+- `clone_in` bundles the workspace branch alone. Extra refs (#32) must join the bundle when they arrive, or a copied sandbox will lack them. Until then a copied workspace has no remote, and a bound one keeps its clone's `origin`.
 - The bundle is held in memory, a third larger once base64-encoded. Streaming it would take the protocol change rejected above.
 - Bind needs the image's user to have the host user's uid on Linux. `just test-image` passes it as a build arg, as sandcastle's reference image does.
 - Binding from a Windows host fails: git in the image's user refuses the root-owned 9p mount as dubious ownership (checked). `auto` never binds there. The docker tier skips bind on Windows, and the Linux CI job runs it.

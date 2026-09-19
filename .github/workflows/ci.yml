@@ -35,8 +35,8 @@ jobs:
         run: uv sync --group dev
 
       # The docker tier fails, rather than skips, without its image. Only the
-      # Linux job builds one: the Windows runner's daemon runs Windows
-      # containers, so conftest.py skips the tier there.
+      # Linux job builds one: the Windows runner has no Linux daemon, and
+      # conftest.py skips the tier there, saying why.
       - name: Build the docker test image
         if: runner.os == 'Linux'
         run: just test-image

@@ -47,7 +47,7 @@ def _no_linux_docker() -> str | None:
     """Why the docker tier cannot run here, or ``None`` when it can.
 
     Asked once per worker. The tier's image is Linux, so a daemon running
-    Windows containers — as on GitHub's Windows runners — cannot host it.
+    Windows containers cannot host it either. The reason says which it was.
     """
     docker = shutil.which("docker")
     if docker is None:
@@ -60,10 +60,13 @@ def _no_linux_docker() -> str | None:
             text=True,
             timeout=10,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return "Docker daemon not reachable"
+    except subprocess.TimeoutExpired:
+        return "Docker daemon not reachable: `docker info` gave no answer in 10 s"
+    except OSError as exc:
+        return f"Docker daemon not reachable: {exc}"
     if result.returncode != 0:
-        return "Docker daemon not reachable"
+        said = result.stderr.strip().splitlines() or [f"exit {result.returncode}"]
+        return f"Docker daemon not reachable: {said[-1]}"
     os_type = result.stdout.strip()
     if os_type != "linux":
         return f"Docker daemon runs {os_type} containers; the docker tier needs linux"

@@ -10,23 +10,27 @@ import asyncio
 import json
 import logging
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel
 
 from waystation import (
+    ExecResult,
     Flow,
     NoSandbox,
     RunResult,
     RunSpec,
+    Sandbox,
     SandboxBackend,
     ScriptedAgent,
     ScriptedCommit,
     Summary,
+    Workspace,
 )
 from waystation.agents import (
     AgentCommand,
@@ -35,6 +39,7 @@ from waystation.agents import (
     AgentUsage,
     OutcomeReported,
 )
+from waystation.sandbox.protocol import LineCallback
 
 __all__ = [
     "OK_OUTCOME",
@@ -43,10 +48,14 @@ __all__ = [
     "PROMPT",
     "RECORDED_CLAUDE",
     "USAGE",
+    "WORKS_UNTIL_STOPPED",
+    "Gate",
+    "GatedSandbox",
     "ShellAgent",
     "Total",
     "a_run",
     "awaited",
+    "branches",
     "commit_on",
     "git",
     "git_bytes",
@@ -77,6 +86,25 @@ USAGE = "USAGE "
 PROMPT = "Do the thing.\nWith detail on a second line."
 """A prompt with a second line, so a test can prove the body stayed unlogged."""
 
+WORKS_UNTIL_STOPPED = "\n".join(
+    [
+        "set -e",
+        "printf 'a\\n' > a.txt",
+        "git add a.txt",
+        "git commit -q -m first",
+        "printf 'wip\\n' > wip.txt",
+        "echo ready",
+        "while true; do sleep 0.05; done",
+    ]
+)
+"""A ``ShellAgent`` script that commits, leaves work, says ``ready``, then works.
+
+Stopped, it leaves ``["WIP: salvaged uncommitted work", "first"]`` to keep.
+It works in short sleeps, never one long child: a kill that races a spawn
+on Windows can miss the child, and a missed ``sleep 60`` holds stdout open
+past the test's timeout, where a missed ``sleep 0.05`` is gone at once.
+"""
+
 RECORDED_CLAUDE = Path(__file__).parent / "fixtures" / "claude_code"
 """Real Claude Code stdout, one ``<scenario>.jsonl`` per recorded run."""
 
@@ -103,6 +131,12 @@ def git(repo: Path, *args: str) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def branches(repo: Path, pattern: str) -> list[str]:
+    """The short names of the branches in ``repo`` matching ``pattern``."""
+    listed = git(repo, "branch", "--list", "--format=%(refname:short)", pattern)
+    return listed.splitlines()
 
 
 def git_bytes(repo: Path, *args: str) -> bytes:
@@ -267,6 +301,78 @@ async def awaited(spec: RunSpec[Any]) -> RunResult[Any]:
     """Await ``spec`` inside a coroutine, which ``asyncio.create_task`` needs."""
     result: RunResult[Any] = await spec
     return result
+
+
+@dataclass(frozen=True)
+class Gate:
+    """A point a test holds a run at, cancels it there, then lets it go on.
+
+    ``hold()`` sets ``reached``, waits for ``release``, then sets ``passed``.
+    """
+
+    reached: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+    passed: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def hold(self) -> None:
+        self.reached.set()
+        await self.release.wait()
+        self.passed.set()
+
+
+class _GatedBox:
+    """A live sandbox whose git execs wait at the gate first.
+
+    They are collect's: the agents these tests run are shell scripts.
+    """
+
+    def __init__(self, inner: Sandbox, gate: Gate) -> None:
+        self.workspace = inner.workspace
+        self._inner, self._gate = inner, gate
+
+    async def exec(
+        self,
+        argv: Sequence[str],
+        *,
+        stdin: str | None = None,
+        env: Mapping[str, str] | None = None,
+        capture: bool = True,
+        on_stdout: LineCallback | None = None,
+        on_stderr: LineCallback | None = None,
+    ) -> ExecResult:
+        if argv[0] == "git":
+            await self._gate.hold()
+        return await self._inner.exec(
+            argv,
+            stdin=stdin,
+            env=env,
+            capture=capture,
+            on_stdout=on_stdout,
+            on_stderr=on_stderr,
+        )
+
+
+@dataclass(frozen=True)
+class GatedSandbox:
+    """``NoSandbox``, held at one point of its life until the test lets it go."""
+
+    gate: Gate
+    at: Literal["start", "collect", "teardown"]
+    inner: NoSandbox = field(default_factory=NoSandbox)
+
+    async def preflight(self) -> None:
+        await self.inner.preflight()
+
+    @asynccontextmanager
+    async def start(
+        self, ws: Workspace, *, env: Mapping[str, str], pass_env: Sequence[str]
+    ) -> AsyncIterator[Sandbox]:
+        if self.at == "start":
+            await self.gate.hold()
+        async with self.inner.start(ws, env=env, pass_env=pass_env) as box:
+            yield box if self.at != "collect" else _GatedBox(box, self.gate)
+            if self.at == "teardown":
+                await self.gate.hold()
 
 
 @dataclass(frozen=True)

@@ -16,12 +16,12 @@ from pydantic import TypeAdapter
 from pydantic.json_schema import GenerateJsonSchema
 
 from waystation._cancellation import run_to_end, start_bounded
-from waystation._git import require_host_git
+from waystation._preflight import preflight
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
 from waystation.collect import CollectResult, PatchSeries, collect
-from waystation.errors import PreflightError, StageError
+from waystation.errors import StageError
 from waystation.hooks import (
     HookEntry,
     HookName,
@@ -54,6 +54,8 @@ from waystation.results import (
 )
 from waystation.sandbox.protocol import Sandbox, SandboxBackend
 from waystation.workspace import Workspace, prepare_workspace, remove_workspace
+
+__all__ = ["Flow", "RunSpec"]
 
 logger = tagged_logger("waystation")
 
@@ -88,33 +90,6 @@ def _log_unreported(run_id: str, err: StageError, why: str) -> None:
 def _log_later_failure(run_id: str, err: StageError) -> None:
     """Log a failure met after the run already failed; never report it (ADR-0024)."""
     _log_unreported(run_id, err, "after the run had already failed")
-
-
-@contextlib.contextmanager
-def _preflighting(checked: str) -> Iterator[None]:
-    """Pass a ``PreflightError`` on; make any other failure one naming ``checked``.
-
-    Only ``PreflightError`` may leave a preflight (#30, ADR-0016): a check
-    that breaks some other way is still a reason the run cannot begin.
-    """
-    try:
-        yield
-    except PreflightError:
-        raise
-    except Exception as exc:
-        msg = f"{checked} preflight failed: {exc!r}"
-        raise PreflightError(msg, failure=Errored(exception=exc)) from exc
-
-
-def _require_prompt_file(prompt: str | Path) -> None:
-    """A prompt given as a path must name a file; a str is the prompt itself."""
-    if not isinstance(prompt, Path) or prompt.is_file():
-        return
-    problem = "is not a file" if prompt.exists() else "not found"
-    raise PreflightError(
-        f"prompt file {problem}: {prompt} — pass a path to an existing file, "
-        "or the prompt itself as a str"
-    )
 
 
 def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
@@ -467,16 +442,18 @@ class RunSpec[OutcomeT]:
                 TimedOut(bound=bound, limit=seconds, elapsed=elapsed),
             ) from exc
 
-    async def _execute(
-        self,
-    ) -> RunResult[OutcomeT]:
+    async def _execute(self, *, preflighted: bool = False) -> RunResult[OutcomeT]:
+        """Perform one run; ``preflighted`` when fan-out checked its batch whole."""
         state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
         ctx = RunContext(state)
         record = _RunRecord(run_id=state.run_id, log=RunLog(state.run_id, state.name))
         with bind_run(state.run_id, state.name):
             # Bound, so what preflight logs carries the id, but a run that
             # fails it never began: no hook fires and no workspace is made.
-            await self._preflight()
+            # A lone run is a batch of one, checked the way fan-out checks
+            # a batch (#30).
+            if not preflighted:
+                await preflight((self,))
             record.log.on_run_start(ctx)
             try:
                 result = await self._lifecycle(ctx, state, record)
@@ -539,22 +516,6 @@ class RunSpec[OutcomeT]:
             return self.prompt.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             raise StageError("agent", Errored(exception=exc)) from exc
-
-    async def _preflight(self) -> None:
-        """Check the agent, sandbox spec, prompt file and host git, repairing nothing.
-
-        A lone awaited run preflights itself the way fan-out preflights a
-        batch: any problem raises ``PreflightError`` before the run begins
-        (#30, ADR-0016). Nothing is installed, built or pulled (ADR-0011).
-        """
-        with _preflighting(type(self.agent).__name__):
-            self.agent.preflight()
-        with _preflighting(type(self.sandbox).__name__):
-            await self.sandbox.preflight()
-        with _preflighting("prompt file"):
-            _require_prompt_file(self.prompt)
-        with _preflighting("host git"):
-            await require_host_git()
 
     async def _prepare(
         self, ctx: RunContext, state: RunState, record: _RunRecord

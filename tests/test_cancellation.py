@@ -9,19 +9,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import pytest
 
 from helpers import (
     OK_OUTCOME,
+    Gate,
+    GatedSandbox,
     ShellAgent,
     a_run,
     awaited,
+    branches,
     git,
     lifecycle,
     stalling_ref_hook,
@@ -30,7 +31,6 @@ from helpers import (
     workspaces,
 )
 from waystation import (
-    ExecResult,
     Flow,
     GitRepo,
     Integration,
@@ -40,83 +40,11 @@ from waystation import (
     RunContext,
     RunResult,
     RunSpec,
-    Sandbox,
     ScriptedAgent,
     ScriptedCommit,
     Summary,
-    Workspace,
 )
 from waystation.agents import AgentLine
-from waystation.sandbox.protocol import LineCallback
-
-
-@dataclass(frozen=True)
-class Gate:
-    """A point a test holds a run at, cancels it there, then lets it go on."""
-
-    reached: asyncio.Event = field(default_factory=asyncio.Event)
-    release: asyncio.Event = field(default_factory=asyncio.Event)
-    passed: asyncio.Event = field(default_factory=asyncio.Event)
-
-    async def hold(self) -> None:
-        self.reached.set()
-        await self.release.wait()
-        self.passed.set()
-
-
-class _GatedBox:
-    """A live sandbox whose git execs wait at the gate first.
-
-    They are collect's: the agents these tests run are shell scripts.
-    """
-
-    def __init__(self, inner: Sandbox, gate: Gate) -> None:
-        self.workspace = inner.workspace
-        self._inner, self._gate = inner, gate
-
-    async def exec(
-        self,
-        argv: Sequence[str],
-        *,
-        stdin: str | None = None,
-        env: Mapping[str, str] | None = None,
-        capture: bool = True,
-        on_stdout: LineCallback | None = None,
-        on_stderr: LineCallback | None = None,
-    ) -> ExecResult:
-        if argv[0] == "git":
-            await self._gate.hold()
-        return await self._inner.exec(
-            argv,
-            stdin=stdin,
-            env=env,
-            capture=capture,
-            on_stdout=on_stdout,
-            on_stderr=on_stderr,
-        )
-
-
-@dataclass(frozen=True)
-class GatedSandbox:
-    """``NoSandbox``, held at one point of its life until the test lets it go."""
-
-    gate: Gate
-    at: Literal["start", "collect", "teardown"]
-    inner: NoSandbox = field(default_factory=NoSandbox)
-
-    async def preflight(self) -> None:
-        await self.inner.preflight()
-
-    @asynccontextmanager
-    async def start(
-        self, ws: Workspace, *, env: Mapping[str, str], pass_env: Sequence[str]
-    ) -> AsyncIterator[Sandbox]:
-        if self.at == "start":
-            await self.gate.hold()
-        async with self.inner.start(ws, env=env, pass_env=pass_env) as box:
-            yield box if self.at != "collect" else _GatedBox(box, self.gate)
-            if self.at == "teardown":
-                await self.gate.hold()
 
 
 @dataclass(frozen=True)
@@ -133,11 +61,6 @@ class GatedIntegration:
 
 def _said(caplog: pytest.LogCaptureFixture, line: str) -> bool:
     return line in [record.getMessage() for record in lifecycle(caplog)]
-
-
-def _branches(repo: Path, pattern: str) -> list[str]:
-    listed = git(repo, "branch", "--list", "--format=%(refname:short)", pattern)
-    return listed.splitlines()
 
 
 async def _cancel_once_ready(
@@ -234,7 +157,7 @@ async def test_a_cancellation_during_collect_waits_for_the_series_and_never_inte
     branch = f"waystation/{run_id}"
     kept = subjects(host_repo, f"HEAD..{branch}")
     assert kept == ["add a file"]
-    assert _branches(host_repo, "feature") == []
+    assert branches(host_repo, "feature") == []
     assert workspaces(isolated_tempdir) == []
     assert _said(caplog, f"run cancelled during collect; series kept on {branch}")
 
@@ -251,7 +174,7 @@ async def test_a_cancellation_during_integrate_lets_the_landing_finish(
 
     landed = subjects(host_repo, "HEAD..feature")
     assert landed == ["add a file"]
-    assert _branches(host_repo, "waystation/*") == []
+    assert branches(host_repo, "waystation/*") == []
     assert workspaces(isolated_tempdir) == []
     assert _said(caplog, "run cancelled during integrate; series landed on feature")
 
@@ -269,9 +192,9 @@ async def test_a_cancellation_during_teardown_lets_the_teardown_finish(
     assert gate.passed.is_set()
     assert workspaces(isolated_tempdir) == []
     # Integrate had not started, so it never will: the series is kept instead.
-    assert _branches(host_repo, "feature") == []
+    assert branches(host_repo, "feature") == []
     branch = f"waystation/{run_id}"
-    assert _branches(host_repo, "waystation/*") == [branch]
+    assert branches(host_repo, "waystation/*") == [branch]
     assert _said(caplog, f"run cancelled during sandbox; series kept on {branch}")
 
 
@@ -290,7 +213,7 @@ async def test_a_cancellation_while_the_sandbox_starts_tears_it_down_unused(
     assert gate.passed.is_set()
     assert ready == []
     assert workspaces(isolated_tempdir) == []
-    assert _branches(host_repo, "waystation/*") == []
+    assert branches(host_repo, "waystation/*") == []
 
 
 @pytest.mark.git
@@ -306,7 +229,7 @@ async def test_a_run_cancelled_as_it_starts_leaves_nothing_behind(
         await a_run(host_repo).on_run_start(cancel_this_run)
 
     assert workspaces(isolated_tempdir) == []
-    assert _branches(host_repo, "waystation/*") == []
+    assert branches(host_repo, "waystation/*") == []
 
 
 @pytest.mark.git
@@ -335,7 +258,7 @@ async def test_a_failure_a_cancelled_run_can_no_longer_report_is_logged(
     assert unreported[0].startswith(
         f"run {run_id}: agent failed in a run that was cancelled: AgentExited("
     )
-    assert _branches(host_repo, "waystation/*") == [f"waystation/{run_id}"]
+    assert branches(host_repo, "waystation/*") == [f"waystation/{run_id}"]
 
 
 @pytest.mark.git

@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from helpers import a_run, subjects, workspaces
+from helpers import WORKS_UNTIL_STOPPED, a_run, subjects, workspaces
 from waystation import handle_signals
 
 # What a shell, a CI runner or `docker stop` ends a process with, per platform.
@@ -170,19 +170,6 @@ async def main():
 asyncio.run(main())
 """
 
-_WORKING_AGENT = "\n".join(
-    [
-        "set -e",
-        "printf 'a\\n' > a.txt",
-        "git add a.txt",
-        "git commit -q -m first",
-        "printf 'wip\\n' > wip.txt",
-        "echo ready",
-        "sleep 60 &",
-        "wait",
-    ]
-)
-
 
 def _spawn(script: str, tmp_path: Path, temp: Path) -> subprocess.Popen[str]:
     path = tmp_path / "flow.py"
@@ -214,7 +201,9 @@ def test_sigterm_to_a_flow_script_keeps_the_series_and_leaks_no_sandbox(
     temp = tmp_path / "flow-temp"
     temp.mkdir()
     script = _FLOW.format(
-        tests=str(Path(__file__).parent), script=_WORKING_AGENT, repo=str(host_repo)
+        tests=str(Path(__file__).parent),
+        script=WORKS_UNTIL_STOPPED,
+        repo=str(host_repo),
     )
     proc = _spawn(script, tmp_path, temp)
     run_id = _await_line(proc, "ready").split()[1]

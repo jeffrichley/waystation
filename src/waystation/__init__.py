@@ -15,6 +15,7 @@ from waystation.agents import (
 from waystation.agents.claude_code import ClaudeCode
 from waystation.collect import PatchSeries, collect
 from waystation.errors import PreflightError, StageError, WaystationError
+from waystation.fan_out import fan_out
 from waystation.flow import Flow, RunSpec
 from waystation.hooks import HookBundle, RunContext
 from waystation.integration import (
@@ -108,6 +109,7 @@ __all__ = [
     "Workspace",
     "collect",
     "configure_logging",
+    "fan_out",
     "find_outcome",
     "handle_signals",
     "integrate",

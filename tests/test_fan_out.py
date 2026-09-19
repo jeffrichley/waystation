@@ -21,11 +21,12 @@ import pytest
 from helpers import (
     OK_OUTCOME,
     PROMPT,
+    WORKS_UNTIL_STOPPED,
     Gate,
     GatedSandbox,
     ShellAgent,
     a_run,
-    git,
+    branches,
     host_state,
     init_host_repo,
     subjects,
@@ -72,28 +73,6 @@ class CheckedSandbox(NoSandbox):
         self.checked.append(f"sandbox {self.label}")
 
 
-def _kept(repo: Path) -> list[str]:
-    """The preservation branches in ``repo``."""
-    listed = git(repo, "branch", "--list", "--format=%(refname:short)", "waystation/*")
-    return listed.splitlines()
-
-
-# Commits, leaves work uncommitted, says so, then works until it is stopped.
-_WORKS_UNTIL_STOPPED = ShellAgent(
-    "\n".join(
-        [
-            "set -e",
-            "printf 'a\\n' > a.txt",
-            "git add a.txt",
-            "git commit -q -m first",
-            "printf 'wip\\n' > wip.txt",
-            "echo ready",
-            "while true; do sleep 0.05; done",
-        ]
-    )
-)
-
-
 @dataclass
 class Stuck:
     """Runs that work until stopped; ``all_ready`` once ``count`` are working."""
@@ -107,7 +86,7 @@ class Stuck:
 
     def runs(self) -> list[RunSpec[Summary]]:
         spec: RunSpec[Summary] = (
-            Flow(self.repo, agent=_WORKS_UNTIL_STOPPED, sandbox=self.sandbox)
+            Flow(self.repo, agent=ShellAgent(WORKS_UNTIL_STOPPED), sandbox=self.sandbox)
             .run("work until stopped")
             .on_run_start(lambda ctx: self.started.append(ctx.run_id))
             .on_agent_output(self._watch)
@@ -122,9 +101,9 @@ class Stuck:
 
     def assert_work_kept(self, temp: Path) -> None:
         """Each run was stopped, its work kept on its branch, its sandbox gone."""
-        branches = [f"waystation/{run_id}" for run_id in self.started]
-        assert sorted(_kept(self.repo)) == sorted(branches)
-        for branch in branches:
+        kept = [f"waystation/{run_id}" for run_id in self.started]
+        assert sorted(branches(self.repo, "waystation/*")) == sorted(kept)
+        for branch in kept:
             assert subjects(self.repo, f"HEAD..{branch}") == [
                 "WIP: salvaged uncommitted work",
                 "first",
@@ -143,10 +122,9 @@ async def test_a_batch_across_host_repos_yields_every_run_result(
     results: list[RunResult[Any]] = [result async for result in fan_out(batch)]
 
     assert [type(result) for result in results] == [RunSucceeded, RunSucceeded]
-    assert len(_kept(host_repo)) == len(_kept(other_repo)) == 1
-    assert sorted(_kept(host_repo) + _kept(other_repo)) == sorted(
-        str(result.preserved) for result in results
-    )
+    here, there = (branches(repo, "waystation/*") for repo in (host_repo, other_repo))
+    assert len(here) == len(there) == 1, "each run kept its work in its own repo"
+    assert sorted(here + there) == sorted(str(result.preserved) for result in results)
 
 
 @pytest.mark.git

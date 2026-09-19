@@ -22,6 +22,7 @@ from helpers import (
     ShellAgent,
     a_run,
     awaited,
+    branches,
     git,
     lifecycle,
     stalling_ref_hook,
@@ -60,11 +61,6 @@ class GatedIntegration:
 
 def _said(caplog: pytest.LogCaptureFixture, line: str) -> bool:
     return line in [record.getMessage() for record in lifecycle(caplog)]
-
-
-def _branches(repo: Path, pattern: str) -> list[str]:
-    listed = git(repo, "branch", "--list", "--format=%(refname:short)", pattern)
-    return listed.splitlines()
 
 
 async def _cancel_once_ready(
@@ -161,7 +157,7 @@ async def test_a_cancellation_during_collect_waits_for_the_series_and_never_inte
     branch = f"waystation/{run_id}"
     kept = subjects(host_repo, f"HEAD..{branch}")
     assert kept == ["add a file"]
-    assert _branches(host_repo, "feature") == []
+    assert branches(host_repo, "feature") == []
     assert workspaces(isolated_tempdir) == []
     assert _said(caplog, f"run cancelled during collect; series kept on {branch}")
 
@@ -178,7 +174,7 @@ async def test_a_cancellation_during_integrate_lets_the_landing_finish(
 
     landed = subjects(host_repo, "HEAD..feature")
     assert landed == ["add a file"]
-    assert _branches(host_repo, "waystation/*") == []
+    assert branches(host_repo, "waystation/*") == []
     assert workspaces(isolated_tempdir) == []
     assert _said(caplog, "run cancelled during integrate; series landed on feature")
 
@@ -196,9 +192,9 @@ async def test_a_cancellation_during_teardown_lets_the_teardown_finish(
     assert gate.passed.is_set()
     assert workspaces(isolated_tempdir) == []
     # Integrate had not started, so it never will: the series is kept instead.
-    assert _branches(host_repo, "feature") == []
+    assert branches(host_repo, "feature") == []
     branch = f"waystation/{run_id}"
-    assert _branches(host_repo, "waystation/*") == [branch]
+    assert branches(host_repo, "waystation/*") == [branch]
     assert _said(caplog, f"run cancelled during sandbox; series kept on {branch}")
 
 
@@ -217,7 +213,7 @@ async def test_a_cancellation_while_the_sandbox_starts_tears_it_down_unused(
     assert gate.passed.is_set()
     assert ready == []
     assert workspaces(isolated_tempdir) == []
-    assert _branches(host_repo, "waystation/*") == []
+    assert branches(host_repo, "waystation/*") == []
 
 
 @pytest.mark.git
@@ -233,7 +229,7 @@ async def test_a_run_cancelled_as_it_starts_leaves_nothing_behind(
         await a_run(host_repo).on_run_start(cancel_this_run)
 
     assert workspaces(isolated_tempdir) == []
-    assert _branches(host_repo, "waystation/*") == []
+    assert branches(host_repo, "waystation/*") == []
 
 
 @pytest.mark.git
@@ -262,7 +258,7 @@ async def test_a_failure_a_cancelled_run_can_no_longer_report_is_logged(
     assert unreported[0].startswith(
         f"run {run_id}: agent failed in a run that was cancelled: AgentExited("
     )
-    assert _branches(host_repo, "waystation/*") == [f"waystation/{run_id}"]
+    assert branches(host_repo, "waystation/*") == [f"waystation/{run_id}"]
 
 
 @pytest.mark.git

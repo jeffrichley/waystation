@@ -37,6 +37,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `host_state(repo)` | the host's refs, HEAD, index and tree in one value — compare before and after to prove something left the host untouched |
 | `init_host_repo(root)` | what `host_repo` is built from — call it directly only for a *second* repo, or one outside `tmp_path` |
 | `sh()` | the POSIX sh on this host (Git Bash on Windows) |
+| `branches(repo, pattern)` | the short names of the branches matching `pattern` — `"waystation/*"` for the preservation branches a run kept |
 | `subjects(repo, revisions)` | the commit subjects in a range like `HEAD..waystation/<id>`, newest first — what a preserved or landed series holds |
 | `lifecycle(caplog)` | the records a run logged per lifecycle event (`waystation.run`), in order |
 | `workspaces(temp)` | the run workspaces left under a temp dir — assert `== []` to prove a run cleaned up |
@@ -46,6 +47,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `Gate` / `GatedSandbox(gate, at)` | a point a run is held at until the test sets `gate.release` — `gate.reached` once it waits, `gate.passed` once it goes on; `GatedSandbox` is `NoSandbox` held at `"start"`, `"format-patch"` or `"teardown"`, for cancelling a run mid-stage |
 | `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series, `sandbox=` your own backend, and `shell="sh"` the container's own sh when that backend is Docker |
 | `ShellAgent(script)` | an agent that *is* a shell script — reach for it over `ScriptedAgent` when the test drives stderr, an exit code, or timing |
+| `WORKS_UNTIL_STOPPED` | a `ShellAgent` script that commits `first`, leaves `wip.txt`, prints `ready`, then works until it is stopped — what a cancelled run's preservation branch should hold |
 | `PROMPT` | the prompt `a_run` uses; has a second line, so a test can prove the body stayed unlogged |
 | `OK_OUTCOME` | the Outcome a scripted agent reports when the test doesn't care |
 | `OUTCOME` / `OK_OUTCOME_LINE` | the marker prefix `ShellAgent` parses, and a ready-made reporting line |

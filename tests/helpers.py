@@ -48,12 +48,14 @@ __all__ = [
     "PROMPT",
     "RECORDED_CLAUDE",
     "USAGE",
+    "WORKS_UNTIL_STOPPED",
     "Gate",
     "GatedSandbox",
     "ShellAgent",
     "Total",
     "a_run",
     "awaited",
+    "branches",
     "commit_on",
     "git",
     "host_state",
@@ -82,6 +84,23 @@ USAGE = "USAGE "
 PROMPT = "Do the thing.\nWith detail on a second line."
 """A prompt with a second line, so a test can prove the body stayed unlogged."""
 
+WORKS_UNTIL_STOPPED = "\n".join(
+    [
+        "set -e",
+        "printf 'a\\n' > a.txt",
+        "git add a.txt",
+        "git commit -q -m first",
+        "printf 'wip\\n' > wip.txt",
+        "echo ready",
+        "sleep 60 &",
+        "wait",
+    ]
+)
+"""A ``ShellAgent`` script that commits, leaves work, says ``ready``, then waits.
+
+Stopped, it leaves ``["WIP: salvaged uncommitted work", "first"]`` to keep.
+"""
+
 RECORDED_CLAUDE = Path(__file__).parent / "fixtures" / "claude_code"
 """Real Claude Code stdout, one ``<scenario>.jsonl`` per recorded run."""
 
@@ -108,6 +127,12 @@ def git(repo: Path, *args: str) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def branches(repo: Path, pattern: str) -> list[str]:
+    """The short names of the branches in ``repo`` matching ``pattern``."""
+    listed = git(repo, "branch", "--list", "--format=%(refname:short)", pattern)
+    return listed.splitlines()
 
 
 def subjects(repo: Path, revisions: str) -> list[str]:

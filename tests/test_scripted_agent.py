@@ -11,7 +11,7 @@ from waystation import PreflightError, ScriptedAgent
 
 @pytest.mark.unit
 def test_a_scripted_agent_runs_under_the_sh_it_is_given() -> None:
-    # A container has its own sh; the host's path to one means nothing there.
+    # A sandbox with its own sh has no use for the host's path to one.
     command = ScriptedAgent(lines=["hi"], shell="sh").command("", {})
 
     assert command.argv[:2] == ("sh", "-c")

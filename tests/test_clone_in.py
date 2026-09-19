@@ -7,7 +7,6 @@ the same way; the docker tier runs it for real.
 
 from __future__ import annotations
 
-import tempfile
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -53,12 +52,13 @@ class _HostSh:
 
 @dataclass(frozen=True)
 class CopyingHost:
-    """Copies each workspace into a fresh directory, then runs there.
+    """Copies each workspace into a fresh directory under ``root``, then runs there.
 
     ``leftover`` puts a file in that directory first, the way an image might
     ship a ``/workspace`` that is not empty.
     """
 
+    root: Path
     leftover: bool = False
 
     async def preflight(self) -> None:
@@ -68,7 +68,8 @@ class CopyingHost:
     async def start(
         self, ws: Workspace, *, env: Mapping[str, str], pass_env: Sequence[str]
     ) -> AsyncIterator[Sandbox]:
-        inside = Path(tempfile.mkdtemp(prefix="waystation-copy-"))
+        inside = self.root / ws.run_id
+        inside.mkdir(parents=True)
         if self.leftover:
             (inside / "leftover").write_text("x", encoding="utf-8")
         try:
@@ -81,23 +82,30 @@ class CopyingHost:
             remove_workspace(ws.path)
 
 
+@pytest.fixture
+def copies(tmp_path: Path) -> Path:
+    """Where ``CopyingHost`` makes its copies; empty again once each run ends."""
+    return tmp_path / "copies"
+
+
 @pytest.mark.git
 async def test_a_copied_workspace_runs_like_the_original(
-    host_repo: Path, isolated_tempdir: Path
+    host_repo: Path, isolated_tempdir: Path, copies: Path
 ) -> None:
-    result = await a_run(host_repo, sandbox=CopyingHost())
+    result = await a_run(host_repo, sandbox=CopyingHost(copies))
 
     assert isinstance(result, RunSucceeded), result
     assert result.preserved is not None
     assert subjects(host_repo, f"HEAD..{result.preserved}") == ["add a file"]
     assert workspaces(isolated_tempdir) == []
+    assert list(copies.iterdir()) == []
 
 
 @pytest.mark.git
 async def test_a_copied_workspace_commits_as_the_host_identity(
-    host_repo: Path,
+    host_repo: Path, copies: Path
 ) -> None:
-    result = await a_run(host_repo, sandbox=CopyingHost())
+    result = await a_run(host_repo, sandbox=CopyingHost(copies))
 
     assert isinstance(result, RunSucceeded), result
     author = git(host_repo, "log", "-1", "--format=%an <%ae>", str(result.preserved))
@@ -106,12 +114,13 @@ async def test_a_copied_workspace_commits_as_the_host_identity(
 
 @pytest.mark.git
 async def test_a_copy_that_cannot_clone_fails_the_sandbox_stage(
-    host_repo: Path, isolated_tempdir: Path
+    host_repo: Path, isolated_tempdir: Path, copies: Path
 ) -> None:
-    result = await a_run(host_repo, sandbox=CopyingHost(leftover=True))
+    result = await a_run(host_repo, sandbox=CopyingHost(copies, leftover=True))
 
     assert isinstance(result, RunFailed), result
     assert result.stage == "sandbox"
     assert isinstance(result.failure, CommandFailed)
     assert "not an empty directory" in result.failure.stderr_tail
     assert workspaces(isolated_tempdir) == []
+    assert list(copies.iterdir()) == []

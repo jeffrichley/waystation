@@ -207,8 +207,8 @@ def a_run(
 ) -> RunSpec[Summary]:
     """A run that says one line, makes ``commits`` (one, by default), and reports.
 
-    It runs on ``NoSandbox`` unless given another ``sandbox``; a container
-    brings its own sh, so give it ``shell="sh"`` too.
+    It runs on ``NoSandbox`` unless given another ``sandbox``; one that
+    brings its own sh, as ``DockerSandbox`` does, wants ``shell="sh"`` too.
     """
     return Flow(
         repo,

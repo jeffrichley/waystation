@@ -250,7 +250,11 @@ class _StageRunner:
         self, stage: Stage, work: Awaitable[T], bound: str | None, interruptible: bool
     ) -> T:
         """``work`` under ``bound``, timed, a cancellation meanwhile held."""
-        seconds = None if bound is None else self._limit(bound)
+        try:
+            seconds = None if bound is None else self._limit(bound)
+        except BaseException:
+            _discard(work)
+            raise
         clock = get_clock()
         started = clock.monotonic()
         task, commits = start_bounded(_awaited(work))

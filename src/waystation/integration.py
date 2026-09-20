@@ -260,14 +260,25 @@ async def preserve_series(
 ) -> str:
     """Keep ``series`` on ``branch``, created at the series' base.
 
-    Landing at the base can never conflict. Leaves the host working tree,
-    index, and HEAD untouched. Returns ``branch``.
+    This is how a series that reached no target is not lost — a run that
+    failed, conflicted, was cancelled, or integrates nowhere at all. Landing
+    at the base can never conflict, and the host's working tree, index and
+    HEAD are left untouched. An empty series writes nothing.
 
     Serialized with landings on the same repo: it writes objects and a ref
     into the host, so it takes the same lock ``integrate`` does (ADR-0033).
 
-    Raises ``StageError("integrate", ...)``: keeping a series is a landing at
-    the base, and it is attributed like one (ADR-0032).
+    Args:
+        repo: The host repo, or an open ``GitRepo`` to reuse.
+        branch: The branch to create; a run's own is ``waystation/<run-id>``.
+        series: The patches to keep.
+
+    Returns:
+        ``branch``, so a caller can report where the work went.
+
+    Raises:
+        StageError: Attributed to ``"integrate"`` — keeping a series is a
+            landing at the base, and it is attributed like one (ADR-0032).
     """
     if series.patches:
         with attributing("integrate"):

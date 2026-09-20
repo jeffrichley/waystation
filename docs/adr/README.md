@@ -34,6 +34,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0029](0029-collect-looks-over-a-workspace-in-one-exec.md) Collect looks a workspace over in one exec, through git's own shell | adding a git command to collect, or reaching for `sh -c` in a sandbox |
 | [0020](0020-integration-lands-with-plumbing.md) Integration lands a series with plumbing, never a working tree | writing git that touches the host repo |
 | [0005](0005-integration-strategy-and-conflicts.md) Integration is a pluggable strategy; conflicts abort and preserve | adding a landing rule, or handling a conflict |
+| [0033](0033-one-way-in-to-host-git-serialized-at-the-entry-points.md) `GitRepo` is the one way in to host git; landings serialize at the entry points | running git on the host from a strategy, or touching the per-repo lock |
 | [0015](0015-conflict-resolution-is-a-run.md) Conflict resolution is a run, not a seam | tempted to add a resolver hook, merger or healer |
 
 ## Sandboxes

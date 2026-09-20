@@ -1,75 +1,80 @@
 """A run spec's builders own the bare names; its values take the glossary's.
 
-The collision was deciding the API one ticket at a time — `RunSpec` is a
-frozen dataclass, so its fields took `agent`, `sandbox`, `base`, `timeouts`
-and `salvage` first, and `.timeouts(t)` had to ship as `with_timeouts` to
-get out of the way (#26). ADR-0031 settles it the other way round, and the
-first test below is what stops it coming back.
+The argument is in ADR-0031; these hold it, so #29 and #32 inherit the rule
+instead of re-deciding it when they add their own builders.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import inspect
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
 
+from helpers import a_run
 from waystation import (
-    Flow,
     Integration,
     NoSandbox,
     RunSpec,
     ScriptedAgent,
+    Summary,
     Timeouts,
 )
 
+# The bare names the builders own, spelled out rather than read off the class:
+# a list derived from `RunSpec` would agree with whatever `RunSpec` became.
+_BUILDERS = ("agent", "sandbox", "base", "salvage", "timeouts", "integrate", "hooks")
 
-class Answer(BaseModel):
-    summary: str
-
-
-def _spec() -> RunSpec[Answer]:
-    """A spec built the only public way there is: from a flow."""
-    return Flow(
-        Path("repo"),
-        agent=ScriptedAgent(outcome=Answer(summary="ok")),
-        sandbox=NoSandbox(),
-    ).run("work", outcome=Answer)
+_ANY_REPO = Path("repo")
+"""No run is performed here, so a spec needs no repo that exists."""
 
 
 @pytest.mark.unit
-def test_no_public_method_of_a_run_spec_is_also_a_field() -> None:
-    """The rule ADR-0031 settled, held by a test so it cannot be re-decided."""
-    fields = {field.name for field in dataclasses.fields(RunSpec)}
-    methods = {
-        name
-        for name, value in vars(RunSpec).items()
-        if not name.startswith("_") and callable(value)
-    }
+@pytest.mark.parametrize("builder", _BUILDERS)
+def test_a_builders_name_is_not_reclaimed_by_a_field(builder: str) -> None:
+    """A field taking a builder's name would shadow it, and silently.
 
-    collisions = sorted(fields & methods)
-    assert not collisions, (
-        f"these name both a builder and a field: {collisions}. Builders own "
-        "the bare names; a stored value takes the word CONTEXT.md uses for it "
-        "(ADR-0031)."
+    `RunSpec` is a slots dataclass, so a field wins a name outright: the
+    attribute becomes a slot descriptor and the method is simply gone. That
+    is what this catches.
+    """
+    attribute = getattr(RunSpec, builder, None)
+
+    assert inspect.isfunction(attribute), (
+        f"RunSpec.{builder} is {type(attribute).__name__}, not a method. A "
+        "field has taken a builder's name; builders own the bare names, and a "
+        "stored value takes the word CONTEXT.md uses for it (ADR-0031)."
     )
 
 
 @pytest.mark.unit
-def test_a_spec_stores_its_values_under_the_glossarys_words() -> None:
-    spec = _spec()
+def test_no_field_takes_a_name_a_builder_owns() -> None:
+    fields = {field.name for field in dataclasses.fields(RunSpec)}
 
-    assert isinstance(spec.provider, ScriptedAgent)
-    assert isinstance(spec.backend, NoSandbox)
+    taken = sorted(fields & set(_BUILDERS))
+    assert not taken, (
+        f"these fields take names the builders own: {taken}. Store the value "
+        "under the glossary's word instead (ADR-0031)."
+    )
+
+
+@pytest.mark.unit
+def test_a_spec_stores_its_values_under_the_glossary_s_words() -> None:
+    agent = ScriptedAgent(outcome={"summary": "ok"})
+    backend = NoSandbox()
+    spec = a_run(_ANY_REPO).agent(agent).sandbox(backend)
+
+    assert spec.provider is agent
+    assert spec.backend is backend
     assert spec.base_ref == "HEAD"
     assert spec.bounds == Timeouts()
     assert spec.salvaging is True
     assert spec.integration is None
 
 
-_OTHER_AGENT = ScriptedAgent(outcome=Answer(summary="different"))
+_OTHER_AGENT = ScriptedAgent(outcome={"summary": "different"})
 _OTHER_SANDBOX = NoSandbox(env={"WAYSTATION": "1"})
 
 
@@ -87,24 +92,24 @@ _OTHER_SANDBOX = NoSandbox(env={"WAYSTATION": "1"})
     ids=["agent", "sandbox", "base", "timeouts", "salvage", "integrate"],
 )
 def test_a_builder_returns_a_new_spec_and_leaves_the_old_one_alone(
-    build: Callable[[RunSpec[Answer]], RunSpec[Answer]], reads: str, expected: object
+    build: Callable[[RunSpec[Summary]], RunSpec[Summary]], reads: str, expected: object
 ) -> None:
     """Every builder is generative: the spec you started from is unchanged."""
-    spec = _spec()
+    spec = a_run(_ANY_REPO)
     before = getattr(spec, reads)
+    assert before != expected, "this case sets what was there, so proves nothing"
 
     built = build(spec)
 
     assert built is not spec
     assert getattr(built, reads) == expected
     assert getattr(spec, reads) == before, "the original spec was mutated"
-    assert before != expected, "this case proves nothing: it set what was there"
 
 
 @pytest.mark.unit
 def test_a_builder_replaces_its_value_rather_than_merging_it() -> None:
     """``dataclasses.replace`` semantics: the whole ``Timeouts`` is swapped."""
-    spec = _spec().timeouts(Timeouts(collect=9.0, integrate=3.0))
+    spec = a_run(_ANY_REPO).timeouts(Timeouts(collect=9.0, integrate=3.0))
 
     replaced = spec.timeouts(Timeouts(collect=1.0))
 
@@ -114,7 +119,7 @@ def test_a_builder_replaces_its_value_rather_than_merging_it() -> None:
 
 @pytest.mark.unit
 def test_a_spec_is_read_only() -> None:
-    spec = _spec()
+    spec = a_run(_ANY_REPO)
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         spec.base_ref = "main"  # type: ignore[misc]
@@ -123,7 +128,7 @@ def test_a_spec_is_read_only() -> None:
 @pytest.mark.unit
 def test_the_builders_chain_in_any_order() -> None:
     spec = (
-        _spec()
+        a_run(_ANY_REPO)
         .base("main")
         .salvage(False)
         .timeouts(Timeouts(agent_wall=30.0))

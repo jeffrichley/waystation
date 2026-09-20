@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import logging
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -397,3 +399,96 @@ async def test_a_run_that_cannot_read_its_prompt_still_starts(
     assert isinstance(result, RunFailed)
     assert result.stage == "agent", "reading the prompt is still the agent's business"
     assert [event["event"] for event in events_in(events)] == ["run_start", "run_end"]
+
+
+class _HostHandler(logging.Handler):
+    """A host application's own handler, as ``basicConfig`` installs one.
+
+    Its level is NOTSET, so what a host sees is decided by its root logger's
+    level — which ``callHandlers`` never rechecks on a propagated record.
+    That is why holding the ``waystation`` logger at DEBUG used to put agent
+    output into a service's logs.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(logging.NOTSET)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextlib.contextmanager
+def _host_logging_at(level: int) -> Iterator[_HostHandler]:
+    """What ``logging.basicConfig(level=...)`` leaves behind, put back after."""
+    collected = _HostHandler()
+    root = logging.getLogger()
+    before = root.level
+    root.addHandler(collected)
+    root.setLevel(level)
+    try:
+        yield collected
+    finally:
+        root.removeHandler(collected)
+        root.setLevel(before)
+
+
+@pytest.mark.git
+async def test_a_run_file_leaves_a_hosts_own_handlers_at_their_level(
+    host_repo: Path, tmp_path: Path, clean_logging: None
+) -> None:
+    """An open run file must not push agent output into a service's logs.
+
+    The file needs the records to exist, so the ``waystation`` logger goes to
+    DEBUG while one is open. Every handler above used to see them too
+    (ADR-0026).
+    """
+    logs = tmp_path / "logs"
+
+    with _host_logging_at(logging.INFO) as collected, RunLogFiles(logs) as files:
+        result = await a_run(host_repo).hooks(files)
+
+    assert isinstance(result, RunSucceeded)
+    ours = [r for r in collected.records if r.name.startswith("waystation")]
+    leaked = [f"{r.name}: {r.getMessage()}" for r in ours if r.levelno < logging.INFO]
+    assert leaked == [], "the host was collecting records it never asked for"
+    assert ours, "the host still collects what it did ask for"
+
+    # And the file is no poorer for it: the git argv that explains a
+    # failure is a DEBUG record, and it is what the file exists to hold.
+    text = (logs / f"{result.run_id}.log").read_text(encoding="utf-8")
+    assert "DEBUG" in text, "the run file lost the records it is for"
+    assert "git " in text, "the git argv at DEBUG belongs in the run file"
+
+
+@pytest.mark.git
+async def test_a_logger_the_script_turned_up_still_reaches_the_host(
+    host_repo: Path, tmp_path: Path, clean_logging: None
+) -> None:
+    """Per-logger tuning is how one stream is turned up; a run file must not
+    quietly take it away again.
+
+    ``configure_logging("INFO")`` plus
+    ``getLogger("waystation.agent.output").setLevel(DEBUG)`` is the recipe
+    ``observability``'s own docstring gives. Those records reach a host
+    before a run file opens, so they have to keep reaching it while one is.
+    """
+    configure_logging("INFO", console=Console(file=io.StringIO()))
+    logging.getLogger("waystation.agent.output").setLevel(logging.DEBUG)
+
+    with (
+        _host_logging_at(logging.INFO) as collected,
+        RunLogFiles(tmp_path / "logs") as files,
+    ):
+        result = await a_run(host_repo).hooks(files)
+
+    assert isinstance(result, RunSucceeded)
+    tuned = [r for r in collected.records if r.name == "waystation.agent.output"]
+    assert tuned, "the stream the script turned up stopped reaching the host"
+    # And nothing else below INFO came with it.
+    others = [
+        f"{r.name}: {r.getMessage()}"
+        for r in collected.records
+        if r.levelno < logging.INFO and r.name != "waystation.agent.output"
+    ]
+    assert others == []

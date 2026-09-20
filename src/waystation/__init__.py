@@ -20,6 +20,7 @@ from waystation.flow import Flow, RunSpec
 from waystation.hooks import HookBundle, RunContext
 from waystation.integration import (
     GitRepo,
+    GitResult,
     Integration,
     IntegrationStrategy,
     integrate,
@@ -75,6 +76,7 @@ __all__ = [
     "Failure",
     "Flow",
     "GitRepo",
+    "GitResult",
     "HookBundle",
     "HookName",
     "HookRaised",

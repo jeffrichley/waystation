@@ -1,0 +1,299 @@
+"""`GitRepo` is the one way in to host git, and landings serialize (#71, ADR-0033).
+
+The rules here are the ones a *user's* strategy depends on: it can do
+everything the shipped one does, and a landing it starts is serialized per
+repo however many event loops the host process runs.
+"""
+
+from __future__ import annotations
+
+import ast
+import asyncio
+import os
+import tempfile
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pytest
+
+from helpers import commit_on, git
+from waystation import (
+    GitRepo,
+    GitResult,
+    Integration,
+    IntegrationReport,
+    PatchSeries,
+    integrate,
+)
+from waystation.integration import preserve_series
+
+TARGET = "agents/landed"
+
+
+async def _a_series(repo: Path, name: str = "work") -> PatchSeries:
+    """One commit on its own branch, as a series to land."""
+    base = git(repo, "rev-parse", "HEAD")
+    commit_on(repo, name, {f"{name}.txt": f"{name}\n"}, message=f"the {name}")
+    return await PatchSeries.from_range(repo, base, name)
+
+
+async def _settle() -> None:
+    """Let every runnable task reach its next await; no wall time passes."""
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+@dataclass(frozen=True)
+class Marks:
+    """Writes ``marker`` the moment it is let into the repo, then lands."""
+
+    marker: Path
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        self.marker.write_text("in", encoding="utf-8")
+        return await Integration(TARGET).integrate(repo, series)
+
+
+@pytest.mark.git
+def test_a_second_event_loop_can_still_contend_for_the_same_repo(
+    host_repo: Path,
+) -> None:
+    """An ``asyncio.Lock`` binds to the loop that first *contends* for it.
+
+    A process that runs more than one loop — a service calling
+    ``asyncio.run`` per request, a suite with a loop per test — failed its
+    next contended landing with ``RuntimeError``, reported as
+    ``RunFailed(integrate, Errored)``.
+    """
+
+    async def two_at_once(name: str) -> None:
+        repo = await GitRepo.open(host_repo)
+        series = await _a_series(host_repo, name)
+        held = asyncio.Event()
+        let_go = asyncio.Event()
+
+        @dataclass(frozen=True)
+        class Holds:
+            async def integrate(
+                self, repo: GitRepo, series: PatchSeries
+            ) -> IntegrationReport:
+                held.set()
+                await let_go.wait()
+                return await Integration(TARGET).integrate(repo, series)
+
+        first = asyncio.create_task(integrate(repo, series, Holds()))
+        await held.wait()
+        # It reaches the lock and waits there: that is what binds the lock.
+        second = asyncio.create_task(integrate(repo, series, Integration(TARGET)))
+        await _settle()
+        assert not second.done()
+        let_go.set()
+        await asyncio.gather(first, second)
+
+    asyncio.run(two_at_once("first"))
+    asyncio.run(two_at_once("second"))
+
+    assert "second" in git(host_repo, "show", f"{TARGET}:second.txt")
+
+
+@dataclass(frozen=True)
+class HoldsAtUpdateRef(GitRepo):
+    """A host that waits inside ``update-ref`` until the test lets it go."""
+
+    reached: asyncio.Event = field(default_factory=asyncio.Event)
+    let_go: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def git(self, *args: str, env: Mapping[str, str] | None = None) -> str:
+        if args[:1] == ("update-ref",) and not self.let_go.is_set():
+            self.reached.set()
+            await self.let_go.wait()
+        return await super().git(*args, env=env)
+
+
+@pytest.mark.git
+async def test_preservation_waits_for_a_landing_on_the_same_repo(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    """Preservation writes objects and a ref, so it takes the same lock.
+
+    It used to write them outside it, which is the suspected cause of a
+    one-off Windows CI failure where one of three concurrent runs failed
+    while another was cloning the object store.
+    """
+    opened = await GitRepo.open(host_repo)
+    repo = HoldsAtUpdateRef(opened.path, opened.common_dir)
+    series = await _a_series(host_repo)
+    marker = tmp_path / "marker"
+
+    keeping = asyncio.create_task(
+        preserve_series(repo, branch="waystation/kept", series=series)
+    )
+    await repo.reached.wait()  # preservation is mid-write, inside the lock
+
+    landing = asyncio.create_task(integrate(repo, series, Marks(marker)))
+    await _settle()
+    assert not marker.exists(), "the landing got in while preservation was writing"
+
+    repo.let_go.set()
+    await asyncio.gather(keeping, landing)
+    assert marker.exists()
+    assert git(host_repo, "rev-parse", "--verify", "waystation/kept")
+    assert "work" in git(host_repo, "show", f"{TARGET}:work.txt")
+
+
+@dataclass(frozen=True)
+class PreservesWhatItCannotLand:
+    """A strategy that keeps the series instead of landing it.
+
+    Serialization is at the entry points, so this calls one from inside
+    another: reentrant, or it deadlocks with no error at all.
+    """
+
+    branch: str
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        await preserve_series(repo, branch=self.branch, series=series)
+        return IntegrationReport(
+            strategy="PreservesWhatItCannotLand",
+            target=self.branch,
+            mechanism="apply",
+            target_before=series.base_sha,
+            target_after=None,
+            landed=(),
+        )
+
+
+@pytest.mark.git
+async def test_a_strategy_that_preserves_inside_its_own_integrate_lands_no_deadlock(
+    host_repo: Path,
+) -> None:
+    series = await _a_series(host_repo)
+
+    async with asyncio.timeout(30):
+        report = await integrate(
+            host_repo, series, PreservesWhatItCannotLand("waystation/kept")
+        )
+
+    assert report.target_after is None
+    assert "work" in git(host_repo, "show", "waystation/kept:work.txt")
+
+
+@dataclass(frozen=True)
+class ByHand:
+    """Lands a series through nothing but the public ``GitRepo``.
+
+    It does the three things the shipped strategy needed private git for:
+    reads an exit code, feeds a patch in on stdin as bytes, and moves a ref.
+    """
+
+    target: str
+    exit_codes: list[int] = field(default_factory=list)
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        ref = f"refs/heads/{self.target}"
+        shown = await repo.run("rev-parse", "--verify", "--quiet", ref)
+        self.exit_codes.append(shown.exit_code)
+        before = shown.stdout.strip() if shown.exit_code == 0 else series.base_sha
+
+        tip, landed = before, []
+        with tempfile.TemporaryDirectory(prefix="by-hand-") as tmp:
+            msg, diff, index = (Path(tmp) / part for part in ("MSG", "DIFF", "INDEX"))
+            env = {**os.environ, "GIT_INDEX_FILE": str(index)}
+            for patch in series.patches:
+                mail = await repo.run(
+                    "mailinfo",
+                    str(msg),
+                    str(diff),
+                    stdin=patch.encode("utf-8", errors="surrogateescape"),
+                    check=True,
+                )
+                # mailinfo splits a patch: headers on stdout, body and diff
+                # into the two files it was given.
+                subject = next(
+                    line.removeprefix("Subject: ")
+                    for line in mail.stdout.splitlines()
+                    if line.startswith("Subject: ")
+                )
+                msg.write_text(subject, encoding="utf-8")
+                await repo.git("read-tree", tip, env=env)
+                if diff.stat().st_size:
+                    await repo.git("apply", "--cached", str(diff), env=env)
+                tree = await repo.git("write-tree", env=env)
+                tip = await repo.git("commit-tree", tree, "-p", tip, "-F", str(msg))
+                landed.append(tip)
+        await repo.git("update-ref", ref, tip)
+        return IntegrationReport(
+            strategy="ByHand",
+            target=self.target,
+            mechanism="apply",
+            target_before=before,
+            target_after=tip,
+            landed=tuple(landed),
+        )
+
+
+@pytest.mark.git
+async def test_a_strategy_built_from_the_public_surface_lands_a_series(
+    host_repo: Path,
+) -> None:
+    """#18 story 113: a git runner, so custom landing rules stay small."""
+    series = await _a_series(host_repo)
+    by_hand = ByHand(TARGET)
+
+    report = await integrate(host_repo, series, by_hand)
+
+    assert by_hand.exit_codes == [1], "a missing ref is an exit code, not a failure"
+    assert report.target_after is not None
+    assert len(report.landed) == 1
+    assert "work" in git(host_repo, "show", f"{TARGET}:work.txt")
+    assert git(host_repo, "log", "-1", "--format=%s", TARGET) == "the work"
+
+
+@pytest.mark.git
+async def test_a_run_hands_back_the_exit_code_and_both_streams(
+    host_repo: Path,
+) -> None:
+    repo = await GitRepo.open(host_repo)
+
+    failed = await repo.run("rev-parse", "--verify", "refs/heads/nope")
+
+    assert isinstance(failed, GitResult)
+    assert failed.exit_code != 0
+    assert failed.stdout == ""
+    assert failed.stderr.startswith("fatal: ")
+
+
+@pytest.mark.git
+async def test_output_reaches_a_strategy_as_git_wrote_it(host_repo: Path) -> None:
+    """Never newline-translated: a patch through a text pipe comes out changed."""
+    repo = await GitRepo.open(host_repo)
+
+    listed = await repo.run("rev-list", "--max-count=1", "HEAD")
+
+    assert listed.stdout.endswith("\n")
+    assert "\r" not in listed.stdout
+
+
+def test_the_shipped_strategy_takes_no_private_path_to_host_git() -> None:
+    """Whatever ``Integration`` needs, a user's strategy can have (ADR-0033).
+
+    The shipped strategy used to go round ``GitRepo`` into the private runner
+    three times — for an exit code, for unstripped stdout, for stdin — so a
+    user's strategy could not do what it does. Every git the module runs now
+    goes through the one door, and a test holds it there.
+    """
+    from waystation import integration
+
+    tree = ast.parse(Path(integration.__file__).read_text(encoding="utf-8"))
+    runs_git = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef)
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "run_git"
+    }
+
+    assert runs_git == {"_repo_git"}, runs_git

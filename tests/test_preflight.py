@@ -11,23 +11,48 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from helpers import a_run, host_state, workspaces
+from helpers import OK_OUTCOME, a_run, host_state, workspaces
 from waystation import (
     Errored,
     Flow,
     NoSandbox,
     PreflightError,
     RunSpec,
+    RunSucceeded,
     ScriptedAgent,
+    ScriptedCommit,
     Summary,
+    preflight,
 )
 from waystation.agents import AgentCommand, AgentEvent
+
+
+@dataclass
+class CountingAgent:
+    """A working agent that counts how many times its host check ran."""
+
+    checks: int = 0
+    inner: ScriptedAgent = field(
+        default_factory=lambda: ScriptedAgent(
+            commits=(ScriptedCommit("add a file", {"a.txt": "x"}),),
+            outcome=OK_OUTCOME,
+        )
+    )
+
+    def preflight(self) -> None:
+        self.checks += 1
+
+    def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
+        return self.inner.command(prompt, outcome_schema)
+
+    def parse(self, line: str) -> Sequence[AgentEvent]:
+        return self.inner.parse(line)
 
 
 @dataclass(frozen=True)
@@ -58,6 +83,10 @@ class SandboxThatFailsPreflight(NoSandbox):
 
 
 def _spec(repo: Path, agent: AgentWithPreflight) -> RunSpec[Summary]:
+    return Flow(repo, agent=agent, sandbox=NoSandbox()).run("work")
+
+
+def _counted_spec(repo: Path, agent: CountingAgent) -> RunSpec[Summary]:
     return Flow(repo, agent=agent, sandbox=NoSandbox()).run("work")
 
 
@@ -207,3 +236,40 @@ async def test_a_host_git_that_will_not_do_fails_preflight_saying_why(
     assert workspaces(isolated_tempdir) == []
     monkeypatch.undo()
     assert host_state(host_repo) == before
+
+
+@pytest.mark.git
+async def test_a_batch_checked_once_performs_without_checking_again(
+    host_repo: Path,
+) -> None:
+    """Preflighting once is a property of a batch, not of fan-out (ADR-0032).
+
+    A scheduler of the user's own checks its batch with ``preflight(specs)``
+    and then performs each spec already checked — the path fan-out takes,
+    rather than reaching into a private method of a spec.
+    """
+    counted = CountingAgent()
+    specs = [_counted_spec(host_repo, counted) for _ in range(3)]
+
+    await preflight(specs)
+    results = [await spec.perform(preflighted=True) for spec in specs]
+
+    assert all(isinstance(result, RunSucceeded) for result in results)
+    assert counted.checks == 1, "one distinct provider, checked once for the batch"
+
+
+@pytest.mark.git
+async def test_awaiting_a_spec_checks_it_and_performing_it_is_the_same_run(
+    host_repo: Path,
+) -> None:
+    """``await spec`` delegates to ``perform``, which is the only path there is."""
+    counted = CountingAgent()
+    spec = _counted_spec(host_repo, counted)
+
+    awaited_result = await spec
+    performed = await spec.perform()
+
+    assert isinstance(awaited_result, RunSucceeded)
+    assert isinstance(performed, RunSucceeded)
+    assert awaited_result.run_id != performed.run_id, "each run gets a new id"
+    assert counted.checks == 2, "a lone run is a batch of one, checked each time"

@@ -28,6 +28,7 @@ from waystation.integration import (
 )
 from waystation.observability import configure_logging
 from waystation.observers import Dashboard, EventLog, RunLogFiles
+from waystation.preflight import preflight
 from waystation.results import (
     AgentExit,
     AgentExited,
@@ -59,6 +60,7 @@ from waystation.sandbox import (
     SandboxBackend,
 )
 from waystation.signals import handle_signals
+from waystation.stages import stages
 from waystation.workspace import Workspace, prepare_workspace
 
 __all__ = [
@@ -118,6 +120,8 @@ __all__ = [
     "integrate",
     "outcome_instructions",
     "preserve_series",
+    "preflight",
     "prepare_workspace",
     "run_agent",
+    "stages",
 ]

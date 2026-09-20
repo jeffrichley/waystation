@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from waystation._git import run_git
-from waystation.errors import StageError
+from waystation.errors import StageError, attributing
 from waystation.results import CommandFailed, Refused
 from waystation.sandbox.protocol import Sandbox
 from waystation.tails import bound_tail
@@ -44,12 +44,16 @@ class PatchSeries:
 
     @classmethod
     async def from_range(cls, repo: Path | str, base: str, ref: str) -> PatchSeries:
+        """The series ``base..ref`` already holds on the host.
+
+        Host-side and stage-less: this serves a landing and a resolver run
+        alike, so a failure leaves it unattributed and whoever runs it as a
+        stage names one (ADR-0032).
+        """
         host = Path(repo)
-        verified = await run_git(host, "rev-parse", "--verify", base, stage="collect")
+        verified = await run_git(host, "rev-parse", "--verify", base)
         base_sha = verified.stdout.strip()
-        result = await run_git(
-            host, "format-patch", "--stdout", f"{base_sha}..{ref}", stage="collect"
-        )
+        result = await run_git(host, "format-patch", "--stdout", f"{base_sha}..{ref}")
         return cls.from_format_patch(base_sha, result.stdout)
 
 
@@ -78,7 +82,7 @@ async def _sandbox_git(
     result = await sandbox.exec(argv, env=env, capture=True)
     if result.exit_code != 0:
         raise StageError(
-            "collect",
+            None,
             CommandFailed(
                 argv=tuple(argv),
                 exit_code=result.exit_code,
@@ -100,26 +104,28 @@ async def collect(
     """Salvage, check linearity, and emit a ``PatchSeries`` via format-patch.
 
     A series that is not linear — the agent merged, or moved HEAD below base —
-    is refused, not handed back: this raises ``StageError`` with
-    ``Refused("nonlinear_series")`` (ADR-0006, ADR-0016). The squash collect
+    is refused, not handed back: this raises ``StageError("collect", ...)``
+    with ``Refused("nonlinear_series")`` (ADR-0006, ADR-0016). This is the
+    collect stage, so this is the edge that names it (ADR-0032). The squash collect
     made of it rides on the error's ``series``, so a caller can still keep the
     work it will not land.
     """
     base = workspace.base_sha
     salvaged = False
-    verdict, patches = await _survey(sandbox, base, status=salvage)
-    if verdict == "dirty":
-        await _salvage(sandbox, workspace)
-        salvaged = True
-        verdict, patches = await _survey(sandbox, base, status=False)
+    with attributing("collect"):
+        verdict, patches = await _survey(sandbox, base, status=salvage)
+        if verdict == "dirty":
+            await _salvage(sandbox, workspace)
+            salvaged = True
+            verdict, patches = await _survey(sandbox, base, status=False)
 
-    if verdict == "nonlinear":
-        squashed = await _squash_series(sandbox, workspace, salvaged=salvaged)
-        raise StageError(
-            "collect",
-            Refused(reason="nonlinear_series", detail=_NONLINEAR_DETAIL),
-            series=squashed,
-        )
+        if verdict == "nonlinear":
+            squashed = await _squash_series(sandbox, workspace, salvaged=salvaged)
+            raise StageError(
+                None,
+                Refused(reason="nonlinear_series", detail=_NONLINEAR_DETAIL),
+                series=squashed,
+            )
     return PatchSeries.from_format_patch(base, patches, salvaged=salvaged)
 
 
@@ -146,7 +152,7 @@ async def _survey(sandbox: Sandbox, base: str, *, status: bool) -> tuple[str, st
     if result.exit_code != 0:
         failed, stderr = _failed_step(steps, result.stderr) or (argv, result.stderr)
         raise StageError(
-            "collect",
+            None,
             CommandFailed(
                 argv=failed, exit_code=result.exit_code, stderr_tail=bound_tail(stderr)
             ),
@@ -260,7 +266,7 @@ async def _squash_series(
         )
         if applied.exit_code != 0:
             raise StageError(
-                "collect",
+                None,
                 CommandFailed(
                     argv=("git", "apply"),
                     exit_code=applied.exit_code,

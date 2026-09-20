@@ -3,6 +3,11 @@
 Fan-out checks its batch whole, and a lone awaited run is a batch of one
 (#30, #31). Only ``PreflightError`` leaves a preflight, and nothing is
 repaired, installed, built or pulled (ADR-0011, ADR-0016).
+
+Public because preflighting once is a property of a *batch*, not of fan-out:
+a scheduler of the user's own — a priority queue, a retry pool, a
+``TaskGroup`` — checks its batch here and then runs each spec already
+checked, instead of re-checking docker, image and git per run (ADR-0032).
 """
 
 from __future__ import annotations
@@ -66,6 +71,18 @@ async def preflight(specs: Sequence[RunSpec[Any]]) -> None:
     checks it once — then every prompt file, then the host's git. Any problem
     raises ``PreflightError`` naming what failed and how to fix it; nothing is
     installed, built or pulled (#30, #31, ADR-0011).
+
+    A spec whose batch was checked here runs through
+    ``await spec.perform(preflighted=True)``, which skips the check it has
+    already had.
+
+    Args:
+        specs: The batch to check. Repeats are fine: equal agent providers
+            and sandbox specs describe the same thing and are checked once.
+
+    Raises:
+        PreflightError: Naming what failed and how to fix it. No run has
+            started.
     """
     for agent in _distinct(spec.agent for spec in specs):
         with _preflighting(type(agent).__name__):

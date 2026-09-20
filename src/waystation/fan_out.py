@@ -13,8 +13,8 @@ from collections.abc import Iterable
 from typing import Any, Self
 
 from waystation._cancellation import run_to_end
-from waystation._preflight import preflight
 from waystation.flow import RunSpec
+from waystation.preflight import preflight
 from waystation.results import RunResult
 
 __all__ = ["fan_out"]
@@ -110,7 +110,7 @@ class _FanOut[OutcomeT]:
         async with self._slots or contextlib.nullcontext():
             # The batch was preflighted whole, once per distinct spec: the one
             # thing fan-out does that a script awaiting each spec cannot.
-            return await spec._execute(preflighted=True)
+            return await spec.perform(preflighted=True)
 
 
 def fan_out[OutcomeT](

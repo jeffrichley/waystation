@@ -13,7 +13,7 @@ from collections.abc import Sequence
 
 from waystation._git import config_value, encode, run_git
 from waystation.clock import get_clock
-from waystation.errors import StageError
+from waystation.errors import StageError, attributing
 from waystation.observability import SANDBOX
 from waystation.results import CommandFailed
 from waystation.sandbox.protocol import ExecResult, Sandbox
@@ -49,14 +49,13 @@ async def clone_in(sandbox: Sandbox, ws: Workspace) -> None:
     Raises ``StageError("sandbox", CommandFailed)`` when the clone fails.
     """
     branch = f"waystation/{ws.run_id}"
-    bundle = await run_git(
-        ws.path, "bundle", "create", "-", f"refs/heads/{branch}", stage="sandbox"
-    )
-    script = _clone_script(
-        branch,
-        name=await config_value(ws.path, "user.name", stage="sandbox"),
-        email=await config_value(ws.path, "user.email", stage="sandbox"),
-    )
+    with attributing("sandbox"):
+        bundle = await run_git(ws.path, "bundle", "create", "-", f"refs/heads/{branch}")
+        script = _clone_script(
+            branch,
+            name=await config_value(ws.path, "user.name"),
+            email=await config_value(ws.path, "user.email"),
+        )
     argv = ("sh", "-c", script)
     result = await _setup_exec(
         sandbox, argv, stdin=base64.b64encode(encode(bundle.stdout)).decode("ascii")

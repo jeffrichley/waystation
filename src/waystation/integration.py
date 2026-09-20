@@ -17,7 +17,7 @@ from weakref import WeakKeyDictionary, WeakValueDictionary
 from waystation._cancellation import committed
 from waystation._git import decode, encode, git_identity, run_git
 from waystation.collect import PatchSeries
-from waystation.errors import StageError
+from waystation.errors import StageError, attributing
 from waystation.results import (
     CommandFailed,
     Conflict,
@@ -154,7 +154,8 @@ class GitRepo:
         """Run git in this repo and hand back its exit code and both streams.
 
         ``check=True`` raises ``StageError`` on a non-zero exit instead, as
-        ``git`` does. ``stdin`` is bytes, and the streams come back as text
+        ``git`` does; the error names no stage, because the primitive that
+        ran it does (ADR-0032). ``stdin`` is bytes, and the streams come back as text
         that was never newline-translated: a patch survives either way on a
         Windows host, which a text-mode pipe would not (ADR-0030).
 
@@ -175,11 +176,9 @@ async def _repo_git(
     stdin: bytes | None = None,
     env: Mapping[str, str] | None = None,
 ) -> GitResult:
-    # stage="integrate" whoever runs it: #70 moves attribution to each
-    # primitive's edge, and the two tickets must not rewrite the same lines.
-    done = await run_git(
-        repo, *args, stage="integrate", check=check, stdin=stdin, env=env
-    )
+    # No stage: a GitRepo serves a landing, a preservation and a user's own
+    # strategy alike, so the primitive's edge names the stage (ADR-0032).
+    done = await run_git(repo, *args, check=check, stdin=stdin, env=env)
     # Never stripped: `merge-tree -z` splits its output on NULs, and the
     # last field is empty. `git` strips for the many callers that want a sha.
     return GitResult(exit_code=done.returncode, stdout=done.stdout, stderr=done.stderr)
@@ -242,10 +241,15 @@ async def integrate(
     except an ``update-ref`` already under way: that finishes first, so the
     target is moved or not, never half-moved, and the cancellation is still
     raised (ADR-0027).
+
+    Raises ``StageError("integrate", ...)``: this is the integrate stage, so
+    this is the edge that names it, whatever host git the strategy ran
+    (ADR-0032).
     """
-    git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
-    async with _serialized(git_repo.common_dir):
-        return await strategy.integrate(git_repo, series)
+    with attributing("integrate"):
+        git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
+        async with _serialized(git_repo.common_dir):
+            return await strategy.integrate(git_repo, series)
 
 
 async def preserve_series(
@@ -256,17 +260,32 @@ async def preserve_series(
 ) -> str:
     """Keep ``series`` on ``branch``, created at the series' base.
 
-    Landing at the base can never conflict. Leaves the host working tree,
-    index, and HEAD untouched. Returns ``branch``.
+    This is how a series that reached no target is not lost — a run that
+    failed, conflicted, was cancelled, or integrates nowhere at all. Landing
+    at the base can never conflict, and the host's working tree, index and
+    HEAD are left untouched. An empty series writes nothing.
 
     Serialized with landings on the same repo: it writes objects and a ref
     into the host, so it takes the same lock ``integrate`` does (ADR-0033).
+
+    Args:
+        repo: The host repo, or an open ``GitRepo`` to reuse.
+        branch: The branch to create; a run's own is ``waystation/<run-id>``.
+        series: The patches to keep.
+
+    Returns:
+        ``branch``, so a caller can report where the work went.
+
+    Raises:
+        StageError: Attributed to ``"integrate"`` — keeping a series is a
+            landing at the base, and it is attributed like one (ADR-0032).
     """
     if series.patches:
-        git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
-        async with _serialized(git_repo.common_dir):
-            commits = await _materialize_at_base(git_repo, series)
-            await git_repo.git("update-ref", f"refs/heads/{branch}", commits[-1])
+        with attributing("integrate"):
+            git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
+            async with _serialized(git_repo.common_dir):
+                commits = await _materialize_at_base(git_repo, series)
+                await git_repo.git("update-ref", f"refs/heads/{branch}", commits[-1])
     return branch
 
 
@@ -427,7 +446,7 @@ def _read_state(path: Path) -> str | None:
 
 
 async def _committer(repo: GitRepo) -> tuple[str, str]:
-    return await git_identity(repo.path, stage="integrate")
+    return await git_identity(repo.path)
 
 
 async def _materialize_at_base(repo: GitRepo, series: PatchSeries) -> list[str]:

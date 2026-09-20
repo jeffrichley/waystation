@@ -42,6 +42,7 @@ from waystation.agents import (
 from waystation.sandbox.protocol import LineCallback
 
 __all__ = [
+    "MAKES_A_MERGE",
     "OK_OUTCOME",
     "OK_OUTCOME_LINE",
     "OUTCOME",
@@ -103,6 +104,28 @@ Stopped, it leaves ``["WIP: salvaged uncommitted work", "first"]`` to keep.
 It works in short sleeps, never one long child: a kill that races a spawn
 on Windows can miss the child, and a missed ``sleep 60`` holds stdout open
 past the test's timeout, where a missed ``sleep 0.05`` is gone at once.
+"""
+
+MAKES_A_MERGE = "\n".join(
+    [
+        "set -e",
+        "base=$(git rev-parse HEAD)",
+        "printf 'a\\n' > A",
+        "git add A && git commit -q -m side-a",
+        'git branch other "$base"',
+        "git checkout -q other",
+        "printf 'b\\n' > B",
+        "git add B && git commit -q -m side-b",
+        "git checkout -q -",
+        "git merge -q --no-ff -m merge-commit other",
+        f"echo '{OK_OUTCOME_LINE}'",
+    ]
+)
+"""A ``ShellAgent`` script whose series is nonlinear: it ends in a merge commit.
+
+Collect refuses such a series and squashes it to one commit (ADR-0006), so
+this is what a test reaches for to drive that refusal. Append ``exit <n>``
+to make the agent fail as well.
 """
 
 RECORDED_CLAUDE = Path(__file__).parent / "fixtures" / "claude_code"

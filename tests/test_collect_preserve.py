@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 import sys
@@ -12,7 +11,14 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from helpers import OK_OUTCOME, OK_OUTCOME_LINE, ShellAgent, commit_on, git
+from helpers import (
+    MAKES_A_MERGE,
+    OK_OUTCOME,
+    OK_OUTCOME_LINE,
+    ShellAgent,
+    commit_on,
+    git,
+)
 from waystation import (
     AgentExited,
     CommandFailed,
@@ -25,9 +31,6 @@ from waystation import (
     ScriptedCommit,
     Series,
 )
-from waystation.agents.outcome import OUTCOME_MARKER, find_outcome
-from waystation.agents.protocol import AgentCommand, AgentEvent, OutcomeReported
-from waystation.agents.scripted import _find_sh, _shell_single_quote
 
 
 class Answer(BaseModel):
@@ -318,53 +321,10 @@ async def test_a_git_failure_in_collect_names_its_command_and_only_its_stderr(
     assert failure.stderr_tail.startswith(("fatal: ", "error: ")), failure
 
 
-class _MergeAgent:
-    """Creates a merge commit so collect refuses nonlinear series."""
-
-    def __init__(self, exit_code: int = 0) -> None:
-        self.exit_code = exit_code
-
-    def preflight(self) -> None:
-        return None
-
-    def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
-        del prompt, outcome_schema
-        payload = json.dumps({"summary": "merge"})
-        marker = f"{OUTCOME_MARKER} {payload}"
-        script = "\n".join(
-            [
-                "set -e",
-                "base=$(git rev-parse HEAD)",
-                "printf 'a\\n' > A",
-                "git add A && git commit -m side-a",
-                'git branch other "$base"',
-                "git checkout other",
-                "printf 'b\\n' > B",
-                "git add B && git commit -m side-b",
-                "git checkout -",
-                "git merge --no-ff -m merge-commit other",
-                f"printf '%s\\n' {_shell_single_quote(marker)}",
-                f"exit {self.exit_code}",
-            ]
-        )
-        return AgentCommand(
-            argv=(_find_sh(), "-c", script),
-            stdin=None,
-            env={},
-            pass_env=(),
-        )
-
-    def parse(self, line: str) -> list[AgentEvent]:
-        raw = find_outcome(line)
-        if raw is not None:
-            return [OutcomeReported(raw=raw)]
-        return []
-
-
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_nonlinear_series_refused_and_squashed(host_repo: Path) -> None:
-    flow = Flow(host_repo, agent=_MergeAgent(), sandbox=NoSandbox())
+    flow = Flow(host_repo, agent=ShellAgent(MAKES_A_MERGE), sandbox=NoSandbox())
     result = await flow.run("merge", outcome=Answer)
     assert isinstance(result, RunFailed)
     assert result.stage == "collect"
@@ -380,7 +340,8 @@ async def test_nonlinear_series_refused_and_squashed(host_repo: Path) -> None:
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_agent_failure_outranks_a_nonlinear_series(host_repo: Path) -> None:
-    flow = Flow(host_repo, agent=_MergeAgent(exit_code=4), sandbox=NoSandbox())
+    agent = ShellAgent(MAKES_A_MERGE + "\nexit 4")
+    flow = Flow(host_repo, agent=agent, sandbox=NoSandbox())
 
     result = await flow.run("merge then fail", outcome=Answer)
 

@@ -50,6 +50,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series, `sandbox=` your own backend, and `shell="sh"` the container's own sh when that backend is Docker |
 | `ShellAgent(script)` | an agent that *is* a shell script — reach for it over `ScriptedAgent` when the test drives stderr, an exit code, timing, or bytes only `printf` can make; `shell="sh"` runs it in a container's own sh |
 | `WORKS_UNTIL_STOPPED` | a `ShellAgent` script that commits `first`, leaves `wip.txt`, prints `ready`, then works until it is stopped — what a cancelled run's preservation branch should hold |
+| `MAKES_A_MERGE` | a `ShellAgent` script that ends in a merge commit, so the series is nonlinear and collect refuses it — append `exit <n>` to make the agent fail too |
 | `PROMPT` | the prompt `a_run` uses; has a second line, so a test can prove the body stayed unlogged |
 | `OK_OUTCOME` | the Outcome a scripted agent reports when the test doesn't care |
 | `OUTCOME` / `OK_OUTCOME_LINE` | the marker prefix `ShellAgent` parses, and a ready-made reporting line |

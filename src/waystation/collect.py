@@ -8,7 +8,7 @@ from pathlib import Path
 
 from waystation._git import run_git
 from waystation.errors import StageError
-from waystation.results import CommandFailed, Series
+from waystation.results import CommandFailed, Refused
 from waystation.sandbox.protocol import Sandbox
 from waystation.tails import bound_tail
 from waystation.workspace import Workspace
@@ -16,18 +16,29 @@ from waystation.workspace import Workspace
 
 @dataclass(frozen=True, slots=True)
 class PatchSeries:
-    """Ordered patches cut from ``base..HEAD`` (or built from a host range)."""
+    """Ordered patches cut from ``base..HEAD`` (or built from a host range).
+
+    ``salvaged`` says the last patch is work collect committed for the agent,
+    which had left it uncommitted; a series built from a host range never is.
+    """
 
     base_sha: str
     patches: tuple[str, ...]
+    salvaged: bool = False
 
     @property
     def commits(self) -> int:
         return len(self.patches)
 
     @classmethod
-    def from_format_patch(cls, base_sha: str, stdout: str) -> PatchSeries:
-        return cls(base_sha=base_sha, patches=_split_format_patch(stdout))
+    def from_format_patch(
+        cls, base_sha: str, stdout: str, *, salvaged: bool = False
+    ) -> PatchSeries:
+        return cls(
+            base_sha=base_sha,
+            patches=_split_format_patch(stdout),
+            salvaged=salvaged,
+        )
 
     @classmethod
     async def from_range(cls, repo: Path | str, base: str, ref: str) -> PatchSeries:
@@ -75,11 +86,7 @@ async def _sandbox_git(
     return result.exit_code, result.stdout, result.stderr
 
 
-@dataclass(frozen=True, slots=True)
-class CollectResult:
-    series_meta: Series
-    patch_series: PatchSeries
-    squashed: bool = False
+_NONLINEAR_DETAIL = "series contains merge commits or HEAD does not descend from base"
 
 
 async def collect(
@@ -87,8 +94,15 @@ async def collect(
     workspace: Workspace,
     *,
     salvage: bool = True,
-) -> CollectResult:
-    """Salvage, check linearity, and emit a ``PatchSeries`` via format-patch."""
+) -> PatchSeries:
+    """Salvage, check linearity, and emit a ``PatchSeries`` via format-patch.
+
+    A series that is not linear — the agent merged, or moved HEAD below base —
+    is refused, not handed back: this raises ``StageError`` with
+    ``Refused("nonlinear_series")`` (ADR-0006, ADR-0016). The squash collect
+    made of it rides on the error's ``series``, so a caller can still keep the
+    work it will not land.
+    """
     base = workspace.base_sha
     salvaged = False
     verdict, patches = await _survey(sandbox, base, status=salvage)
@@ -98,14 +112,13 @@ async def collect(
         verdict, patches = await _survey(sandbox, base, status=False)
 
     if verdict == "nonlinear":
-        patch_series = await _squash_series(sandbox, workspace)
-    else:
-        patch_series = PatchSeries.from_format_patch(base, patches)
-    return CollectResult(
-        series_meta=Series(commits=patch_series.commits, salvaged=salvaged),
-        patch_series=patch_series,
-        squashed=verdict == "nonlinear",
-    )
+        squashed = await _squash_series(sandbox, workspace, salvaged=salvaged)
+        raise StageError(
+            "collect",
+            Refused(reason="nonlinear_series", detail=_NONLINEAR_DETAIL),
+            series=squashed,
+        )
+    return PatchSeries.from_format_patch(base, patches, salvaged=salvaged)
 
 
 # Collect's look at the workspace runs as this git alias. Git runs a `!` alias
@@ -230,7 +243,9 @@ async def _commit_worktree(
     )
 
 
-async def _squash_series(sandbox: Sandbox, workspace: Workspace) -> PatchSeries:
+async def _squash_series(
+    sandbox: Sandbox, workspace: Workspace, *, salvaged: bool
+) -> PatchSeries:
     """Replace a nonlinear range with one commit from ``diff --binary``."""
     base = workspace.base_sha
     _, diff, _ = await _sandbox_git(sandbox, "diff", "--binary", base, "HEAD")
@@ -262,4 +277,4 @@ async def _squash_series(sandbox: Sandbox, workspace: Workspace) -> PatchSeries:
     _, stdout, _ = await _sandbox_git(
         sandbox, "format-patch", "--stdout", f"{base}..HEAD"
     )
-    return PatchSeries.from_format_patch(base, stdout)
+    return PatchSeries.from_format_patch(base, stdout, salvaged=salvaged)

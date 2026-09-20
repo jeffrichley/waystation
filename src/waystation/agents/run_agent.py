@@ -32,7 +32,9 @@ from waystation.results import (
 from waystation.sandbox import allowlisted_env
 from waystation.sandbox.protocol import ExecResult, Sandbox
 
-BoundName = Literal["agent_silence", "agent_wall", "completion_grace"]
+__all__ = ["run_agent"]
+
+_BoundName = Literal["agent_silence", "agent_wall", "completion_grace"]
 
 
 class _AgentBound(Exception):
@@ -40,7 +42,7 @@ class _AgentBound(Exception):
 
     def __init__(
         self,
-        bound: BoundName,
+        bound: _BoundName,
         *,
         limit: float,
         elapsed: float,
@@ -111,7 +113,7 @@ async def run_agent[OutcomeT](
         if task is not None and not task.done():
             task.cancel()
 
-    def _fire(bound: BoundName, limit: float, *, is_hanging: bool = False) -> None:
+    def _fire(bound: _BoundName, limit: float, *, is_hanging: bool = False) -> None:
         nonlocal fired
         if fired is not None or line_error is not None:
             return

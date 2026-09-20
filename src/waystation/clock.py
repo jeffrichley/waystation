@@ -12,6 +12,15 @@ from typing import Protocol
 
 from waystation._cancellation import CommitPoints
 
+__all__ = [
+    "Clock",
+    "ManualClock",
+    "WallClock",
+    "get_clock",
+    "race_timeout",
+    "use_clock",
+]
+
 
 class Clock(Protocol):
     def monotonic(self) -> float: ...

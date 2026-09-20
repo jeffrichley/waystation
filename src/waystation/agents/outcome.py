@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+__all__ = ["OUTCOME_MARKER", "find_outcome", "outcome_instructions"]
+
 OUTCOME_MARKER = "!?"
 
 

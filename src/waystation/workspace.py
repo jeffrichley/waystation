@@ -14,6 +14,8 @@ from pathlib import Path
 
 from waystation._git import git_identity, run_git
 
+__all__ = ["Workspace", "prepare_workspace", "remove_workspace"]
+
 
 @dataclass(frozen=True, slots=True)
 class Workspace:

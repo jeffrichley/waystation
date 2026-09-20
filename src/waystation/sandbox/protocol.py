@@ -9,6 +9,8 @@ from typing import Protocol, runtime_checkable
 
 from waystation.workspace import Workspace
 
+__all__ = ["ExecResult", "LineCallback", "Sandbox", "SandboxBackend"]
+
 LineCallback = Callable[[str], Awaitable[None] | None]
 
 

@@ -22,7 +22,7 @@ from waystation.results import (
 )
 from waystation.sandbox.protocol import Sandbox
 
-logger = tagged_logger("waystation")
+_logger = tagged_logger("waystation")
 
 HOOK_NAMES: tuple[HookName, ...] = get_args(HookName)
 
@@ -228,7 +228,7 @@ class HookRegistry:
                     error.__cause__ = exc
                     first = error
                 else:
-                    logger.error(
+                    _logger.error(
                         "run %s: %s hook %s raised after another did: %r",
                         ctx.run_id,
                         hook,

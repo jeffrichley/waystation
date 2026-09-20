@@ -21,6 +21,8 @@ from waystation.agents.protocol import (
 from waystation.errors import PreflightError
 from waystation.results import Errored
 
+__all__ = ["ScriptedAgent", "ScriptedCommit"]
+
 
 def _find_sh() -> str:
     found = shutil.which("sh")

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import deque
 
+__all__ = ["DEFAULT_MAX_BYTES", "DEFAULT_MAX_LINES", "TailBuffer", "bound_tail"]
+
 DEFAULT_MAX_LINES = 80
 DEFAULT_MAX_BYTES = 2048
 

@@ -21,6 +21,15 @@ from waystation.results import CommandFailed, Errored, Refused, Stage
 from waystation.sandbox.processes import host_processes
 from waystation.tails import bound_tail
 
+__all__ = [
+    "config_value",
+    "decode",
+    "encode",
+    "git_identity",
+    "require_host_git",
+    "run_git",
+]
+
 
 def decode(output: bytes) -> str:
     """Bytes from git as text, without newline translation.

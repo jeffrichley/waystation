@@ -32,16 +32,39 @@ def host_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def clean_logging() -> Iterator[None]:
-    """Restore the ``waystation`` logger after a test opts into a console."""
+    """Restore the ``waystation`` loggers after a test configures or tunes them.
+
+    Levels come back across the whole subtree, not just the package logger: a
+    test that turns one stream up — ``waystation.agent.output``, say — would
+    otherwise leave it up for whatever runs next in that worker, and the next
+    test's idea of what a host collects would be someone else's.
+    """
     logger = logging.getLogger("waystation")
-    handlers, level = list(logger.handlers), logger.level
+    handlers = list(logger.handlers)
     propagate = logger.propagate  # a run file turns it off while one is open
+    levels = _waystation_levels()
     try:
         yield
     finally:
         logger.handlers[:] = handlers
-        logger.setLevel(level)
         logger.propagate = propagate
+        for name, existing in _waystation_loggers():
+            existing.setLevel(levels.get(name, logging.NOTSET))
+
+
+def _waystation_loggers() -> list[tuple[str, logging.Logger]]:
+    """Every ``waystation`` logger that exists right now, package logger included."""
+    known = logging.getLogger().manager.loggerDict
+    return [
+        (name, found)
+        for name, found in list(known.items())
+        if (name == "waystation" or name.startswith("waystation."))
+        and isinstance(found, logging.Logger)
+    ]
+
+
+def _waystation_levels() -> dict[str, int]:
+    return {name: found.level for name, found in _waystation_loggers()}
 
 
 @functools.cache

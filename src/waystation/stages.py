@@ -224,6 +224,12 @@ class _StageRunner:
         teardown failure never masks the result" pairs ``stage`` and
         ``anyway`` by hand instead of reaching for this.
 
+        ``cm`` is exited with ``(None, None, None)`` however the block ended,
+        so unlike the ``async with`` this stands in for, it never sees the
+        exception and cannot suppress one. The shipped backends only release
+        what they hold; a context manager that inspects ``__aexit__``'s
+        arguments wants its own ``async with`` inside the block.
+
         Args:
             stage: The stage that owns both halves.
             cm: The context manager to enter — ``backend.start(ws, env={})``.

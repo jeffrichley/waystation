@@ -687,13 +687,16 @@ class RunSpec[OutcomeT]:
         """Integrate stage, or preservation when the run integrates nowhere."""
         patches, strategy = record.patches, self.integration
         assert patches is not None
-        record.stage = "integrate"
         if strategy is None:
+            # No integrate stage runs, so the run stays where it ended, at
+            # collect; preservation below names "integrate" for itself.
             await self._preserve(run, record)
             run.surface()  # held while the series was kept
             return (
                 record.failed() if record.failure else record.succeeded(outcome, None)
             )
+
+        record.stage = "integrate"
 
         report: IntegrationReport | None = None
         try:

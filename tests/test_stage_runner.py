@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -461,3 +462,51 @@ async def test_an_unbounded_stage_passes_its_own_timeout_error_through() -> None
     async with stages() as run:
         with pytest.raises(TimeoutError, match="the work's own deadline"):
             await run.stage("agent", times_itself_out(), bound=None)
+
+
+@pytest.mark.unit
+async def test_a_bound_whose_timeouts_field_is_unbounded_bounds_nothing() -> None:
+    """Named, but set to ``None``: nothing fires, so the TimeoutError is the work's."""
+
+    async def times_itself_out() -> str:
+        raise TimeoutError("the work's own deadline")
+
+    async with stages(Timeouts(collect=None)) as run:
+        with pytest.raises(TimeoutError, match="the work's own deadline"):
+            await run.stage("collect", times_itself_out())
+
+
+@pytest.mark.unit
+async def test_a_stage_entered_and_left_adds_both_halves_to_its_elapsed() -> None:
+    """``entering`` attributes both halves to the stage, so both are timed."""
+    clock = ManualClock()
+    seen: dict[Stage, float] = {}
+    entering, leaving = asyncio.Event(), asyncio.Event()
+
+    @contextlib.asynccontextmanager
+    async def slow_both_ways() -> AsyncIterator[str]:
+        entering.set()
+        await go_in.wait()
+        yield "box"
+        leaving.set()
+        await go_out.wait()
+
+    go_in, go_out = asyncio.Event(), asyncio.Event()
+
+    async def compose() -> None:
+        async with stages() as run:
+            async with run.entering("sandbox", slow_both_ways()):
+                pass
+            seen.update(run.elapsed)
+
+    with use_clock(clock):
+        task = asyncio.create_task(compose())
+        await until(entering.is_set, task)
+        clock.advance(3.0)
+        go_in.set()
+        await until(leaving.is_set, task)
+        clock.advance(4.0)
+        go_out.set()
+        await task
+
+    assert seen == {"sandbox": 7.0}, "entering 3s plus leaving 4s"

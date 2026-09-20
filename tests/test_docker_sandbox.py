@@ -50,6 +50,7 @@ from waystation import (
     Timeouts,
     prepare_workspace,
 )
+from waystation.agents import AgentLine
 from waystation.clock import ManualClock, use_clock
 from waystation.sandbox import clone_in
 from waystation.sandbox._docker_plans import plan_exec, plan_kill
@@ -253,6 +254,59 @@ async def test_a_sandbox_sees_only_the_environment_it_names(
     assert inside["WAYSTATION_PASSED"] == "passed"
     assert "WAYSTATION_UNNAMED" not in inside
     assert "WAYSTATION_ABSENT" not in inside
+
+
+@pytest.mark.docker
+async def test_a_providers_environment_reaches_its_agent_and_nothing_else(
+    host_repo: Path, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The provider row of ADR-0034's table, on the backend that isolates.
+
+    A provider's credential is for the agent. It must not ride into the
+    container's other execs, where `clone_in` and collect run.
+    """
+    monkeypatch.setenv("WAYSTATION_HOST", "from-host")
+    agent_lines: list[str] = []
+    other: list[str] = []
+
+    async def keep(ctx: RunContext, line: AgentLine) -> None:
+        agent_lines.append(line.raw)
+
+    async def env_outside(ctx: RunContext) -> None:
+        other.append((await ctx.sandbox.exec(["env"])).stdout)
+
+    flow = Flow(
+        host_repo,
+        agent=ShellAgent(
+            f"env\necho '{OK_OUTCOME_LINE}'",
+            shell="sh",
+            env={"WAYSTATION_AGENT": "agent"},
+            pass_env=("WAYSTATION_HOST",),
+        ),
+        sandbox=DockerSandbox(image, env={"WAYSTATION_SPEC": "spec"}),
+    )
+
+    result = await (
+        flow.run("print the environment", outcome=Summary)
+        .on_agent_output(keep)
+        .on_sandbox_ready(env_outside)
+    )
+
+    assert isinstance(result, RunSucceeded), result
+    inside = _as_env("\n".join(agent_lines))
+    outside = _as_env(other[0])
+
+    assert inside["WAYSTATION_SPEC"] == "spec"
+    assert outside["WAYSTATION_SPEC"] == "spec"
+    assert inside["WAYSTATION_AGENT"] == "agent"
+    assert inside["WAYSTATION_HOST"] == "from-host"
+    assert "WAYSTATION_AGENT" not in outside
+    assert "WAYSTATION_HOST" not in outside
+
+
+def _as_env(text: str) -> dict[str, str]:
+    pairs = (line.split("=", 1) for line in text.splitlines() if "=" in line)
+    return {key: value for key, value in pairs if key}
 
 
 @pytest.mark.docker

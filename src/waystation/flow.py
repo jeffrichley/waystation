@@ -556,9 +556,10 @@ class RunSpec[OutcomeT]:
         workspace: Workspace,
     ) -> OutcomeT | None:
         """Sandbox, agent and collect stages; the sandbox is gone on return."""
-        # The host is read once per run, so the sandbox start and the agent
-        # exec see one environment even if os.environ moves between them
-        # (ADR-0034). #29's per-run tier resolves against this snapshot.
+        # Read once for the tiers core owns, so the agent's environment and
+        # #29's per-run one come from one reading of the host, however long
+        # the sandbox takes to start. A backend reads once for its own tier,
+        # inside start(): the protocol hands it literals, not this (ADR-0034).
         host_env = dict(os.environ)
         # start() is an async context manager — the bound covers enter only.
         cm = self.sandbox.start(workspace, env={})

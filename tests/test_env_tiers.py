@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -46,7 +47,7 @@ def test_a_literal_beats_a_pass_through_name() -> None:
     built = allowlisted_env(
         literal={BOTH: "literal"},
         pass_env=(BOTH,),
-        host={BOTH: "from-host"},
+        host_env={BOTH: "from-host"},
     )
 
     assert built == {BOTH: "literal"}
@@ -59,7 +60,7 @@ def test_a_pass_through_name_the_host_lacks_is_skipped_by_name(
     """``pass_env=("CI",)`` has to stay usable on a laptop (ADR-0013)."""
     with caplog.at_level(logging.DEBUG, logger="waystation"):
         built = allowlisted_env(
-            literal={}, pass_env=(HOST, "WAYSTATION_ABSENT"), host={HOST: "here"}
+            literal={}, pass_env=(HOST, "WAYSTATION_ABSENT"), host_env={HOST: "here"}
         )
 
     assert built == {HOST: "here"}
@@ -74,15 +75,21 @@ def test_base_keys_come_from_the_host_and_lose_to_a_literal() -> None:
         literal={"PATH": "mine"},
         pass_env=(),
         base=("PATH", "HOME"),
-        host={"PATH": "theirs", "HOME": "/home/x"},
+        host_env={"PATH": "theirs", "HOME": "/home/x"},
     )
 
     assert built == {"PATH": "mine", "HOME": "/home/x"}
 
 
-def _env_printing_agent(**kwargs: object) -> ShellAgent:
+def _env_printing_agent(
+    *, env: Mapping[str, str] | None = None, pass_env: Sequence[str] = ()
+) -> ShellAgent:
     """An agent that prints its own environment, then reports."""
-    return ShellAgent(f"env\necho '{OK_OUTCOME_LINE}'", **kwargs)  # type: ignore[arg-type]
+    return ShellAgent(
+        f"env\necho '{OK_OUTCOME_LINE}'",
+        env=dict(env or {}),
+        pass_env=tuple(pass_env),
+    )
 
 
 @pytest.mark.git
@@ -150,12 +157,19 @@ async def test_a_literal_beats_a_pass_through_name_for_an_agent_too(
 
 
 @pytest.mark.git
-async def test_one_run_sees_one_host_environment(
-    host_repo: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("when", ["workspace_ready", "sandbox_ready"])
+async def test_the_sandbox_and_the_agent_see_one_host_environment(
+    host_repo: Path, monkeypatch: pytest.MonkeyPatch, when: str
 ) -> None:
-    """The host is read once, so a run never straddles two environments."""
+    """A run never straddles two readings of the host.
+
+    Moved before the sandbox starts, both see the new value; moved after,
+    both still see the old one. What must never happen is the two
+    disagreeing, which is what reading ``os.environ`` per call would give.
+    """
     monkeypatch.setenv(MOVES, "before")
     agent_lines: list[str] = []
+    sandbox_env: list[str] = []
 
     async def keep(ctx: RunContext, line: AgentLine) -> None:
         agent_lines.append(line.raw)
@@ -163,17 +177,29 @@ async def test_one_run_sees_one_host_environment(
     def move_it(ctx: RunContext) -> None:
         os.environ[MOVES] = "after"
 
-    flow = Flow(
-        host_repo,
-        agent=_env_printing_agent(pass_env=(MOVES,)),
-        sandbox=NoSandbox(pass_env=(MOVES,)),
+    async def read_the_sandbox(ctx: RunContext) -> None:
+        sandbox_env.append((await ctx.sandbox.exec([sh(), "-c", "env"])).stdout)
+
+    spec = (
+        Flow(
+            host_repo,
+            agent=_env_printing_agent(pass_env=(MOVES,)),
+            sandbox=NoSandbox(pass_env=(MOVES,)),
+        )
+        .run("print it", outcome=Summary)
+        .on_agent_output(keep)
+        .on_sandbox_ready(read_the_sandbox)
+    )
+    spec = (
+        spec.on_workspace_ready(move_it)
+        if when == "workspace_ready"
+        else spec.on_sandbox_ready(move_it)
     )
 
-    result = await (
-        flow.run("print it", outcome=Summary)
-        .on_agent_output(keep)
-        .on_sandbox_ready(move_it)
-    )
+    result = await spec
 
     assert isinstance(result, RunSucceeded), result
-    assert _as_env("\n".join(agent_lines))[MOVES] == "before"
+    agent = _as_env("\n".join(agent_lines))[MOVES]
+    sandbox = _as_env(sandbox_env[0])[MOVES]
+    assert agent == sandbox, "the sandbox and its agent read the host separately"
+    assert agent == ("after" if when == "workspace_ready" else "before")

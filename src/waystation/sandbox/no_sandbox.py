@@ -70,7 +70,7 @@ class NoSandbox:
             base=self.processes.base_env_keys(),
             literal={**dict(self.env), **dict(env)},
             pass_env=self.pass_env,
-            host=os.environ,
+            host_env=os.environ,
         )
         runner = HostRunner(self.processes)
         try:

@@ -29,7 +29,7 @@ def allowlisted_env(
     *,
     literal: Mapping[str, str],
     pass_env: Sequence[str],
-    host: Mapping[str, str],
+    host_env: Mapping[str, str],
     base: Sequence[str] = (),
 ) -> dict[str, str]:
     """The environment a sandbox or an exec gets: only what was named (ADR-0013).
@@ -39,27 +39,28 @@ def allowlisted_env(
     the per-run ones — and hands the result on as literals; a backend
     resolves its own spec's, plus the ``base`` keys its execs need on this OS.
 
-    ``base`` and ``pass_env`` names are looked up in ``host``, and skipped
+    ``base`` and ``pass_env`` names are looked up in ``host_env``, and skipped
     where it has none, so ``pass_env=("CI",)`` stays usable on a laptop; the
     skipped *names* are logged at DEBUG, never a value (ADR-0025). A
     ``literal`` wins over a name in the same call: it is the most explicit
     thing a user wrote, where a pass-through name only says "bring whatever
     the host has".
 
-    ``host`` is passed in rather than read, so one run sees one environment
-    however long it takes: the caller decides when ``os.environ`` is read.
+    ``host_env`` is passed in rather than read, so the caller decides when
+    ``os.environ`` is read and how far one reading stretches: core reads once
+    for the tiers it owns, and a backend once for its own (ADR-0034).
     """
     env: dict[str, str] = {}
     skipped: list[str] = []
     for key in (*base, *pass_env):
-        value = host.get(key)
+        value = host_env.get(key)
         if value is not None:
             env[key] = value
         else:
             skipped.append(key)
     env.update(literal)
     if skipped:
-        SANDBOX.debug("not on the host, skipped: %s", ", ".join(skipped))
+        SANDBOX.debug("pass_env names not on the host, skipped: %s", ", ".join(skipped))
     return env
 
 

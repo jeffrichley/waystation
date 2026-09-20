@@ -209,7 +209,7 @@ class DockerSandbox:
             env=allowlisted_env(
                 literal={**self.env, **env},
                 pass_env=self.pass_env,
-                host=os.environ,
+                host_env=os.environ,
             ),
             bind_source=str(ws.path) if transport == "bind" else None,
             run_args=self.run_args,

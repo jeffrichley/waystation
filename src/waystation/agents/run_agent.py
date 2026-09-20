@@ -29,7 +29,7 @@ from waystation.results import (
     TimedOut,
     Timeouts,
 )
-from waystation.sandbox._host import allowlisted_env
+from waystation.sandbox import allowlisted_env
 from waystation.sandbox.protocol import ExecResult, Sandbox
 
 BoundName = Literal["agent_silence", "agent_wall", "completion_grace"]
@@ -211,7 +211,7 @@ async def run_agent[OutcomeT](
     exec_env = allowlisted_env(
         literal=command.env,
         pass_env=command.pass_env,
-        host=os.environ if host_env is None else host_env,
+        host_env=os.environ if host_env is None else host_env,
     )
 
     _arm_silence()

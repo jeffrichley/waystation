@@ -149,9 +149,8 @@ class ClockSandbox:
         ws: Workspace,
         *,
         env: Mapping[str, str],
-        pass_env: Sequence[str],
     ) -> AsyncIterator[Sandbox]:
-        del env, pass_env
+        del env
         box: Sandbox = _ClockExecSandbox(
             workspace=str(ws.path),
             lines=self.lines,

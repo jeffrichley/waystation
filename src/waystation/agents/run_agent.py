@@ -7,7 +7,7 @@ import contextlib
 import inspect
 import os
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Literal
 
 from pydantic import TypeAdapter, ValidationError
@@ -29,6 +29,7 @@ from waystation.results import (
     TimedOut,
     Timeouts,
 )
+from waystation.sandbox._host import allowlisted_env
 from waystation.sandbox.protocol import ExecResult, Sandbox
 
 BoundName = Literal["agent_silence", "agent_wall", "completion_grace"]
@@ -60,11 +61,17 @@ async def run_agent[OutcomeT](
     *,
     timeouts: Timeouts | None = None,
     on_output: Callable[[AgentLine], Awaitable[None] | None] | None = None,
+    host_env: Mapping[str, str] | None = None,
 ) -> tuple[AgentExit, OutcomeT]:
     """Exec ``command``, parse stdout lines, validate the last valid Outcome report.
 
     ``on_output`` receives every stdout and stderr line as an ``AgentLine``,
     awaited before the next line is read.
+
+    ``host_env`` is the host environment the provider's ``pass_env`` names are
+    looked up in; a run passes the one it read at its start, so one run sees
+    one environment however long it takes (ADR-0034). On its own it reads
+    ``os.environ``, as running a command by hand would.
 
     Raises ``StageError`` for agent-stage failures (non-zero exit, missing/invalid
     Outcome, silence/wall timeout). An ``Exception`` from ``parse`` or
@@ -199,11 +206,13 @@ async def run_agent[OutcomeT](
     async def on_stderr(line: str) -> None:
         await _deliver(lambda: _emit(AgentLine("stderr", line)))
 
-    exec_env = dict(command.env)
-    for key in command.pass_env:
-        value = os.environ.get(key)
-        if value is not None:
-            exec_env[key] = value
+    # The provider's tier, resolved where every tier is (ADR-0034). A run
+    # passes the host it read at its start, so one run sees one environment.
+    exec_env = allowlisted_env(
+        literal=command.env,
+        pass_env=command.pass_env,
+        host=os.environ if host_env is None else host_env,
+    )
 
     _arm_silence()
 

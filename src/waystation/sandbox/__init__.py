@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from waystation.sandbox._host import allowlisted_env
 from waystation.sandbox.docker import DockerSandbox
 from waystation.sandbox.no_sandbox import NoSandbox
 from waystation.sandbox.processes import (
@@ -24,6 +25,7 @@ __all__ = [
     "Sandbox",
     "SandboxBackend",
     "WindowsProcesses",
+    "allowlisted_env",
     "clone_in",
     "host_processes",
 ]

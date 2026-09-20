@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -61,12 +62,15 @@ class NoSandbox:
         ws: Workspace,
         *,
         env: Mapping[str, str],
-        pass_env: Sequence[str],
     ) -> AsyncIterator[Sandbox]:
+        # This backend runs host processes, so they need the base keys a
+        # process needs to start on this OS; core's literals go on top of
+        # this backend's own tier (ADR-0034).
         built = allowlisted_env(
             base=self.processes.base_env_keys(),
             literal={**dict(self.env), **dict(env)},
-            pass_env=(*self.pass_env, *pass_env),
+            pass_env=self.pass_env,
+            host=os.environ,
         )
         runner = HostRunner(self.processes)
         try:

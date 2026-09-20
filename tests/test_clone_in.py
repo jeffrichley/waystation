@@ -109,16 +109,14 @@ class CopyingHost:
 
     @asynccontextmanager
     async def start(
-        self, ws: Workspace, *, env: Mapping[str, str], pass_env: Sequence[str]
+        self, ws: Workspace, *, env: Mapping[str, str]
     ) -> AsyncIterator[Sandbox]:
         inside = self.root / ws.run_id
         inside.mkdir(parents=True)
         if self.leftover:
             (inside / "leftover").write_text("x", encoding="utf-8")
         try:
-            async with NoSandbox().start(
-                replace(ws, path=inside), env=env, pass_env=pass_env
-            ) as sandbox:
+            async with NoSandbox().start(replace(ws, path=inside), env=env) as sandbox:
                 box: Sandbox = _HostSh(sandbox, sandbox.workspace)
                 if self.killed:
                     box = _KilledAsItFinished(box, sandbox.workspace)

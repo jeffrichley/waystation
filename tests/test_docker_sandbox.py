@@ -289,7 +289,7 @@ async def test_a_sandbox_starts_and_stops_in_as_few_docker_calls_as_it_can(
     sandbox = DockerSandbox(image, transport=transport)
 
     with caplog.at_level(logging.DEBUG, logger="waystation.sandbox"):
-        async with sandbox.start(ws, env={}, pass_env=()):
+        async with sandbox.start(ws, env={}):
             started = _docker_calls(caplog)
         stopped = _docker_calls(caplog)[len(started) :]
 
@@ -322,7 +322,7 @@ async def test_an_exec_streams_stdin_in_and_lines_out_as_they_come(
     ws = await prepare_workspace(host_repo)
     lines: list[str] = []
 
-    async with DockerSandbox(image).start(ws, env={}, pass_env=()) as sandbox:
+    async with DockerSandbox(image).start(ws, env={}) as sandbox:
         result = await sandbox.exec(
             ["cat"], stdin="one\ntwo\n", capture=False, on_stdout=lines.append
         )
@@ -340,9 +340,7 @@ async def test_a_copy_runs_again_over_its_own_work_in_the_container(
     # earlier try left there (ADR-0016).
     ws = await prepare_workspace(host_repo)
 
-    async with DockerSandbox(image, transport="copy").start(
-        ws, env={}, pass_env=()
-    ) as sandbox:
+    async with DockerSandbox(image, transport="copy").start(ws, env={}) as sandbox:
         await clone_in(sandbox, ws)
         shown = await sandbox.exec(
             ["sh", "-c", "git rev-parse --abbrev-ref HEAD; git status --porcelain"]
@@ -363,7 +361,7 @@ async def test_a_cancelled_exec_kills_all_it_started_before_the_cancel_completes
     started = asyncio.Event()
     linger = "( while :; do printf x >> /tmp/pulse; sleep 0.05; done ) & "
 
-    async with DockerSandbox(image).start(ws, env={}, pass_env=()) as sandbox:
+    async with DockerSandbox(image).start(ws, env={}) as sandbox:
         running = asyncio.create_task(
             sandbox.exec(
                 ["sh", "-c", linger + "echo started; wait"],
@@ -395,7 +393,7 @@ async def test_an_exec_cancelled_as_it_starts_never_runs_on(
     ws = await prepare_workspace(host_repo)
     writer = "while :; do printf x >> /tmp/pulse; sleep 0.05; done"
 
-    async with DockerSandbox(image).start(ws, env={}, pass_env=()) as sandbox:
+    async with DockerSandbox(image).start(ws, env={}) as sandbox:
         running = asyncio.create_task(sandbox.exec(["sh", "-c", writer]))
         await asyncio.sleep(after)
         running.cancel()

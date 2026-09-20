@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import shutil
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -189,7 +190,6 @@ class DockerSandbox:
         ws: Workspace,
         *,
         env: Mapping[str, str],
-        pass_env: Sequence[str],
     ) -> AsyncIterator[Sandbox]:
         transport = resolve_transport(self.transport)
         # Named before it exists, so teardown can name it even when a bound
@@ -204,9 +204,12 @@ class DockerSandbox:
             image=self.image,
             name=container.name,
             run_id=ws.run_id,
+            # No base keys: the container brings its own environment, and
+            # core's literals go on top of this backend's tier (ADR-0034).
             env=allowlisted_env(
                 literal={**self.env, **env},
-                pass_env=(*self.pass_env, *pass_env),
+                pass_env=self.pass_env,
+                host=os.environ,
             ),
             bind_source=str(ws.path) if transport == "bind" else None,
             run_args=self.run_args,

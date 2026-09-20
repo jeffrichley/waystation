@@ -11,8 +11,8 @@ from collections.abc import AsyncIterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal, Protocol, runtime_checkable
-from weakref import WeakKeyDictionary
+from typing import Any, Literal, Protocol, runtime_checkable
+from weakref import WeakKeyDictionary, WeakValueDictionary
 
 from waystation._cancellation import committed
 from waystation._git import decode, encode, git_identity, run_git
@@ -37,6 +37,7 @@ __all__ = [
     "IntegrationStrategy",
     "PatchSeries",
     "integrate",
+    "preserve_series",
 ]
 
 Mechanism = Literal["apply", "merge"]
@@ -44,16 +45,32 @@ Mechanism = Literal["apply", "merge"]
 # One lock per git common dir, per event loop. An asyncio.Lock binds to the
 # loop that first contends for it, so a process running a second loop — a
 # service calling asyncio.run per request — would fail its next contended
-# landing; keying by the running loop gives each one its own table, and the
-# weak keys let a loop that is gone take its locks with it (ADR-0033).
-_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
-    WeakKeyDictionary()
-)
-# The repos this task already holds, so an entry point called from inside
-# another is reentrant instead of deadlocking with no error at all.
-_held: ContextVar[frozenset[str]] = ContextVar(
-    "waystation_landing", default=frozenset()
-)
+# landing; keying by the running loop gives each one its own table (ADR-0033).
+#
+# Both halves are weak on purpose. A Lock caches the loop it bound to, so a
+# table holding its locks strongly would hold the loop through its own weak
+# key and nothing would ever be freed. Weak values drop a lock the moment no
+# landing is using it, which is exactly when a fresh one would do; whoever
+# holds or waits for one keeps it alive meanwhile.
+_locks: WeakKeyDictionary[
+    asyncio.AbstractEventLoop, WeakValueDictionary[str, asyncio.Lock]
+] = WeakKeyDictionary()
+
+
+@dataclass(frozen=True, slots=True)
+class _Holding:
+    """The repos ``task`` holds, so an entry point nested in one is reentrant.
+
+    The task is part of it because a child task inherits this context: a
+    strategy that spawns its own landing must wait for the lock, not walk
+    past it believing its parent's hold is its own.
+    """
+
+    task: asyncio.Task[Any] | None
+    keys: frozenset[str]
+
+
+_held: ContextVar[_Holding | None] = ContextVar("waystation_landing", default=None)
 _ZERO = "0" * 40
 
 
@@ -75,6 +92,27 @@ class GitResult:
 # cancellation is raised after it, so a target is moved or left alone and never
 # half-moved. A table here, never a flag a call site can forget (ADR-0027).
 _COMMIT_POINTS = frozenset({"update-ref"})
+
+# Git's own options, which come before the subcommand; each takes a value.
+_GIT_OPTIONS_WITH_VALUE = frozenset(
+    {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+)
+
+
+def _subcommand(args: tuple[str, ...]) -> str | None:
+    """The git subcommand in ``args``, past git's own options.
+
+    ``repo.git("-c", alias, "update-ref", ...)`` is a shape callers write,
+    and reading only the first argument would lose its commit point — the
+    half-moved ref ADR-0027 exists to prevent.
+    """
+    rest = iter(args)
+    for arg in rest:
+        if arg in _GIT_OPTIONS_WITH_VALUE:
+            next(rest, None)  # skip its value
+        elif not arg.startswith("-"):
+            return arg
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +163,7 @@ class GitRepo:
         raised after it (ADR-0027).
         """
         running = _repo_git(self.path, *args, check=check, stdin=stdin, env=env)
-        if args[:1] and args[0] in _COMMIT_POINTS:
+        if _subcommand(args) in _COMMIT_POINTS:
             return await committed(running)
         return await running
 
@@ -163,18 +201,26 @@ async def _serialized(common_dir: Path) -> AsyncIterator[None]:
     inside another, and would otherwise hang with no error (ADR-0033).
     """
     key = str(common_dir.resolve())
+    running = asyncio.current_task()
     holding = _held.get()
-    if key in holding:
+    if holding is None or holding.task is not running:
+        # A child task inherits this context, and someone else's hold is not
+        # this task's: it waits its turn like any other landing.
+        holding = _Holding(running, frozenset())
+    if key in holding.keys:
         yield
         return
-    per_loop = _locks.setdefault(asyncio.get_running_loop(), {})
+    per_loop = _locks.setdefault(asyncio.get_running_loop(), WeakValueDictionary())
     lock = per_loop.get(key)
     if lock is None:
         lock = per_loop[key] = asyncio.Lock()
+    # `lock` stays a local for the whole block: it is what keeps this repo's
+    # entry in the weak table alive while anyone holds or waits for it.
+    #
     # A bound or cancellation kills the git under way before it leaves the
     # lock, so the lock is never free while a write is still going on (#57).
     async with lock:
-        token = _held.set(holding | {key})
+        token = _held.set(_Holding(running, holding.keys | {key}))
         try:
             yield
         finally:
@@ -605,7 +651,7 @@ async def _merge_tree(
     merged = await repo.run(*args)
     tree, *paths = merged.stdout.split("\0")
     if merged.exit_code == 0:
-        return tree.strip()
+        return tree
     # Exit 1 means conflicts only when a tree came with it; git also exits 1,
     # with nothing on stdout, when it cannot read its inputs.
     if merged.exit_code == 1 and tree:

@@ -23,10 +23,11 @@ from waystation import (
     GitResult,
     Integration,
     IntegrationReport,
+    IntegrationStrategy,
     PatchSeries,
     integrate,
+    preserve_series,
 )
-from waystation.integration import preserve_series
 
 TARGET = "agents/landed"
 
@@ -39,7 +40,12 @@ async def _a_series(repo: Path, name: str = "work") -> PatchSeries:
 
 
 async def _settle() -> None:
-    """Let every runnable task reach its next await; no wall time passes."""
+    """Let every runnable task reach its next await; no wall time passes.
+
+    A task parked on the repo's lock stays parked however many turns pass,
+    so a marker its strategy would have written at once stays absent. Five
+    turns is generous: reaching the lock takes one.
+    """
     for _ in range(5):
         await asyncio.sleep(0)
 
@@ -170,6 +176,8 @@ async def test_a_strategy_that_preserves_inside_its_own_integrate_lands_no_deadl
 ) -> None:
     series = await _a_series(host_repo)
 
+    # A guard, not a bound: a deadlock here has no error to fail on, and a
+    # hung test would otherwise run until CI gave up on the whole job.
     async with asyncio.timeout(30):
         report = await integrate(
             host_repo, series, PreservesWhatItCannotLand("waystation/kept")
@@ -177,6 +185,52 @@ async def test_a_strategy_that_preserves_inside_its_own_integrate_lands_no_deadl
 
     assert report.target_after is None
     assert "work" in git(host_repo, "show", "waystation/kept:work.txt")
+
+
+@dataclass(frozen=True)
+class SpawnsALanding:
+    """Starts a second landing as a child task, while it holds the repo.
+
+    The child inherits this task's context, so reentrancy read from the
+    context alone would wave it past the lock — two landings at once on one
+    repo, the thing serialization exists to prevent.
+    """
+
+    inner: IntegrationStrategy
+    marker: Path
+    started: list[asyncio.Task[IntegrationReport]] = field(default_factory=list)
+    got_in: list[bool] = field(default_factory=list)
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        self.started.append(asyncio.create_task(integrate(repo, series, self.inner)))
+        await _settle()
+        self.got_in.append(self.marker.exists())
+        return IntegrationReport(
+            strategy="SpawnsALanding",
+            target="none",
+            mechanism="apply",
+            target_before=series.base_sha,
+            target_after=None,
+            landed=(),
+        )
+
+
+@pytest.mark.git
+async def test_a_landing_spawned_as_a_child_task_still_waits_its_turn(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    """Reentrancy is the same task's, never a task it started."""
+    series = await _a_series(host_repo)
+    marker = tmp_path / "marker"
+    spawner = SpawnsALanding(Marks(marker), marker)
+
+    await integrate(host_repo, series, spawner)
+
+    assert spawner.got_in == [False], "a child task walked past the lock"
+    (child,) = spawner.started
+    await child  # the outer landing is done, so its turn has come
+    assert marker.exists()
+    assert "work" in git(host_repo, "show", f"{TARGET}:work.txt")
 
 
 @dataclass(frozen=True)
@@ -275,13 +329,17 @@ async def test_output_reaches_a_strategy_as_git_wrote_it(host_repo: Path) -> Non
     assert "\r" not in listed.stdout
 
 
+@pytest.mark.unit
 def test_the_shipped_strategy_takes_no_private_path_to_host_git() -> None:
     """Whatever ``Integration`` needs, a user's strategy can have (ADR-0033).
 
     The shipped strategy used to go round ``GitRepo`` into the private runner
     three times — for an exit code, for unstripped stdout, for stdin — so a
-    user's strategy could not do what it does. Every git the module runs now
-    goes through the one door, and a test holds it there.
+    user's strategy could not do what it does. Only ``_repo_git``, which is
+    what ``GitRepo`` runs, reaches the private runner now.
+
+    (``_committer`` still goes through ``_git.git_identity``: ADR-0033 puts
+    the identity check there, in one place, for the workspace path too.)
     """
     from waystation import integration
 

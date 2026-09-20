@@ -24,6 +24,7 @@ from waystation.integration import (
     Integration,
     IntegrationStrategy,
     integrate,
+    preserve_series,
 )
 from waystation.observability import configure_logging
 from waystation.observers import Dashboard, EventLog, RunLogFiles
@@ -116,6 +117,7 @@ __all__ = [
     "handle_signals",
     "integrate",
     "outcome_instructions",
+    "preserve_series",
     "prepare_workspace",
     "run_agent",
 ]

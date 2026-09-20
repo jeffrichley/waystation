@@ -12,6 +12,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0004](0004-pure-library-boundary.md) Pure library: no CLI, no forge, no magic directory | adding a CLI, a GitHub call, or a dotfile the library owns |
 | [0021](0021-dataclass-values-pydantic-at-the-outcome.md) Values are dataclasses; pydantic validates only the Outcome | reaching for a `BaseModel` anywhere but the Outcome |
 | [0022](0022-immutable-runs-no-default-integration.md) A run is immutable, and nothing integrates unless asked | adding mutation to a run spec, or a default that lands commits |
+| [0031](0031-builders-own-the-bare-names-on-a-run-spec.md) A run spec's builders own the bare names; its stored values take the glossary's | adding a builder method or a stored value to a run spec |
 
 ## Failures, bounds and cancellation
 

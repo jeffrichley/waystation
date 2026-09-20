@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+import threading
 from types import FrameType
 
 __all__ = ["handle_signals"]
@@ -38,11 +39,21 @@ def handle_signals() -> None:
     calling task; the handlers it replaced are never restored.
 
     Raises:
-        RuntimeError: When called outside a running task.
+        RuntimeError: When called outside a running task, or off the main
+            thread, where Python installs no signal handler at all.
     """
     task = asyncio.current_task()
     if task is None:
         raise RuntimeError("handle_signals() must be called inside a task")
+    if threading.current_thread() is not threading.main_thread():
+        # `signal.signal` says only "signal only works in main thread of the
+        # main interpreter", which is true and no help. Nothing is armed, so
+        # a signal still falls through to the default (ADR-0017).
+        raise RuntimeError(
+            "handle_signals() only works on the main thread: Python installs "
+            "signal handlers there and nowhere else. A flow running on another "
+            "thread is cancelled by whatever runs it, not by a signal."
+        )
     loop = task.get_loop()
 
     def _cancel(signum: int) -> None:

@@ -12,6 +12,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import FrameType
@@ -115,6 +116,38 @@ async def test_the_handlers_stay_after_the_task_ends() -> None:
 def test_it_needs_a_task_to_cancel() -> None:
     with pytest.raises(RuntimeError):
         handle_signals()
+
+
+@pytest.mark.unit
+def test_it_says_so_off_the_main_thread() -> None:
+    """Python installs signal handlers on the main thread and nowhere else.
+
+    Left to ``signal.signal``, a flow on a worker thread got
+    ``ValueError: signal only works in main thread of the main interpreter``
+    — true, and no help at all about what to do instead.
+    """
+    raised: list[BaseException] = []
+
+    def off_the_main_thread() -> None:
+        async def arm() -> None:
+            handle_signals()
+
+        try:
+            asyncio.run(arm())
+        except BaseException as exc:  # noqa: BLE001 - the test is the exception
+            raised.append(exc)
+
+    worker = threading.Thread(target=off_the_main_thread)
+    worker.start()
+    worker.join()
+
+    (error,) = raised
+    assert isinstance(error, RuntimeError), error
+    assert "main thread" in str(error)
+    # And it left the handlers alone: a signal still falls through to the
+    # default rather than to a half-armed flow (ADR-0017).
+    for sig in SHUTDOWN:
+        assert signal.getsignal(sig) is not _sentinel
 
 
 @pytest.mark.unit

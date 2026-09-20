@@ -102,11 +102,7 @@ async def test_an_integrate_bound_kills_the_landing_and_all_it_started(
     host_repo: Path, tmp_path: Path
 ) -> None:
     pulse = tmp_path / "pulse"
-    spec = (
-        a_run(host_repo)
-        .integrate(Stalling(pulse))
-        .with_timeouts(Timeouts(integrate=1.0))
-    )
+    spec = a_run(host_repo).integrate(Stalling(pulse)).timeouts(Timeouts(integrate=1.0))
     clock = ManualClock()
 
     with use_clock(clock):
@@ -128,7 +124,7 @@ async def test_a_bound_firing_mid_swap_lets_it_land_and_reports_the_landing(
     started, release = tmp_path / "started", tmp_path / "release"
     hooks = stalling_ref_hook(tmp_path / "hooks", started, release)
     git(host_repo, "config", "core.hooksPath", hooks.as_posix())
-    spec = a_run(host_repo).integrate(TARGET).with_timeouts(Timeouts(integrate=1.0))
+    spec = a_run(host_repo).integrate(TARGET).timeouts(Timeouts(integrate=1.0))
     clock = ManualClock()
 
     with use_clock(clock):
@@ -160,7 +156,7 @@ async def test_a_workspace_bound_kills_the_clone_and_leaves_no_workspace(
     hook.write_bytes(f"#!/bin/sh\n{_beating(pulse)}\n".encode())
     hook.chmod(0o755)
     monkeypatch.setenv("GIT_TEMPLATE_DIR", str(tmp_path / "template"))
-    spec = a_run(host_repo).with_timeouts(Timeouts(workspace=1.0))
+    spec = a_run(host_repo).timeouts(Timeouts(workspace=1.0))
     clock = ManualClock()
 
     with use_clock(clock):

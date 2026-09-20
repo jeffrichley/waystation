@@ -84,10 +84,10 @@ async def preflight(specs: Sequence[RunSpec[Any]]) -> None:
         PreflightError: Naming what failed and how to fix it. No run has
             started.
     """
-    for agent in _distinct(spec.agent for spec in specs):
+    for agent in _distinct(spec.provider for spec in specs):
         with _preflighting(type(agent).__name__):
             agent.preflight()
-    for sandbox in _distinct(spec.sandbox for spec in specs):
+    for sandbox in _distinct(spec.backend for spec in specs):
         with _preflighting(type(sandbox).__name__):
             await sandbox.preflight()
     for spec in specs:

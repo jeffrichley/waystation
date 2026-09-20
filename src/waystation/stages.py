@@ -264,7 +264,9 @@ class _StageRunner:
                 return await self._stoppable(stage, task, bounded)
             return await run_to_end(bounded, partial(self._hold, stage))
         except TimeoutError as exc:
-            assert bound is not None and seconds is not None
+            if seconds is None:
+                raise  # unbounded: this is the work's own, not a bound firing
+            assert bound is not None
             raise StageError(
                 stage,
                 TimedOut(

@@ -449,3 +449,15 @@ async def test_a_hand_composed_loop_cancelled_mid_agent_keeps_what_the_agent_lef
     ]
     assert branches(host_repo, "waystation/*") == kept
     assert workspaces(isolated_tempdir) == []
+
+
+@pytest.mark.unit
+async def test_an_unbounded_stage_passes_its_own_timeout_error_through() -> None:
+    """No bound fired, so a ``TimeoutError`` is the work's own, not a ``TimedOut``."""
+
+    async def times_itself_out() -> str:
+        raise TimeoutError("the work's own deadline")
+
+    async with stages() as run:
+        with pytest.raises(TimeoutError, match="the work's own deadline"):
+            await run.stage("agent", times_itself_out(), bound=None)

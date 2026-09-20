@@ -40,6 +40,7 @@ from waystation.observability import (
     configured_console,
     tag,
     tagged_logger,
+    would_reach,
 )
 from waystation.results import (
     AgentExit,
@@ -230,17 +231,13 @@ class _RunFileHandler(logging.Handler):
 
 
 def _inherited_level() -> int:
-    """The level the ``waystation`` logger takes from above, ignoring its own.
+    """The level a host's own configuration lets waystation log at.
 
-    What a host application's configuration says waystation may log — read
-    live, so a host that turns its own level down mid-run is still obeyed.
+    ``waystation`` is a top-level logger, so what it inherits is the root's.
+    Read at each record, so a host that turns its level down mid-run is
+    obeyed from then on.
     """
-    logger = logging.getLogger(PACKAGE).parent
-    while logger is not None:
-        if logger.level:
-            return logger.level
-        logger = logger.parent
-    return logging.NOTSET
+    return logging.getLogger().getEffectiveLevel()
 
 
 class _RelayAbove(logging.Handler):
@@ -258,20 +255,33 @@ class _RelayAbove(logging.Handler):
         # none of its own, so what reaches a host is whatever it configured.
         self._held_level = held_level
 
+    def handle(self, record: logging.LogRecord) -> bool:
+        """Pass the record up without holding a lock propagation never held.
+
+        ``Handler.handle`` would take this handler's lock around ``emit``,
+        and every handler above takes its own — so a host handler that logs
+        back through waystation would wait on ours while we wait on theirs.
+        """
+        # `Filter.filter` may return a record in 3.12; truth is the answer.
+        passed = bool(self.filter(record))
+        if passed:
+            self.emit(record)
+        return passed
+
     def emit(self, record: logging.LogRecord) -> None:
-        if record.levelno < (self._held_level or _inherited_level()):
+        if not would_reach(record, self._held_level or _inherited_level()):
             return
-        # Propagation, by hand, from the logger above: every ancestor handler
-        # that wants the record, and no further than one that stops the walk.
+        # Propagation, by hand: `waystation` is a top-level logger, so what
+        # it propagates to is the root's handlers, and nothing beyond them.
         # `logging` would also fall back to `lastResort` where it found no
         # handler at all, which real propagation from here never does — the
-        # package logger itself always has one.
-        logger = logging.getLogger(PACKAGE).parent
-        while logger is not None:
-            for handler in logger.handlers:
+        # package logger itself always carries its NullHandler.
+        try:
+            for handler in logging.getLogger().handlers:
                 if record.levelno >= handler.level:
                     handler.handle(record)
-            logger = logger.parent if logger.propagate else None
+        except Exception:  # pragma: no cover - logging swallows its own errors
+            self.handleError(record)
 
 
 class _DebugWhileWatched:
@@ -282,10 +292,11 @@ class _DebugWhileWatched:
     at the root's WARNING. So the level goes to DEBUG, and, because that
     would push agent output into a host application's own handlers, the
     logger stops propagating and relays what the host was getting anyway.
-    Our console filters on its own remembered level for the same reason
-    (ADR-0026): what any other handler sees is unchanged.
+    Our console filters on its own remembered level by the same rule
+    (ADR-0026): what any other handler sees is unchanged, per-logger tuning
+    included — a logger the script turned up itself still reaches a host.
 
-    Both are given back once the last run lets go.
+    All three are given back once the last run lets go.
     """
 
     def __init__(self) -> None:

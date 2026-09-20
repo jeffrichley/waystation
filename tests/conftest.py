@@ -35,11 +35,13 @@ def clean_logging() -> Iterator[None]:
     """Restore the ``waystation`` logger after a test opts into a console."""
     logger = logging.getLogger("waystation")
     handlers, level = list(logger.handlers), logger.level
+    propagate = logger.propagate  # a run file turns it off while one is open
     try:
         yield
     finally:
         logger.handlers[:] = handlers
         logger.setLevel(level)
+        logger.propagate = propagate
 
 
 @functools.cache

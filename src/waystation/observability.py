@@ -139,24 +139,30 @@ class _WaystationHandler(RichHandler):
     """The one handler ``configure_logging`` owns, and the only one it replaces."""
 
 
-class _ConsoleLevel(logging.Filter):
-    """Holds the console to the level ``configure_logging`` was given.
+def would_reach(record: logging.LogRecord, level: int) -> bool:
+    """Whether something holding ``level`` would have seen ``record`` anyway.
 
     A run-file observer turns the hierarchy down to DEBUG so the records it
-    wants exist to be written (ADR-0026). That must not start printing git
-    argv and every agent line to someone's terminal, so the console filters on
-    its own remembered level — while a logger the script tuned itself still
-    gets through, which is the whole point of per-logger tuning.
+    wants exist to be written (ADR-0026). Everything else — our console, and
+    the handlers a host application owns — answers to the level it chose, so
+    the extra records reach neither. A logger the script tuned itself still
+    gets through, which is the whole point of per-logger tuning: one rule,
+    used everywhere insulation is needed, so the two cannot drift apart.
     """
+    if record.levelno >= level:
+        return True
+    return logging.getLogger(record.name).level != logging.NOTSET
+
+
+class _ConsoleLevel(logging.Filter):
+    """Holds the console to the level ``configure_logging`` was given."""
 
     def __init__(self, level: int) -> None:
         super().__init__()
         self.level = level
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.levelno >= self.level:
-            return True
-        return logging.getLogger(record.name).level != logging.NOTSET
+        return would_reach(record, self.level)
 
 
 def configure_logging(

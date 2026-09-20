@@ -97,6 +97,10 @@ _Avoid_: any forge name — GitHub/Bitbucket (forges are out of core; forge oper
 One of the ordered phases a run passes through: workspace, sandbox, agent, collect, integrate. A failure is attributed to the stage it happened in.
 _Avoid_: step, phase
 
+**Stage runner**:
+The value a flow script composing the primitives by hand runs each stage through: it applies that stage's bound, holds a cancellation until the stage's own work ends, and records how long the stage took. It owns no policy — which stages run, what happens after a failure, and whether a series is preserved stay with whoever composes, the run orchestrator included.
+_Avoid_: pipeline, executor, driver
+
 **Hook**:
 A user-supplied function invoked at a named point of a run — a stage boundary, or each line the agent emits.
 _Avoid_: callback, listener

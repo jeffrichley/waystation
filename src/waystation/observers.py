@@ -229,40 +229,104 @@ class _RunFileHandler(logging.Handler):
             self.handleError(record)
 
 
+def _inherited_level() -> int:
+    """The level the ``waystation`` logger takes from above, ignoring its own.
+
+    What a host application's configuration says waystation may log — read
+    live, so a host that turns its own level down mid-run is still obeyed.
+    """
+    logger = logging.getLogger(PACKAGE).parent
+    while logger is not None:
+        if logger.level:
+            return logger.level
+        logger = logger.parent
+    return logging.NOTSET
+
+
+class _RelayAbove(logging.Handler):
+    """Hands records up the hierarchy, at the level it would have seen.
+
+    While a run file holds the ``waystation`` logger at DEBUG, the logger
+    stops propagating, so the extra records it created reach nothing else.
+    This puts back exactly what was already going up: no more, and nothing
+    that was arriving before is lost (ADR-0026).
+    """
+
+    def __init__(self, held_level: int) -> None:
+        super().__init__(logging.NOTSET)
+        # The logger's own level before it was raised. NOTSET means it had
+        # none of its own, so what reaches a host is whatever it configured.
+        self._held_level = held_level
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno < (self._held_level or _inherited_level()):
+            return
+        # Propagation, by hand, from the logger above: every ancestor handler
+        # that wants the record, and no further than one that stops the walk.
+        # `logging` would also fall back to `lastResort` where it found no
+        # handler at all, which real propagation from here never does — the
+        # package logger itself always has one.
+        logger = logging.getLogger(PACKAGE).parent
+        while logger is not None:
+            for handler in logger.handlers:
+                if record.levelno >= handler.level:
+                    handler.handle(record)
+            logger = logger.parent if logger.propagate else None
+
+
 class _DebugWhileWatched:
     """Holds the ``waystation`` logger at DEBUG while any run file is open.
 
-    A run file wants every record, but a record the logger never created can't
-    be handled — and without ``configure_logging`` the hierarchy sits at the
-    root's WARNING. The level is restored once the last run lets go, and the
-    console filters on its own remembered level so this never changes what a
-    terminal shows (ADR-0026).
+    A run file wants every record, but a record the logger never created
+    can't be handled — and without ``configure_logging`` the hierarchy sits
+    at the root's WARNING. So the level goes to DEBUG, and, because that
+    would push agent output into a host application's own handlers, the
+    logger stops propagating and relays what the host was getting anyway.
+    Our console filters on its own remembered level for the same reason
+    (ADR-0026): what any other handler sees is unchanged.
+
+    Both are given back once the last run lets go.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._watchers = 0
-        self._restore: int | None = None
+        self._restore: tuple[int, bool, _RelayAbove] | None = None
 
     def acquire(self) -> None:
         with self._lock:
             if self._watchers == 0:
-                root = logging.getLogger(PACKAGE)
-                self._restore = root.level
-                if not root.isEnabledFor(logging.DEBUG):
-                    root.setLevel(logging.DEBUG)
+                self._hold()
             self._watchers += 1
 
     def release(self) -> None:
         with self._lock:
             self._watchers -= 1
-            if self._watchers == 0 and self._restore is not None:
-                root = logging.getLogger(PACKAGE)
-                # Only give back what we took: a configure_logging call during
-                # the window is the script's decision and outranks ours.
-                if root.level == logging.DEBUG:
-                    root.setLevel(self._restore)
-                self._restore = None
+            if self._watchers == 0:
+                self._give_back()
+
+    def _hold(self) -> None:
+        logger = logging.getLogger(PACKAGE)
+        if logger.isEnabledFor(logging.DEBUG):
+            return  # already as low as a run file needs; nothing to hold
+        relay = _RelayAbove(logger.level)
+        self._restore = (logger.level, logger.propagate, relay)
+        logger.addHandler(relay)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+
+    def _give_back(self) -> None:
+        if self._restore is None:
+            return
+        level, propagate, relay = self._restore
+        self._restore = None
+        logger = logging.getLogger(PACKAGE)
+        logger.removeHandler(relay)
+        logger.propagate = propagate
+        # Only give back what we took: a configure_logging call during the
+        # window is the script's decision and outranks ours.
+        if logger.level == logging.DEBUG:
+            logger.setLevel(level)
 
 
 _DEBUG_WHILE_WATCHED = _DebugWhileWatched()

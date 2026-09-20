@@ -24,7 +24,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | Fixture | Gives you |
 | --- | --- |
 | `host_repo` | a throwaway host repo: git identity, one commit on HEAD |
-| `clean_logging` | the `waystation` logger's handlers, level and `propagate` put back afterwards — request it in any test that calls `configure_logging`, or opens a `RunLogFiles` |
+| `clean_logging` | the `waystation` loggers put back afterwards: the package logger's handlers and `propagate`, and every level in the subtree — request it in any test that calls `configure_logging`, tunes a logger, or opens a `RunLogFiles` |
 | `isolated_tempdir` | autouse — every test's temp dir is its own, so a workspace never lands in the host's |
 | `tmp_path` | pytest's own; the root the two above are built on |
 

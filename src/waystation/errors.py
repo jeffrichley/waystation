@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from waystation.results import AgentExit, Failure, Stage
+
+if TYPE_CHECKING:
+    # collect imports this module, so the type is a name only, never an import.
+    from waystation.collect import PatchSeries
 
 
 class WaystationError(Exception):
@@ -22,7 +28,12 @@ class PreflightError(WaystationError):
 
 
 class StageError(WaystationError):
-    """A stage primitive failed; carries the same Failure a RunFailed would."""
+    """A stage primitive failed; carries the same Failure a RunFailed would.
+
+    A stage that made something before it failed hands it over on the error,
+    so the caller loses nothing: ``agent`` is the agent's exit, and ``series``
+    the patches collect cut before refusing to hand them back (ADR-0006).
+    """
 
     def __init__(
         self,
@@ -30,8 +41,10 @@ class StageError(WaystationError):
         failure: Failure,
         *,
         agent: AgentExit | None = None,
+        series: PatchSeries | None = None,
     ) -> None:
         self.stage = stage
         self.failure = failure
         self.agent = agent
+        self.series = series
         super().__init__(f"{stage}: {type(failure).__name__}")

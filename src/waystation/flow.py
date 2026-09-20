@@ -20,7 +20,7 @@ from waystation._preflight import preflight
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.clock import get_clock, race_timeout
-from waystation.collect import CollectResult, PatchSeries, collect
+from waystation.collect import PatchSeries, collect
 from waystation.errors import StageError
 from waystation.hooks import (
     HookEntry,
@@ -41,7 +41,6 @@ from waystation.results import (
     AgentExit,
     Errored,
     IntegrationReport,
-    Refused,
     RunConflicted,
     RunFailed,
     RunResult,
@@ -123,6 +122,11 @@ class _RunRecord:
             yield
         finally:
             self.elapsed[stage] = time.perf_counter() - started
+
+    def collected(self, series: PatchSeries) -> None:
+        """Keep what collect cut, whether or not it went on to refuse it."""
+        self.patches = series
+        self.series = Series(commits=series.commits, salvaged=series.salvaged)
 
     def fail(self, err: StageError) -> None:
         """Keep the first failure; log any later one (ADR-0024)."""
@@ -639,34 +643,24 @@ class RunSpec[OutcomeT]:
     ) -> None:
         """Collect stage: best-effort once the run has already failed (ADR-0024)."""
 
-        async def _collected() -> CollectResult:
+        async def _collected() -> PatchSeries:
             return await collect(sandbox, workspace, salvage=self.salvage)
 
         with record.entering("collect"):
             try:
-                collected: CollectResult = await self._bounded(
-                    record, "collect", "collect", self.timeouts.collect, _collected
+                record.collected(
+                    await self._bounded(
+                        record, "collect", "collect", self.timeouts.collect, _collected
+                    )
                 )
             except Exception as exc:
-                if record.failure is None:
-                    raise
-                record.fail(_as_stage_error("collect", exc))
-                return
-        record.series = collected.series_meta
-        record.patches = collected.patch_series
-        if collected.squashed:
-            record.fail(
-                StageError(
-                    "collect",
-                    Refused(
-                        reason="nonlinear_series",
-                        detail=(
-                            "series contains merge commits or "
-                            "HEAD does not descend from base"
-                        ),
-                    ),
-                )
-            )
+                err = _as_stage_error("collect", exc)
+                # A stage hands over what it made before it failed, and collect
+                # cut a series before it refused it: that is what preservation
+                # keeps, whether or not this failure is the one reported.
+                if err.series is not None:
+                    record.collected(err.series)
+                record.fail(err)
 
     async def _land(
         self, ctx: RunContext, record: _RunRecord, outcome: OutcomeT

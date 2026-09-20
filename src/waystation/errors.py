@@ -84,6 +84,12 @@ def attributing(stage: Stage) -> Iterator[None]:
     A primitive's edge: inside it, helpers raise failures with no stage on
     them, and this is the one place that says which stage they happened in
     (ADR-0032).
+
+    Module-public rather than underscore-private because the primitives that
+    use it live in other modules — workspace, collect, integration and the
+    sandbox transport — and reaching across modules for a private name is
+    what the house rule forbids. It stays out of top-level ``waystation``:
+    a flow script attributes with ``StageError.at`` or a stage runner.
     """
     try:
         yield

@@ -29,7 +29,7 @@ from waystation.clock import get_clock, race_timeout
 from waystation.errors import StageError
 from waystation.results import Stage, TimedOut, Timeouts
 
-__all__ = ["stages"]
+__all__ = ["StageRunner", "stages"]
 
 
 class _OwnBound:
@@ -166,13 +166,9 @@ class _StageRunner:
             asyncio.CancelledError: One held from an earlier stage, or — with
                 ``interruptible`` — one that stopped ``work`` itself.
         """
-        try:
-            self._open()
-            self.surface()
-        except BaseException:
-            _discard(work)
-            raise
-        return await self._run(stage, work, self._named(stage, bound), interruptible)
+        return await self._begin(
+            stage, work, bound, surfacing=True, interruptible=interruptible
+        )
 
     async def anyway[T](
         self,
@@ -208,12 +204,7 @@ class _StageRunner:
             StageError: With ``TimedOut`` when the bound fires.
             ValueError: When ``bound`` names no ``Timeouts`` field.
         """
-        try:
-            self._open()
-        except BaseException:
-            _discard(work)
-            raise
-        return await self._run(stage, work, self._named(stage, bound), False)
+        return await self._begin(stage, work, bound, surfacing=False)
 
     @contextlib.asynccontextmanager
     async def entering[T](
@@ -297,8 +288,25 @@ class _StageRunner:
             self._hold(stage, cancel)
             raise
 
-    def _named(self, stage: Stage, bound: str | None | _OwnBound) -> str | None:
-        return stage if isinstance(bound, _OwnBound) else bound
+    async def _begin[T](
+        self,
+        stage: Stage,
+        work: Awaitable[T],
+        bound: str | None | _OwnBound,
+        *,
+        surfacing: bool,
+        interruptible: bool = False,
+    ) -> T:
+        """What ``stage`` and ``anyway`` share; ``surfacing`` is all they differ by."""
+        try:
+            self._open()
+            if surfacing:
+                self.surface()
+        except BaseException:
+            _discard(work)
+            raise
+        named = stage if isinstance(bound, _OwnBound) else bound
+        return await self._run(stage, work, named, interruptible)
 
     def _limit(self, bound: str) -> float | None:
         try:
@@ -325,6 +333,15 @@ class _StageRunner:
         if self._left:
             msg = "this stage runner's block has ended, and with it its run"
             raise RuntimeError(msg)
+
+
+type StageRunner = _StageRunner
+"""What ``stages()`` returns, for annotating a helper that takes one.
+
+The class itself stays private, as fan-out's iterator does (ADR-0032): an
+alias names a runner without making one constructible any way but
+``stages()``.
+"""
 
 
 def stages(bounds: Timeouts = _NO_BOUNDS) -> _StageRunner:

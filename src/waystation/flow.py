@@ -49,7 +49,7 @@ from waystation.results import (
     Timeouts,
 )
 from waystation.sandbox.protocol import Sandbox, SandboxBackend
-from waystation.stages import _StageRunner, stages
+from waystation.stages import StageRunner, stages
 from waystation.workspace import Workspace, prepare_workspace, remove_workspace
 
 __all__ = ["Flow", "RunSpec"]
@@ -90,7 +90,11 @@ def _log_later_failure(run_id: str, err: StageError) -> None:
 
 
 def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
-    """``exc`` as a failure of ``stage``, leaving a stage it already names alone."""
+    """``exc`` as a failure of ``stage``, leaving a stage it already names alone.
+
+    It claims the stage here rather than leaving it to ``fail``, because the
+    teardown path logs its failure without ever reaching a record.
+    """
     if isinstance(exc, StageError):
         return exc.at(stage)
     return StageError(stage, Errored(exc))
@@ -108,6 +112,9 @@ class _RunRecord:
 
     run_id: str
     log: RunLog
+    # Where the orchestrator is *between* stages — reading the prompt, firing
+    # a hook — which is work the runner never sees, so it cannot name it. Each
+    # phase below sets it as it begins; inside a stage the runner attributes.
     stage: Stage = "workspace"
     base_sha: str | None = None
     elapsed: Mapping[Stage, float] = field(default_factory=dict)
@@ -127,7 +134,9 @@ class _RunRecord:
 
     def fail(self, err: StageError) -> None:
         """Keep the first failure; log any later one (ADR-0024)."""
-        err.at(self.stage)  # a failure nothing claimed is the stage under way
+        # The net that lets ``failed()`` assert a stage: a failure raised
+        # between stages, by a hook say, is claimed by the stage under way.
+        err.at(self.stage)
         if self.failure is not None:
             _log_later_failure(self.run_id, err)
             return
@@ -477,7 +486,7 @@ class RunSpec[OutcomeT]:
 
     async def _lifecycle(
         self,
-        run: _StageRunner,
+        run: StageRunner,
         ctx: RunContext,
         state: RunState,
         record: _RunRecord,
@@ -522,7 +531,7 @@ class RunSpec[OutcomeT]:
             raise StageError("agent", Errored(exception=exc)) from exc
 
     async def _prepare(
-        self, run: _StageRunner, ctx: RunContext, state: RunState, record: _RunRecord
+        self, run: StageRunner, ctx: RunContext, state: RunState, record: _RunRecord
     ) -> Workspace:
         """Workspace stage: a private clone of the base, then ``workspace_ready``."""
         record.stage = "workspace"
@@ -544,7 +553,7 @@ class RunSpec[OutcomeT]:
 
     async def _in_sandbox(
         self,
-        run: _StageRunner,
+        run: StageRunner,
         ctx: RunContext,
         state: RunState,
         record: _RunRecord,
@@ -594,7 +603,7 @@ class RunSpec[OutcomeT]:
 
     async def _run_agent(
         self,
-        run: _StageRunner,
+        run: StageRunner,
         ctx: RunContext,
         record: _RunRecord,
         sandbox: Sandbox,
@@ -649,7 +658,7 @@ class RunSpec[OutcomeT]:
 
     async def _collect(
         self,
-        run: _StageRunner,
+        run: StageRunner,
         record: _RunRecord,
         sandbox: Sandbox,
         workspace: Workspace,
@@ -673,7 +682,7 @@ class RunSpec[OutcomeT]:
             record.fail(err)
 
     async def _land(
-        self, run: _StageRunner, ctx: RunContext, record: _RunRecord, outcome: OutcomeT
+        self, run: StageRunner, ctx: RunContext, record: _RunRecord, outcome: OutcomeT
     ) -> RunResult[OutcomeT]:
         """Integrate stage, or preservation when the run integrates nowhere."""
         patches, strategy = record.patches, self.integration
@@ -717,7 +726,7 @@ class RunSpec[OutcomeT]:
             return record.failed()
         return record.succeeded(outcome, report)
 
-    async def _preserve(self, run: _StageRunner, record: _RunRecord) -> None:
+    async def _preserve(self, run: StageRunner, record: _RunRecord) -> None:
         """Keep a series that reached no target on ``waystation/<run-id>``.
 
         Unbounded, and run ``anyway``: preservation is how a cancelled or
@@ -737,7 +746,7 @@ class RunSpec[OutcomeT]:
 
     async def _teardown(
         self,
-        run: _StageRunner,
+        run: StageRunner,
         cm: AbstractAsyncContextManager[Sandbox],
         record: _RunRecord,
     ) -> None:

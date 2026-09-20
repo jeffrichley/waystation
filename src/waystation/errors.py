@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from waystation.results import AgentExit, Failure, Stage
 
+__all__ = ["PreflightError", "StageError", "WaystationError"]
+
 if TYPE_CHECKING:
     # collect imports this module, so the type is a name only, never an import.
     from waystation.collect import PatchSeries

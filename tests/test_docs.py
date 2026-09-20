@@ -85,3 +85,35 @@ def _exported_names(path: Path) -> set[str]:
                 name for name in ast.literal_eval(node.value) if isinstance(name, str)
             }
     return set()
+
+
+@pytest.mark.unit
+def test_every_module_curates_its_public_surface() -> None:
+    """CLAUDE.md: every module curates ``__all__``, the rest underscore-private.
+
+    A module without one exports whatever it happens to have imported, so
+    ``from x import *`` and every reader's idea of the seam drift apart. The
+    private modules follow the rule too: underscore means the *module* is
+    private, not that its contents are unnamed.
+    """
+    modules = sorted(p for p in (REPO / "src" / "waystation").rglob("*.py"))
+    missing = [
+        p.relative_to(REPO).as_posix() for p in modules if not _has_dunder_all(p)
+    ]
+
+    assert not missing, (
+        f"no __all__: {missing}. Curate the names the module means to export; "
+        "everything else is underscore-private (CLAUDE.md)."
+    )
+
+
+def _has_dunder_all(path: Path) -> bool:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return any(
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        )
+        for node in tree.body
+    )

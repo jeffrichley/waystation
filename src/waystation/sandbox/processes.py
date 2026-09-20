@@ -25,6 +25,14 @@ from typing import Any, Protocol, runtime_checkable
 
 from waystation.observability import tagged_logger
 
+__all__ = [
+    "PosixProcesses",
+    "ProcessStrategy",
+    "ProcessTree",
+    "WindowsProcesses",
+    "host_processes",
+]
+
 # Keys a process needs to start at all, per OS; a run's own env goes on top.
 _POSIX_BASE_ENV = ("PATH", "HOME", "TMPDIR")
 _WINDOWS_BASE_ENV = (
@@ -41,7 +49,7 @@ _WINDOWS_BASE_ENV = (
     "HOMEPATH",
 )
 
-logger = tagged_logger("waystation")
+_logger = tagged_logger("waystation")
 
 
 @runtime_checkable
@@ -233,5 +241,5 @@ def _job_for(process: asyncio.subprocess.Process) -> int | None:
             return None
         return int(job)
     except OSError:
-        logger.exception("failed to assign process to a Windows Job Object")
+        _logger.exception("failed to assign process to a Windows Job Object")
         return None

@@ -13,6 +13,8 @@ from waystation.sandbox.protocol import Sandbox
 from waystation.tails import bound_tail
 from waystation.workspace import Workspace
 
+__all__ = ["PatchSeries", "collect"]
+
 
 @dataclass(frozen=True, slots=True)
 class PatchSeries:

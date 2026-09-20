@@ -50,6 +50,7 @@ from waystation import (
     Timeouts,
     prepare_workspace,
 )
+from waystation.agents import AgentLine
 from waystation.clock import ManualClock, use_clock
 from waystation.sandbox import clone_in
 from waystation.sandbox._docker_plans import plan_exec, plan_kill
@@ -256,6 +257,59 @@ async def test_a_sandbox_sees_only_the_environment_it_names(
 
 
 @pytest.mark.docker
+async def test_a_providers_environment_reaches_its_agent_and_nothing_else(
+    host_repo: Path, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The provider row of ADR-0034's table, on the backend that isolates.
+
+    A provider's credential is for the agent. It must not ride into the
+    container's other execs, where `clone_in` and collect run.
+    """
+    monkeypatch.setenv("WAYSTATION_HOST", "from-host")
+    agent_lines: list[str] = []
+    other: list[str] = []
+
+    async def keep(ctx: RunContext, line: AgentLine) -> None:
+        agent_lines.append(line.raw)
+
+    async def env_outside(ctx: RunContext) -> None:
+        other.append((await ctx.sandbox.exec(["env"])).stdout)
+
+    flow = Flow(
+        host_repo,
+        agent=ShellAgent(
+            f"env\necho '{OK_OUTCOME_LINE}'",
+            shell="sh",
+            env={"WAYSTATION_AGENT": "agent"},
+            pass_env=("WAYSTATION_HOST",),
+        ),
+        sandbox=DockerSandbox(image, env={"WAYSTATION_SPEC": "spec"}),
+    )
+
+    result = await (
+        flow.run("print the environment", outcome=Summary)
+        .on_agent_output(keep)
+        .on_sandbox_ready(env_outside)
+    )
+
+    assert isinstance(result, RunSucceeded), result
+    inside = _as_env("\n".join(agent_lines))
+    outside = _as_env(other[0])
+
+    assert inside["WAYSTATION_SPEC"] == "spec"
+    assert outside["WAYSTATION_SPEC"] == "spec"
+    assert inside["WAYSTATION_AGENT"] == "agent"
+    assert inside["WAYSTATION_HOST"] == "from-host"
+    assert "WAYSTATION_AGENT" not in outside
+    assert "WAYSTATION_HOST" not in outside
+
+
+def _as_env(text: str) -> dict[str, str]:
+    pairs = (line.split("=", 1) for line in text.splitlines() if "=" in line)
+    return {key: value for key, value in pairs if key}
+
+
+@pytest.mark.docker
 async def test_a_sandbox_is_labelled_with_its_run_and_gone_after_it(
     host_repo: Path, isolated_tempdir: Path, image: str
 ) -> None:
@@ -289,7 +343,7 @@ async def test_a_sandbox_starts_and_stops_in_as_few_docker_calls_as_it_can(
     sandbox = DockerSandbox(image, transport=transport)
 
     with caplog.at_level(logging.DEBUG, logger="waystation.sandbox"):
-        async with sandbox.start(ws, env={}, pass_env=()):
+        async with sandbox.start(ws, env={}):
             started = _docker_calls(caplog)
         stopped = _docker_calls(caplog)[len(started) :]
 
@@ -322,7 +376,7 @@ async def test_an_exec_streams_stdin_in_and_lines_out_as_they_come(
     ws = await prepare_workspace(host_repo)
     lines: list[str] = []
 
-    async with DockerSandbox(image).start(ws, env={}, pass_env=()) as sandbox:
+    async with DockerSandbox(image).start(ws, env={}) as sandbox:
         result = await sandbox.exec(
             ["cat"], stdin="one\ntwo\n", capture=False, on_stdout=lines.append
         )
@@ -340,9 +394,7 @@ async def test_a_copy_runs_again_over_its_own_work_in_the_container(
     # earlier try left there (ADR-0016).
     ws = await prepare_workspace(host_repo)
 
-    async with DockerSandbox(image, transport="copy").start(
-        ws, env={}, pass_env=()
-    ) as sandbox:
+    async with DockerSandbox(image, transport="copy").start(ws, env={}) as sandbox:
         await clone_in(sandbox, ws)
         shown = await sandbox.exec(
             ["sh", "-c", "git rev-parse --abbrev-ref HEAD; git status --porcelain"]
@@ -363,7 +415,7 @@ async def test_a_cancelled_exec_kills_all_it_started_before_the_cancel_completes
     started = asyncio.Event()
     linger = "( while :; do printf x >> /tmp/pulse; sleep 0.05; done ) & "
 
-    async with DockerSandbox(image).start(ws, env={}, pass_env=()) as sandbox:
+    async with DockerSandbox(image).start(ws, env={}) as sandbox:
         running = asyncio.create_task(
             sandbox.exec(
                 ["sh", "-c", linger + "echo started; wait"],
@@ -395,7 +447,7 @@ async def test_an_exec_cancelled_as_it_starts_never_runs_on(
     ws = await prepare_workspace(host_repo)
     writer = "while :; do printf x >> /tmp/pulse; sleep 0.05; done"
 
-    async with DockerSandbox(image).start(ws, env={}, pass_env=()) as sandbox:
+    async with DockerSandbox(image).start(ws, env={}) as sandbox:
         running = asyncio.create_task(sandbox.exec(["sh", "-c", writer]))
         await asyncio.sleep(after)
         running.cancel()

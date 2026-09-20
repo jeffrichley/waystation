@@ -18,7 +18,7 @@ async def test_an_exec_that_exits_without_reading_its_stdin_reports_its_exit(
     # the way clone_in's bundle meets a script that refuses to clone.
     ws = await prepare_workspace(host_repo)
 
-    async with NoSandbox().start(ws, env={}, pass_env=()) as sandbox:
+    async with NoSandbox().start(ws, env={}) as sandbox:
         result = await sandbox.exec(
             [sh(), "-c", "echo refused >&2; exit 3"], stdin="x" * 4_000_000
         )

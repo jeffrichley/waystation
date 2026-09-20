@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -50,9 +50,9 @@ class TrackedSandbox:
 
     @asynccontextmanager
     async def start(
-        self, ws: Workspace, *, env: Mapping[str, str], pass_env: Sequence[str]
+        self, ws: Workspace, *, env: Mapping[str, str]
     ) -> AsyncIterator[Sandbox]:
-        async with self.inner.start(ws, env=env, pass_env=pass_env) as sandbox:
+        async with self.inner.start(ws, env=env) as sandbox:
             yield sandbox
         self.events.append("teardown")
         if self.teardown_error:
@@ -127,7 +127,7 @@ class FailsToStart:
 
     @asynccontextmanager
     async def start(
-        self, ws: Workspace, *, env: Mapping[str, str], pass_env: Sequence[str]
+        self, ws: Workspace, *, env: Mapping[str, str]
     ) -> AsyncIterator[Sandbox]:
         try:
             if self.hang:

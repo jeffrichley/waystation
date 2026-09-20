@@ -180,7 +180,7 @@ async def test_run_agent_primitive_raises_stage_error(host_repo: Path) -> None:
     try:
         backend = NoSandbox()
         agent = ScriptedAgent(outcome=None)
-        async with backend.start(ws, env={}, pass_env=()) as sandbox:
+        async with backend.start(ws, env={}) as sandbox:
             cmd = agent.command("p", {"type": "object"})
             with pytest.raises(StageError) as caught:
                 await run_agent(sandbox, agent, cmd, Answer)
@@ -233,7 +233,7 @@ async def test_capture_false_keeps_only_tails(host_repo: Path) -> None:
     ws = await prepare_workspace(host_repo)
     try:
         backend = NoSandbox()
-        async with backend.start(ws, env={}, pass_env=()) as sandbox:
+        async with backend.start(ws, env={}) as sandbox:
             # 100 short lines — over the 80-line tail limit
             script = "i=0; while [ $i -lt 100 ]; do echo line-$i; i=$((i+1)); done"
             from waystation.agents.scripted import _find_sh

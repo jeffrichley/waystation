@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import secrets
 import time
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -555,8 +556,13 @@ class RunSpec[OutcomeT]:
         workspace: Workspace,
     ) -> OutcomeT | None:
         """Sandbox, agent and collect stages; the sandbox is gone on return."""
+        # Read once for the tiers core owns, so the agent's environment and
+        # #29's per-run one come from one reading of the host, however long
+        # the sandbox takes to start. A backend reads once for its own tier,
+        # inside start(): the protocol hands it literals, not this (ADR-0034).
+        host_env = dict(os.environ)
         # start() is an async context manager — the bound covers enter only.
-        cm = self.sandbox.start(workspace, env={}, pass_env=())
+        cm = self.sandbox.start(workspace, env={})
 
         async def _enter() -> Sandbox:
             return await cm.__aenter__()
@@ -582,7 +588,7 @@ class RunSpec[OutcomeT]:
             record.log.on_sandbox_ready(ctx)
             await self.hook_registry.fire("sandbox_ready", "sandbox", ctx)
             try:
-                outcome = await self._run_agent(ctx, record, sandbox)
+                outcome = await self._run_agent(ctx, record, sandbox, host_env)
             except asyncio.CancelledError as cancel:
                 # The exec killed the agent's tree before this surfaced
                 # (ADR-0023), so what it left is collected like any stopped
@@ -596,7 +602,11 @@ class RunSpec[OutcomeT]:
             await self._teardown(cm, record)
 
     async def _run_agent(
-        self, ctx: RunContext, record: _RunRecord, sandbox: Sandbox
+        self,
+        ctx: RunContext,
+        record: _RunRecord,
+        sandbox: Sandbox,
+        host_env: Mapping[str, str],
     ) -> OutcomeT | None:
         """Agent stage: exec the provider's command, then ``agent_end``."""
         record.stage = "agent"
@@ -623,6 +633,7 @@ class RunSpec[OutcomeT]:
                     self.outcome_type,
                     timeouts=self.timeouts,
                     on_output=_on_output,
+                    host_env=host_env,
                 )
             except Exception as exc:
                 record.fail(_as_stage_error("agent", exc))

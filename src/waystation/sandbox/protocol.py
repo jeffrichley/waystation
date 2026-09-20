@@ -58,9 +58,12 @@ class SandboxBackend(Protocol):
         ws: Workspace,
         *,
         env: Mapping[str, str],
-        pass_env: Sequence[str],
     ) -> AbstractAsyncContextManager[Sandbox]:
         """The run's sandbox, which owns ``ws`` from here and removes it on exit.
+
+        ``env`` is literal values only: core has already resolved the tiers it
+        owns, and a backend merges them over its own spec's (ADR-0034). Build
+        that one with ``allowlisted_env``; do not read ``os.environ`` by hand.
 
         A start whose enter fails cleans up after itself, as ``async with``
         expects of any context manager: nothing exits a start that never

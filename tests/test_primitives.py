@@ -36,7 +36,7 @@ async def test_loop_composed_by_hand_lands_the_series(host_repo: Path) -> None:
     )
 
     workspace = await prepare_workspace(host_repo)
-    async with NoSandbox().start(workspace, env={}, pass_env=()) as sandbox:
+    async with NoSandbox().start(workspace, env={}) as sandbox:
         exit, outcome = await run_agent(
             sandbox, agent, agent.command("by hand", {}), Answer
         )
@@ -60,7 +60,7 @@ async def test_collect_refuses_a_nonlinear_series_rather_than_squashing_it_quiet
     agent = ShellAgent(MAKES_A_MERGE)
 
     workspace = await prepare_workspace(host_repo)
-    async with NoSandbox().start(workspace, env={}, pass_env=()) as sandbox:
+    async with NoSandbox().start(workspace, env={}) as sandbox:
         await run_agent(sandbox, agent, agent.command("merge", {}), Summary)
         with pytest.raises(StageError) as raised:
             await collect(sandbox, workspace)

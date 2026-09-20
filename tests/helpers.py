@@ -388,11 +388,11 @@ class GatedSandbox:
 
     @asynccontextmanager
     async def start(
-        self, ws: Workspace, *, env: Mapping[str, str], pass_env: Sequence[str]
+        self, ws: Workspace, *, env: Mapping[str, str]
     ) -> AsyncIterator[Sandbox]:
         if self.at == "start":
             await self.gate.hold()
-        async with self.inner.start(ws, env=env, pass_env=pass_env) as box:
+        async with self.inner.start(ws, env=env) as box:
             yield box if self.at != "collect" else _GatedBox(box, self.gate)
             if self.at == "teardown":
                 await self.gate.hold()
@@ -412,12 +412,18 @@ class ShellAgent:
 
     script: str
     shell: str | None = None
+    env: Mapping[str, str] = field(default_factory=dict)
+    pass_env: Sequence[str] = ()
 
     def preflight(self) -> None:
         return None
 
     def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
-        return AgentCommand(argv=(self.shell or sh(), "-c", self.script))
+        return AgentCommand(
+            argv=(self.shell or sh(), "-c", self.script),
+            env=dict(self.env),
+            pass_env=tuple(self.pass_env),
+        )
 
     def parse(self, line: str) -> Sequence[AgentEvent]:
         if line.startswith(OUTCOME):

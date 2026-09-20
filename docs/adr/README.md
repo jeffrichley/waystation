@@ -45,6 +45,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0011](0011-never-build-or-pull-images.md) Waystation never builds or pulls images | adding anything that would fetch or build an image |
 | [0012](0012-transport-option-copy-on-windows.md) Transport is a backend option, copy by default on Windows | touching how a workspace gets into a sandbox |
 | [0013](0013-clearenv-allowlist.md) The sandbox environment is cleared and allowlisted | passing an environment variable into a run |
+| [0034](0034-one-allowlist-two-owners.md) One allowlist, two owners: core resolves its tiers, a backend its own | building an environment for a run, or adding an env tier |
 | [0014](0014-ephemeral-sandboxes-rm-f.md) Sandboxes are ephemeral, `rm -f`, never auto-reaped | changing teardown or adding cleanup |
 | [0028](0028-copy-lands-in-a-workspace-the-image-owns.md) A copied workspace rides exec stdin as text, into a `/workspace` the image owns | copying a workspace in, or writing an image for `DockerSandbox` |
 | [0030](0030-captured-exec-output-keeps-every-byte.md) Captured exec output keeps every byte; what people read shows U+FFFD | decoding an exec's output, writing a backend's `exec`, or printing a patch |

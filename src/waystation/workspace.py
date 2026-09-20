@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from waystation._git import git_identity, run_git
+from waystation.errors import attributing
 
 __all__ = ["Workspace", "prepare_workspace", "remove_workspace"]
 
@@ -52,6 +53,9 @@ async def prepare_workspace(
 
     Cancelling it — a workspace bound firing, say — kills the clone's git and
     all it started, and removes the half-made workspace (ADR-0023, #57).
+
+    Raises ``StageError("workspace", ...)``: this is the workspace stage, so
+    this is the edge that attributes what host git failed at (ADR-0032).
     """
     host = Path(repo).resolve()
     if not host.exists():
@@ -59,29 +63,24 @@ async def prepare_workspace(
         raise FileNotFoundError(msg)
 
     rid = run_id if run_id is not None else secrets.token_hex(4)
-    resolved = await run_git(host, "rev-parse", "--verify", base, stage="workspace")
-    base_sha = resolved.stdout.strip()
+    with attributing("workspace"):
+        resolved = await run_git(host, "rev-parse", "--verify", base)
+        base_sha = resolved.stdout.strip()
 
-    name, email = await git_identity(host, stage="workspace")
+        name, email = await git_identity(host)
 
-    tmp = Path(tempfile.mkdtemp(prefix=f"waystation-{rid}-"))
-    try:
-        await run_git(
-            host,
-            "clone",
-            "--local",
-            "--no-checkout",
-            str(host),
-            str(tmp),
-            stage="workspace",
-        )
-        branch = f"waystation/{rid}"
-        await run_git(tmp, "checkout", "-B", branch, base_sha, stage="workspace")
-        await run_git(tmp, "config", "user.name", name, stage="workspace")
-        await run_git(tmp, "config", "user.email", email, stage="workspace")
-    except BaseException:
-        with contextlib.suppress(OSError):
-            remove_workspace(tmp)
-        raise
+        tmp = Path(tempfile.mkdtemp(prefix=f"waystation-{rid}-"))
+        try:
+            await run_git(
+                host, "clone", "--local", "--no-checkout", str(host), str(tmp)
+            )
+            branch = f"waystation/{rid}"
+            await run_git(tmp, "checkout", "-B", branch, base_sha)
+            await run_git(tmp, "config", "user.name", name)
+            await run_git(tmp, "config", "user.email", email)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                remove_workspace(tmp)
+            raise
 
     return Workspace(path=tmp, run_id=rid, base_sha=base_sha, host_repo=host)

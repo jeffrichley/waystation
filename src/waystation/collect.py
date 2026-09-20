@@ -44,12 +44,16 @@ class PatchSeries:
 
     @classmethod
     async def from_range(cls, repo: Path | str, base: str, ref: str) -> PatchSeries:
+        """The series ``base..ref`` already holds on the host.
+
+        Host-side and stage-less: this serves a landing and a resolver run
+        alike, so a failure leaves it unattributed and whoever runs it as a
+        stage names one (ADR-0032).
+        """
         host = Path(repo)
-        verified = await run_git(host, "rev-parse", "--verify", base, stage="collect")
+        verified = await run_git(host, "rev-parse", "--verify", base)
         base_sha = verified.stdout.strip()
-        result = await run_git(
-            host, "format-patch", "--stdout", f"{base_sha}..{ref}", stage="collect"
-        )
+        result = await run_git(host, "format-patch", "--stdout", f"{base_sha}..{ref}")
         return cls.from_format_patch(base_sha, result.stdout)
 
 

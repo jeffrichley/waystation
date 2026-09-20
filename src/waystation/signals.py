@@ -42,9 +42,6 @@ def handle_signals() -> None:
         RuntimeError: When called outside a running task, or off the main
             thread, where Python installs no signal handler at all.
     """
-    task = asyncio.current_task()
-    if task is None:
-        raise RuntimeError("handle_signals() must be called inside a task")
     if threading.current_thread() is not threading.main_thread():
         # `signal.signal` says only "signal only works in main thread of the
         # main interpreter", which is true and no help. Nothing is armed, so
@@ -54,6 +51,9 @@ def handle_signals() -> None:
             "signal handlers there and nowhere else. A flow running on another "
             "thread is cancelled by whatever runs it, not by a signal."
         )
+    task = asyncio.current_task()
+    if task is None:
+        raise RuntimeError("handle_signals() must be called inside a task")
     loop = task.get_loop()
 
     def _cancel(signum: int) -> None:

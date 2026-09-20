@@ -55,7 +55,7 @@ from waystation.results import (
 
 __all__ = ["Dashboard", "EventLog", "RunLog", "RunLogFiles"]
 
-logger = tagged_logger(PACKAGE)
+_logger = tagged_logger(PACKAGE)
 
 # How much of a prompt's first line an INFO line may carry. The rest of the
 # prompt never reaches a log record at all.
@@ -357,7 +357,7 @@ def _safely[**P](
         try:
             method(self, *args, **kwargs)
         except Exception as exc:
-            logger.error(
+            _logger.error(
                 "%s.%s failed and was ignored: %r",
                 type(self).__name__,
                 method.__name__,

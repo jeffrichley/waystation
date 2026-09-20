@@ -126,6 +126,8 @@ def test_it_says_so_off_the_main_thread() -> None:
     ``ValueError: signal only works in main thread of the main interpreter``
     — true, and no help at all about what to do instead.
     """
+    for handled in SHUTDOWN:
+        signal.signal(handled, _sentinel)
     raised: list[BaseException] = []
 
     def off_the_main_thread() -> None:
@@ -144,10 +146,11 @@ def test_it_says_so_off_the_main_thread() -> None:
     (error,) = raised
     assert isinstance(error, RuntimeError), error
     assert "main thread" in str(error)
-    # And it left the handlers alone: a signal still falls through to the
-    # default rather than to a half-armed flow (ADR-0017).
+    # And it armed nothing on the way out: the handlers installed before it
+    # are still there, so a signal goes where it was already going rather
+    # than to a half-armed flow (ADR-0017).
     for sig in SHUTDOWN:
-        assert signal.getsignal(sig) is not _sentinel
+        assert signal.getsignal(sig) is _sentinel
 
 
 @pytest.mark.unit

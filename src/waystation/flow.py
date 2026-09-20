@@ -56,7 +56,7 @@ from waystation.workspace import Workspace, prepare_workspace, remove_workspace
 
 __all__ = ["Flow", "RunSpec"]
 
-logger = tagged_logger("waystation")
+_logger = tagged_logger("waystation")
 
 
 def _assert_object_outcome(outcome_type: type[Any]) -> None:
@@ -76,7 +76,7 @@ def _assert_object_outcome(outcome_type: type[Any]) -> None:
 def _log_unreported(run_id: str, err: StageError, why: str) -> None:
     """Log a failure no result will carry, saying ``why`` it goes unreported."""
     exception = getattr(err.failure, "exception", None)
-    logger.error(
+    _logger.error(
         "run %s: %s failed %s: %r",
         run_id,
         err.stage,

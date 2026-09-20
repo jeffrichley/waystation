@@ -98,22 +98,10 @@ def test_every_module_curates_its_public_surface() -> None:
     """
     modules = sorted(p for p in (REPO / "src" / "waystation").rglob("*.py"))
     missing = [
-        p.relative_to(REPO).as_posix() for p in modules if not _has_dunder_all(p)
+        p.relative_to(REPO).as_posix() for p in modules if not _exported_names(p)
     ]
 
     assert not missing, (
         f"no __all__: {missing}. Curate the names the module means to export; "
         "everything else is underscore-private (CLAUDE.md)."
-    )
-
-
-def _has_dunder_all(path: Path) -> bool:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    return any(
-        isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "__all__"
-            for target in node.targets
-        )
-        for node in tree.body
     )

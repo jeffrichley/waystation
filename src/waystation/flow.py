@@ -284,13 +284,13 @@ class Flow:
         _assert_object_outcome(outcome)
         return RunSpec(
             repo=Path(self.repo),
-            agent=self.agent,
-            sandbox=self.sandbox,
-            base=self.base,
+            provider=self.agent,
+            backend=self.sandbox,
+            base_ref=self.base,
             prompt=prompt,
             outcome_type=outcome,
-            timeouts=self.timeouts,
-            salvage=self.salvage,
+            bounds=self.timeouts,
+            salvaging=self.salvage,
             integration=self.integration,
             hook_registry=HookRegistry(tuple(self._hook_entries)),
         )
@@ -298,18 +298,96 @@ class Flow:
 
 @dataclass(frozen=True, slots=True)
 class RunSpec[OutcomeT]:
-    """Frozen description of a run; awaiting it performs the run."""
+    """Frozen description of a run; awaiting it performs the run.
+
+    Build one with ``flow.run(prompt)``, never by calling this: a spec that
+    grows a field later is then not a breaking change (ADR-0031). Chain the
+    builders to describe the run — each returns a *new* spec, so the one you
+    started from is unchanged (ADR-0022)::
+
+        spec = flow.run("fix the flake").agent(ClaudeCode()).base("main")
+
+    The builders own the bare names, and the values they set are stored under
+    the words ``CONTEXT.md`` uses for them. Every attribute below is public
+    and read-only — a scheduler may group a batch by ``spec.backend``, and
+    nothing may write one:
+
+    Attributes:
+        repo: The host repo this run targets.
+        provider: The agent provider that will run — ``.agent()`` sets it.
+        backend: The sandbox backend it runs in — ``.sandbox()`` sets it.
+        base_ref: The ref the workspace starts from — ``.base()`` sets it.
+        prompt: The instructions handed to the agent, or a path to them.
+        outcome_type: The object-shaped type the agent reports back.
+        bounds: The per-stage ``Timeouts`` — ``.timeouts()`` sets them.
+        salvaging: Whether work left uncommitted is salvaged —
+            ``.salvage()`` sets it.
+        integration: Where the series lands, or ``None`` to land nowhere —
+            ``.integrate()`` sets it.
+        hook_registry: The hooks that fire — ``.hooks()`` and ``.on_<hook>()``
+            append to it.
+    """
 
     repo: Path
-    agent: AgentProvider
-    sandbox: SandboxBackend
-    base: str
+    provider: AgentProvider
+    backend: SandboxBackend
+    base_ref: str
     prompt: str | Path
     outcome_type: type[OutcomeT]
-    timeouts: Timeouts
-    salvage: bool = True
+    bounds: Timeouts
+    salvaging: bool = True
     integration: IntegrationStrategy | None = None
     hook_registry: HookRegistry = field(default_factory=HookRegistry)
+
+    # Builders. Each replaces the value it names and returns a new spec, the
+    # way ``dataclasses.replace`` does; the hook builders below append instead
+    # (ADR-0022, ADR-0031).
+
+    def agent(self, provider: AgentProvider) -> RunSpec[OutcomeT]:
+        """Replace the agent provider this run executes.
+
+        Args:
+            provider: The provider to run instead of the flow's.
+
+        Returns:
+            A new spec; this one is unchanged.
+        """
+        return replace(self, provider=provider)
+
+    def sandbox(self, backend: SandboxBackend) -> RunSpec[OutcomeT]:
+        """Replace the sandbox backend this run executes in.
+
+        Args:
+            backend: The backend to run in instead of the flow's.
+
+        Returns:
+            A new spec; this one is unchanged.
+        """
+        return replace(self, backend=backend)
+
+    def base(self, ref: str) -> RunSpec[OutcomeT]:
+        """Replace the ref this run's workspace starts from.
+
+        Args:
+            ref: The base ref, resolved to a sha when the run starts, so a
+                batch queued behind a slot picks up where the repo is then.
+
+        Returns:
+            A new spec; this one is unchanged.
+        """
+        return replace(self, base_ref=ref)
+
+    def salvage(self, salvaging: bool = True) -> RunSpec[OutcomeT]:
+        """Say whether work the agent left uncommitted is salvaged.
+
+        Args:
+            salvaging: ``True`` to commit what the agent left as a final
+                salvage commit on the series; ``False`` to leave it behind.
+
+        Returns:
+            A new spec; this one is unchanged.
+        """
+        return replace(self, salvaging=salvaging)
 
     def integrate(
         self,
@@ -317,7 +395,18 @@ class RunSpec[OutcomeT]:
         *,
         mechanism: Literal["apply", "merge"] = "apply",
     ) -> RunSpec[OutcomeT]:
-        """Set, replace, or clear this run's integration strategy."""
+        """Set, replace, or clear this run's integration strategy.
+
+        Args:
+            target: A branch name, any ``IntegrationStrategy``, or ``None``
+                to land nowhere and keep the series instead.
+            mechanism: ``"apply"`` replays the series commit by commit;
+                ``"merge"`` lands it in one step. Ignored unless ``target``
+                is a branch name.
+
+        Returns:
+            A new spec; this one is unchanged.
+        """
         if target is None:
             strategy: IntegrationStrategy | None = None
         elif isinstance(target, str):
@@ -326,13 +415,21 @@ class RunSpec[OutcomeT]:
             strategy = target
         return replace(self, integration=strategy)
 
-    def with_timeouts(self, timeouts: Timeouts) -> RunSpec[OutcomeT]:
-        """Replace this run's timeouts (does not merge with the Flow default).
+    def timeouts(self, bounds: Timeouts) -> RunSpec[OutcomeT]:
+        """Replace this run's per-stage bounds.
 
-        Named ``with_timeouts`` rather than ``timeouts`` so it does not shadow
-        the ``timeouts`` field (issue #26's ``.timeouts(...)`` spelling).
+        The whole value is replaced, not merged with the flow's default: a
+        ``Timeouts`` says what every stage's bound is, so merging would leave
+        a bound set somewhere the caller cannot see.
+
+        Args:
+            bounds: The bounds to run under. Every field defaults to
+                unbounded (ADR-0017).
+
+        Returns:
+            A new spec; this one is unchanged.
         """
-        return replace(self, timeouts=timeouts)
+        return replace(self, bounds=bounds)
 
     # Per-run hooks: each returns a new RunSpec whose hooks fire after the
     # flow's. Bundles are any objects with a subset of the ``on_<hook>`` methods.
@@ -477,7 +574,7 @@ class RunSpec[OutcomeT]:
         comes from ``run``; what is left here is this orchestrator's policy
         (ADR-0032).
         """
-        async with stages(self.timeouts) as run:
+        async with stages(self.bounds) as run:
             record.elapsed = run.elapsed
             try:
                 return await self._lifecycle(run, ctx, state, record)
@@ -537,7 +634,7 @@ class RunSpec[OutcomeT]:
         record.stage = "workspace"
         workspace = await run.stage(
             "workspace",
-            prepare_workspace(self.repo, base=self.base, run_id=record.run_id),
+            prepare_workspace(self.repo, base=self.base_ref, run_id=record.run_id),
         )
         record.base_sha = state.base_sha = workspace.base_sha
         try:
@@ -569,7 +666,7 @@ class RunSpec[OutcomeT]:
         # this orchestrator holds "a teardown failure never masks the result"
         # (ADR-0016), which is policy the stage runner leaves to it, so the
         # two halves are paired here instead (ADR-0032).
-        cm = self.sandbox.start(workspace, env={})
+        cm = self.backend.start(workspace, env={})
         record.stage = "sandbox"
         try:
             sandbox = await run.stage("sandbox", cm.__aenter__())
@@ -614,7 +711,7 @@ class RunSpec[OutcomeT]:
         prompt_text = ctx.prompt
         schema = TypeAdapter(self.outcome_type).json_schema()
         try:
-            command = self.agent.command(prompt_text, schema)
+            command = self.provider.command(prompt_text, schema)
         except Exception as exc:
             raise StageError("agent", Errored(exception=exc)) from exc
 
@@ -630,10 +727,10 @@ class RunSpec[OutcomeT]:
                 "agent",
                 run_agent(
                     sandbox,
-                    self.agent,
+                    self.provider,
                     command,
                     self.outcome_type,
-                    timeouts=self.timeouts,
+                    timeouts=self.bounds,
                     on_output=_on_output,
                     host_env=host_env,
                 ),
@@ -669,7 +766,7 @@ class RunSpec[OutcomeT]:
             # ``anyway``: a run cancelled mid-agent still collects what the
             # agent committed, which is the work its preservation branch keeps.
             series = await run.anyway(
-                "collect", collect(sandbox, workspace, salvage=self.salvage)
+                "collect", collect(sandbox, workspace, salvage=self.salvaging)
             )
             record.collected(series)
         except Exception as exc:

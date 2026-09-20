@@ -88,9 +88,9 @@ def test_flow_timeouts_replaced_per_run(host_repo: Path) -> None:
         sandbox=NoSandbox(),
         timeouts=Timeouts(agent_wall=60.0),
     )
-    spec = flow.run("p", outcome=Answer).with_timeouts(Timeouts(agent_silence=5.0))
-    assert spec.timeouts.agent_silence == 5.0
-    assert spec.timeouts.agent_wall is None
+    spec = flow.run("p", outcome=Answer).timeouts(Timeouts(agent_silence=5.0))
+    assert spec.bounds.agent_silence == 5.0
+    assert spec.bounds.agent_wall is None
     assert flow.timeouts.agent_wall == 60.0
 
 

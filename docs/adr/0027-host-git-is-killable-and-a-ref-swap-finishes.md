@@ -8,11 +8,11 @@ The workspace and integrate stages run host git as subprocesses owned by the tas
 
 Inside a run, what cancels a stage's git is its bound. The run's own cancellation, a signal or fan-out leaving early, waits for the stage instead (ADR-0017). Only a direct caller of a primitive cancels git outright.
 
-The one git nothing kills is `update-ref`: `GitRepo.git` runs it as a commit point. Once started, it finishes.
+The one git nothing kills is `update-ref`: `GitRepo.run` runs it as a commit point, reading the subcommand past git's own options so `-c key=value update-ref` is one too. Once started, it finishes. (`GitRepo.git` goes through `run`, so it carries the same guarantee; ADR-0033 made `run` the one door.)
 - A cancellation that arrives meanwhile waits for it, then is raised. It is never spent.
 - A stage's bound that runs out meanwhile waits for it before firing. If the stage's work finished in that time, the finished work is the result, not `TimedOut`.
 
-A user's own strategy moves its target through the same `GitRepo.git`, so it gets the same guarantee as the shipped `Integration`. There is no privileged path.
+A user's own strategy moves its target through the same `GitRepo`, so it gets the same guarantee as the shipped `Integration`. There is no privileged path.
 
 Why: a thread cannot be cancelled. With the landing engine in `asyncio.to_thread`, an integrate bound only stopped waiting. The run reported `TimedOut` and preserved a series the thread then landed, and the per-repo lock was free while it still wrote. A workspace bound left the clone running and its temp dir behind.
 

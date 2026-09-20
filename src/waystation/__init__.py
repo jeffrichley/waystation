@@ -20,9 +20,11 @@ from waystation.flow import Flow, RunSpec
 from waystation.hooks import HookBundle, RunContext
 from waystation.integration import (
     GitRepo,
+    GitResult,
     Integration,
     IntegrationStrategy,
     integrate,
+    preserve_series,
 )
 from waystation.observability import configure_logging
 from waystation.observers import Dashboard, EventLog, RunLogFiles
@@ -75,6 +77,7 @@ __all__ = [
     "Failure",
     "Flow",
     "GitRepo",
+    "GitResult",
     "HookBundle",
     "HookName",
     "HookRaised",
@@ -114,6 +117,7 @@ __all__ = [
     "handle_signals",
     "integrate",
     "outcome_instructions",
+    "preserve_series",
     "prepare_workspace",
     "run_agent",
 ]

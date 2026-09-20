@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import tempfile
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
+from weakref import WeakKeyDictionary, WeakValueDictionary
 
 from waystation._cancellation import committed
-from waystation._git import decode, encode, require_host_git, run_git
+from waystation._git import decode, encode, git_identity, run_git
 from waystation.collect import PatchSeries
 from waystation.errors import StageError
 from waystation.results import (
@@ -28,22 +31,98 @@ __all__ = [
     "Conflict",
     "FailedPatch",
     "GitRepo",
+    "GitResult",
     "Integration",
     "IntegrationReport",
     "IntegrationStrategy",
     "PatchSeries",
     "integrate",
+    "preserve_series",
 ]
 
 Mechanism = Literal["apply", "merge"]
 
-_locks: dict[str, asyncio.Lock] = {}
+# One lock per git common dir, per event loop. An asyncio.Lock binds to the
+# loop that first contends for it, so a process running a second loop — a
+# service calling asyncio.run per request — would fail its next contended
+# landing; keying by the running loop gives each one its own table (ADR-0033).
+#
+# Both halves are weak on purpose. A Lock caches the loop it bound to, so a
+# table holding its locks strongly would hold the loop through its own weak
+# key and nothing would ever be freed. Weak values drop a lock the moment no
+# landing is using it, which is exactly when a fresh one would do; whoever
+# holds or waits for one keeps it alive meanwhile.
+_locks: WeakKeyDictionary[
+    asyncio.AbstractEventLoop, WeakValueDictionary[str, asyncio.Lock]
+] = WeakKeyDictionary()
+
+
+@dataclass(frozen=True, slots=True)
+class _Holding:
+    """The repos ``task`` holds, so an entry point nested in one is reentrant.
+
+    The task is part of it because a child task inherits this context: a
+    strategy that spawns its own landing must wait for the lock, not walk
+    past it believing its parent's hold is its own.
+    """
+
+    task: asyncio.Task[Any] | None
+    keys: frozenset[str]
+
+
+_held: ContextVar[_Holding | None] = ContextVar("waystation_landing", default=None)
 _ZERO = "0" * 40
 
 
 @dataclass(frozen=True, slots=True)
+class GitResult:
+    """What a git command left behind: its exit code and both its streams.
+
+    ``stdout`` and ``stderr`` are text decoded with surrogateescape, never
+    newline-translated — a patch through a text pipe on Windows comes out
+    changed on every line (ADR-0030).
+    """
+
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
+# Git commands that move a ref. Once one has started it runs to its end, and a
+# cancellation is raised after it, so a target is moved or left alone and never
+# half-moved. A table here, never a flag a call site can forget (ADR-0027).
+_COMMIT_POINTS = frozenset({"update-ref"})
+
+# Git's own options, which come before the subcommand; each takes a value.
+_GIT_OPTIONS_WITH_VALUE = frozenset(
+    {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+)
+
+
+def _subcommand(args: tuple[str, ...]) -> str | None:
+    """The git subcommand in ``args``, past git's own options.
+
+    ``repo.git("-c", alias, "update-ref", ...)`` is a shape callers write,
+    and reading only the first argument would lose its commit point — the
+    half-moved ref ADR-0027 exists to prevent.
+    """
+    rest = iter(args)
+    for arg in rest:
+        if arg in _GIT_OPTIONS_WITH_VALUE:
+            next(rest, None)  # skip its value
+        elif not arg.startswith("-"):
+            return arg
+    return None
+
+
+@dataclass(frozen=True, slots=True)
 class GitRepo:
-    """Host repo handle: path, common dir, and a git runner."""
+    """Host repo handle: path, common dir, and a git runner.
+
+    This is the only way into host git, for the shipped strategy and a user's
+    alike: ``git`` for the calls that want a sha and raise, ``run`` for the
+    calls that read an exit code or feed something in (ADR-0033).
+    """
 
     path: Path
     common_dir: Path
@@ -51,30 +130,59 @@ class GitRepo:
     @classmethod
     async def open(cls, repo: Path | str) -> GitRepo:
         path = Path(repo).resolve()
-        common_raw = await _repo_git(path, "rev-parse", "--git-common-dir")
-        common = Path(common_raw)
+        common_raw = await _repo_git(path, "rev-parse", "--git-common-dir", check=True)
+        common = Path(common_raw.stdout.strip())
         if not common.is_absolute():
             common = (path / common).resolve()
         return cls(path=path, common_dir=common)
 
     async def git(self, *args: str, env: Mapping[str, str] | None = None) -> str:
-        """Run git in this repo; its stdout, stripped.
+        """Run git in this repo; its stdout, stripped. Raises if git failed.
 
-        Cancelling it kills git and all it started (ADR-0023) — except
-        ``update-ref``, which moves a ref: once started it finishes, and the
-        cancellation is raised after it, while a stage's bound waits for it
-        to end before firing (ADR-0027).
+        The ergonomic call, for the many that want a sha. Reach for ``run``
+        when the exit code is the answer, or something goes in on stdin.
         """
-        run = _repo_git(self.path, *args, env=env)
-        if args[:1] == ("update-ref",):
-            return await committed(run)
-        return await run
+        return (await self.run(*args, check=True, env=env)).stdout.strip()
+
+    async def run(
+        self,
+        *args: str,
+        check: bool = False,
+        stdin: bytes | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> GitResult:
+        """Run git in this repo and hand back its exit code and both streams.
+
+        ``check=True`` raises ``StageError`` on a non-zero exit instead, as
+        ``git`` does. ``stdin`` is bytes, and the streams come back as text
+        that was never newline-translated: a patch survives either way on a
+        Windows host, which a text-mode pipe would not (ADR-0030).
+
+        Cancelling it kills git and all it started (ADR-0023) — except a
+        command that moves a ref, which finishes first, the cancellation
+        raised after it (ADR-0027).
+        """
+        running = _repo_git(self.path, *args, check=check, stdin=stdin, env=env)
+        if _subcommand(args) in _COMMIT_POINTS:
+            return await committed(running)
+        return await running
 
 
 async def _repo_git(
-    repo: Path, *args: str, env: Mapping[str, str] | None = None
-) -> str:
-    return (await run_git(repo, *args, stage="integrate", env=env)).stdout.strip()
+    repo: Path,
+    *args: str,
+    check: bool,
+    stdin: bytes | None = None,
+    env: Mapping[str, str] | None = None,
+) -> GitResult:
+    # stage="integrate" whoever runs it: #70 moves attribution to each
+    # primitive's edge, and the two tickets must not rewrite the same lines.
+    done = await run_git(
+        repo, *args, stage="integrate", check=check, stdin=stdin, env=env
+    )
+    # Never stripped: `merge-tree -z` splits its output on NULs, and the
+    # last field is empty. `git` strips for the many callers that want a sha.
+    return GitResult(exit_code=done.returncode, stdout=done.stdout, stderr=done.stderr)
 
 
 @runtime_checkable
@@ -84,13 +192,39 @@ class IntegrationStrategy(Protocol):
     ) -> IntegrationReport: ...
 
 
-def _lock_for(common_dir: Path) -> asyncio.Lock:
+@contextlib.asynccontextmanager
+async def _serialized(common_dir: Path) -> AsyncIterator[None]:
+    """Hold this repo's lock for the block; reentrant within one task.
+
+    Reentrancy is not politeness: with serialization at the entry points, a
+    strategy preserving a series it could not land calls one entry point from
+    inside another, and would otherwise hang with no error (ADR-0033).
+    """
     key = str(common_dir.resolve())
-    lock = _locks.get(key)
+    running = asyncio.current_task()
+    holding = _held.get()
+    if holding is None or holding.task is not running:
+        # A child task inherits this context, and someone else's hold is not
+        # this task's: it waits its turn like any other landing.
+        holding = _Holding(running, frozenset())
+    if key in holding.keys:
+        yield
+        return
+    per_loop = _locks.setdefault(asyncio.get_running_loop(), WeakValueDictionary())
+    lock = per_loop.get(key)
     if lock is None:
-        lock = asyncio.Lock()
-        _locks[key] = lock
-    return lock
+        lock = per_loop[key] = asyncio.Lock()
+    # `lock` stays a local for the whole block: it is what keeps this repo's
+    # entry in the weak table alive while anyone holds or waits for it.
+    #
+    # A bound or cancellation kills the git under way before it leaves the
+    # lock, so the lock is never free while a write is still going on (#57).
+    async with lock:
+        token = _held.set(_Holding(running, holding.keys | {key}))
+        try:
+            yield
+        finally:
+            _held.reset(token)
 
 
 async def integrate(
@@ -100,16 +234,17 @@ async def integrate(
 ) -> IntegrationReport:
     """Land ``series`` with ``strategy``, serialized per git common dir.
 
+    This and ``preserve_series`` are the serialized ways in. Calling a
+    strategy's own ``integrate()`` is not: it is like running git yourself,
+    and two of them against one repo race each other (ADR-0005).
+
     Cancelling it kills the strategy's git and all it started (ADR-0023),
     except an ``update-ref`` already under way: that finishes first, so the
     target is moved or not, never half-moved, and the cancellation is still
     raised (ADR-0027).
     """
     git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
-    await require_host_git()
-    # A bound or cancellation kills the strategy's git before it leaves the
-    # lock, so the lock is never free while a landing is still writing (#57).
-    async with _lock_for(git_repo.common_dir):
+    async with _serialized(git_repo.common_dir):
         return await strategy.integrate(git_repo, series)
 
 
@@ -123,11 +258,15 @@ async def preserve_series(
 
     Landing at the base can never conflict. Leaves the host working tree,
     index, and HEAD untouched. Returns ``branch``.
+
+    Serialized with landings on the same repo: it writes objects and a ref
+    into the host, so it takes the same lock ``integrate`` does (ADR-0033).
     """
     if series.patches:
         git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
-        commits = await _materialize_at_base(git_repo, series)
-        await git_repo.git("update-ref", f"refs/heads/{branch}", commits[-1])
+        async with _serialized(git_repo.common_dir):
+            commits = await _materialize_at_base(git_repo, series)
+            await git_repo.git("update-ref", f"refs/heads/{branch}", commits[-1])
     return branch
 
 
@@ -226,16 +365,8 @@ async def _read_ref(repo: GitRepo, ref: str) -> str | None:
 
     Always a full ref name: resolving a bare one lets a tag of the same name win.
     """
-    shown = await run_git(
-        repo.path,
-        "rev-parse",
-        "--verify",
-        "--quiet",
-        ref,
-        stage="integrate",
-        check=False,
-    )
-    return shown.stdout.strip() if shown.returncode == 0 else None
+    shown = await repo.run("rev-parse", "--verify", "--quiet", ref)
+    return shown.stdout.strip() if shown.exit_code == 0 else None
 
 
 async def _worktree_holding(repo: GitRepo, ref: str) -> str | None:
@@ -296,26 +427,7 @@ def _read_state(path: Path) -> str | None:
 
 
 async def _committer(repo: GitRepo) -> tuple[str, str]:
-    try:
-        name = await repo.git("config", "--get", "user.name")
-        email = await repo.git("config", "--get", "user.email")
-    except StageError as exc:
-        raise StageError(
-            "integrate",
-            Refused(
-                reason="no_git_identity",
-                detail="host repo has no git identity (user.name / user.email)",
-            ),
-        ) from exc
-    if not name or not email:
-        raise StageError(
-            "integrate",
-            Refused(
-                reason="no_git_identity",
-                detail="host repo has no git identity (user.name / user.email)",
-            ),
-        )
-    return name, email
+    return await git_identity(repo.path, stage="integrate")
 
 
 async def _materialize_at_base(repo: GitRepo, series: PatchSeries) -> list[str]:
@@ -359,13 +471,12 @@ async def _commit_patch(
     with tempfile.TemporaryDirectory(prefix="waystation-patch-") as tmp:
         msg_file = Path(tmp) / "MSG"
         diff_file = Path(tmp) / "DIFF"
-        mail = await run_git(
-            repo.path,
+        mail = await repo.run(
             "mailinfo",
             str(msg_file),
             str(diff_file),
-            stage="integrate",
             stdin=encode(patch_text),
+            check=True,
         )
         author_name, author_email, subject = _parse_mailinfo(mail.stdout)
         subject = _SUBJECT_PATCH_PREFIX.sub("", subject).strip() or "commit"
@@ -525,8 +636,7 @@ async def _merge_tree(
 
     ``-z`` keeps a path with a space or a quote exactly as git stored it.
     """
-    merged = await run_git(
-        repo.path,
+    args = (
         "merge-tree",
         "--write-tree",
         "--name-only",
@@ -535,21 +645,22 @@ async def _merge_tree(
         f"--merge-base={merge_base}",
         tip,
         other,
-        stage="integrate",
-        check=False,
     )
+    # `run`, not `git`: the exit code is the answer, and stripping stdout
+    # would eat the NULs `-z` splits on.
+    merged = await repo.run(*args)
     tree, *paths = merged.stdout.split("\0")
-    if merged.returncode == 0:
+    if merged.exit_code == 0:
         return tree
     # Exit 1 means conflicts only when a tree came with it; git also exits 1,
     # with nothing on stdout, when it cannot read its inputs.
-    if merged.returncode == 1 and tree:
+    if merged.exit_code == 1 and tree:
         return Conflict(paths=tuple(path for path in paths if path))
     raise StageError(
         "integrate",
         CommandFailed(
-            argv=tuple(merged.args),
-            exit_code=merged.returncode,
+            argv=("git", "-C", str(repo.path), *args),
+            exit_code=merged.exit_code,
             stderr_tail=bound_tail(merged.stderr),
         ),
     )

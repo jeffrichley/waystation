@@ -17,7 +17,7 @@ from pathlib import Path
 from waystation._cancellation import run_to_end
 from waystation.errors import PreflightError, StageError
 from waystation.observability import GIT, log_argv
-from waystation.results import CommandFailed, Errored, Stage
+from waystation.results import CommandFailed, Errored, Refused, Stage
 from waystation.sandbox.processes import host_processes
 from waystation.tails import bound_tail
 
@@ -101,6 +101,23 @@ async def config_value(repo: Path, key: str, *, stage: Stage) -> str:
     """``repo``'s effective ``key`` from git config, or ``""`` when it has none."""
     shown = await run_git(repo, "config", "--get", key, stage=stage, check=False)
     return shown.stdout.strip() if shown.returncode == 0 else ""
+
+
+_NO_IDENTITY = "host repo has no git identity (user.name / user.email)"
+
+
+async def git_identity(repo: Path, *, stage: Stage) -> tuple[str, str]:
+    """``repo``'s ``user.name`` and ``user.email``; refuses unless it has both.
+
+    The one identity check: a workspace clone and a landing both commit as
+    the host's user, and a repo missing either is refused the same way
+    wherever it is noticed (ADR-0016).
+    """
+    name = await config_value(repo, "user.name", stage=stage)
+    email = await config_value(repo, "user.email", stage=stage)
+    if not name or not email:
+        raise StageError(stage, Refused(reason="no_git_identity", detail=_NO_IDENTITY))
+    return name, email
 
 
 # Landing replays each commit with `git merge-tree --merge-base`, which older

@@ -12,9 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from waystation._git import config_value, run_git
-from waystation.errors import StageError
-from waystation.results import Refused
+from waystation._git import git_identity, run_git
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,16 +60,7 @@ async def prepare_workspace(
     resolved = await run_git(host, "rev-parse", "--verify", base, stage="workspace")
     base_sha = resolved.stdout.strip()
 
-    name = await config_value(host, "user.name", stage="workspace")
-    email = await config_value(host, "user.email", stage="workspace")
-    if not name or not email:
-        raise StageError(
-            "workspace",
-            Refused(
-                reason="no_git_identity",
-                detail="host repo has no git identity (user.name / user.email)",
-            ),
-        )
+    name, email = await git_identity(host, stage="workspace")
 
     tmp = Path(tempfile.mkdtemp(prefix=f"waystation-{rid}-"))
     try:

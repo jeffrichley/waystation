@@ -32,7 +32,7 @@ class StageError(WaystationError):
 
     A stage that made something before it failed hands it over on the error,
     so the caller loses nothing: ``agent`` is the agent's exit, and ``series``
-    the patches collect cut before refusing to hand them back (ADR-0006).
+    the patches collect cut before refusing them (ADR-0006, ADR-0016).
     """
 
     def __init__(

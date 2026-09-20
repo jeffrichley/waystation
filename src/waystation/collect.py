@@ -86,7 +86,7 @@ async def _sandbox_git(
     return result.exit_code, result.stdout, result.stderr
 
 
-_NONLINEAR = "series contains merge commits or HEAD does not descend from base"
+_NONLINEAR_DETAIL = "series contains merge commits or HEAD does not descend from base"
 
 
 async def collect(
@@ -115,7 +115,7 @@ async def collect(
         squashed = await _squash_series(sandbox, workspace, salvaged=salvaged)
         raise StageError(
             "collect",
-            Refused(reason="nonlinear_series", detail=_NONLINEAR),
+            Refused(reason="nonlinear_series", detail=_NONLINEAR_DETAIL),
             series=squashed,
         )
     return PatchSeries.from_format_patch(base, patches, salvaged=salvaged)

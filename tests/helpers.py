@@ -42,13 +42,13 @@ from waystation.agents import (
 from waystation.sandbox.protocol import LineCallback
 
 __all__ = [
+    "MAKES_A_MERGE",
     "OK_OUTCOME",
     "OK_OUTCOME_LINE",
     "OUTCOME",
     "PROMPT",
     "RECORDED_CLAUDE",
     "USAGE",
-    "MAKES_A_MERGE",
     "WORKS_UNTIL_STOPPED",
     "Gate",
     "GatedSandbox",

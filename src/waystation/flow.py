@@ -648,11 +648,10 @@ class RunSpec[OutcomeT]:
 
         with record.entering("collect"):
             try:
-                record.collected(
-                    await self._bounded(
-                        record, "collect", "collect", self.timeouts.collect, _collected
-                    )
+                series: PatchSeries = await self._bounded(
+                    record, "collect", "collect", self.timeouts.collect, _collected
                 )
+                record.collected(series)
             except Exception as exc:
                 err = _as_stage_error("collect", exc)
                 # A stage hands over what it made before it failed, and collect

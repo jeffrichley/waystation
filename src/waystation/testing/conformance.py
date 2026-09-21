@@ -121,6 +121,22 @@ class SandboxConformance:
         assert prefix.stdout.strip() == ""
         assert branch.stdout.strip() == workspace.branch
 
+    async def test_the_agent_sees_the_refs_that_travel_and_no_others(
+        self, sandbox: Sandbox, workspace: Workspace
+    ) -> None:
+        """Whichever transport got the workspace here, the repository is the same.
+
+        A copy arrives as a bundle of ``refs``; a bind is the host-side
+        workspace itself, which a ``clone --local`` would otherwise have
+        filled with the host's other branches, its tags and an ``origin``
+        pointing back at it (#76).
+        """
+        listed = await sandbox.exec(["git", "for-each-ref", "--format=%(refname)"])
+        remotes = await sandbox.exec(["git", "remote"])
+
+        assert listed.stdout.split() == list(workspace.refs)
+        assert remotes.stdout.strip() == ""
+
     async def test_the_sandbox_says_which_shell_it_has(self, sandbox: Sandbox) -> None:
         """ADR-0036: a caller with a script never has to know the sandbox's OS.
 

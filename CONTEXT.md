@@ -124,3 +124,7 @@ _Avoid_: pipeline, executor, driver
 **Hook**:
 A user-supplied function invoked at a named point of a run — a stage boundary, or each line the agent emits.
 _Avoid_: callback, listener
+
+**Run channel**:
+The `waystation.run` log records: one per lifecycle event of a run, each naming its `event`. The way an observer sees the two events hooks deliberately don't carry — the agent starting, and a cancellation — and the reason a built-in observer is a peer of a user's bundle rather than a privileged one. An adapter of the user's own joins it with `run_logger`.
+_Avoid_: event stream (that is `EventLog`'s JSONL), log output

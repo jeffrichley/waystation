@@ -24,6 +24,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | Fixture | Gives you |
 | --- | --- |
 | `host_repo` | a throwaway host repo: git identity, one commit on HEAD |
+| `image` | the docker tier's image, proved ready — request it in any `docker`-marked test instead of naming `TEST_IMAGE` yourself; it fails with `just test-image` in the message when the image is absent, and asks docker twice when the first lookup could not settle |
 | `clean_logging` | the `waystation` loggers put back afterwards: the package logger's handlers and `propagate`, and every level in the subtree — request it in any test that calls `configure_logging`, tunes a logger, or opens a `RunLogFiles` |
 | `isolated_tempdir` | autouse — every test's temp dir is its own, so a workspace never lands in the host's |
 | `tmp_path` | pytest's own; the root the two above are built on |
@@ -38,6 +39,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `host_state(repo)` | the host's refs, HEAD, index and tree in one value — compare before and after to prove something left the host untouched |
 | `init_host_repo(root)` | what `host_repo` is built from — call it directly only for a *second* repo, or one outside `tmp_path` |
 | `sh()` | the POSIX sh on this host (Git Bash on Windows) |
+| `TEST_IMAGE` | the name of the docker tier's image — for a test that must name it outside the `image` fixture, as a preflight test does |
 | `branches(repo, pattern)` | the short names of the branches matching `pattern` — `"waystation/*"` for the preservation branches a run kept |
 | `printf_bytes(path, data)` | a sh command writing `data` to `path` byte for byte, as octal escapes — so a CR or a non-UTF-8 byte reaches the file, not just the command line |
 | `subjects(repo, revisions)` | the commit subjects in a range like `HEAD..waystation/<id>`, newest first — what a preserved or landed series holds |
@@ -62,6 +64,19 @@ Test modules import helpers as a top-level module — `from helpers import git` 
 **Keep the tables above current.** `test_docs.py` fails if a shared fixture or helper isn't listed here, so adding one means adding its row — the table is what the next agent reads instead of copy-pasting yours.
 
 **Hoist on the second use, not the third.** A fixture or helper used by one module stays in that module. The moment a second module needs it, move it — to `conftest.py` if it's a fixture, `helpers.py` if it's a plain function. And when you catch yourself about to copy setup out of another test module, that *is* the second use: hoist it instead, in the same commit, rather than leaving a third copy for someone else to find.
+
+## Testing a sandbox backend
+
+`SandboxConformance` in `waystation.testing` is the exec contract as tests, and
+it ships so that a backend waystation doesn't ship runs the same ones
+(ADR-0035). Subclass it with a `backend` fixture; `test_sandbox_conformance.py`
+does that three times, for `NoSandbox`, `DockerSandbox` and `ThinHost` — the
+third being a backend built from the public surface alone, alone in
+`thin_backend.py` so a guard test can read its imports.
+
+**A contract every backend keeps goes in the suite, not in one backend's
+module.** A test in `test_docker_sandbox.py` should be about docker: the image's
+user, the transports, a container's labels and teardown.
 
 ## Idiom
 

@@ -22,6 +22,7 @@ from helpers import (
     OK_OUTCOME,
     OK_OUTCOME_LINE,
     PROMPT,
+    TEST_IMAGE,
     ShellAgent,
     a_run,
     awaited,
@@ -55,7 +56,6 @@ from waystation.clock import ManualClock, use_clock
 from waystation.sandbox import clone_in
 from waystation.sandbox._docker_plans import plan_exec, plan_kill
 
-TEST_IMAGE = "waystation-test"
 MISSING_IMAGE = "waystation-test-missing:never"
 
 Chosen = Literal["copy", "bind"]
@@ -72,38 +72,6 @@ TRANSPORTS = [
         ),
     ),
 ]
-
-
-@pytest.fixture
-async def image() -> str:
-    """The docker tier's image, ready to use — or a failure saying what to do.
-
-    Asked twice when the first answer could not settle it. Docker Desktop is
-    seen failing a lookup by name for an image that is listed and readable by
-    id, and the listing preflight makes on its way to failing is itself what
-    repairs that, so the second ask is answered. What brings the state on is
-    not pinned down — which is why this turns on what docker said rather than
-    on what kind of host this is. A platform check would encode a guess; this
-    is right wherever a lookup comes back unsettled.
-
-    An image docker says is absent is not asked again — it will be absent
-    again, and building it is the answer (#97).
-    """
-    try:
-        await DockerSandbox(TEST_IMAGE).preflight()
-    except PreflightError as err:
-        if isinstance(err.failure, Refused):
-            pytest.fail(
-                f"{err}\nThe docker tier runs in it: `just test-image` builds it."
-            )
-        try:
-            await DockerSandbox(TEST_IMAGE).preflight()
-        except PreflightError as again:
-            pytest.fail(
-                f"{again}\nAsked twice, so this is not a cold lookup: the image "
-                "is not the problem, and docker could not answer for it."
-            )
-    return TEST_IMAGE
 
 
 def _labelled(run_id: str) -> list[str]:
@@ -392,23 +360,6 @@ async def test_a_run_in_docker_spends_one_exec_on_its_agent_and_one_on_collect(
 
 
 @pytest.mark.docker
-async def test_an_exec_streams_stdin_in_and_lines_out_as_they_come(
-    host_repo: Path, image: str
-) -> None:
-    ws = await prepare_workspace(host_repo)
-    lines: list[str] = []
-
-    async with DockerSandbox(image).start(ws, env={}) as sandbox:
-        result = await sandbox.exec(
-            ["cat"], stdin="one\ntwo\n", capture=False, on_stdout=lines.append
-        )
-
-    assert result.exit_code == 0
-    assert lines == ["one", "two"]
-    assert result.stdout == "one\ntwo\n"  # capture=False keeps the tail
-
-
-@pytest.mark.docker
 async def test_a_copy_runs_again_over_its_own_work_in_the_container(
     host_repo: Path, image: str
 ) -> None:
@@ -423,39 +374,6 @@ async def test_a_copy_runs_again_over_its_own_work_in_the_container(
         )
 
     assert shown.stdout.splitlines() == [f"waystation/{ws.run_id}"]
-
-
-@pytest.mark.docker
-@pytest.mark.parametrize("insistent", [False, True])
-async def test_a_cancelled_exec_kills_all_it_started_before_the_cancel_completes(
-    host_repo: Path, image: str, insistent: bool
-) -> None:
-    # Killing the docker client leaves its process running in the container:
-    # a lingering child would keep writing into the workspace collect reads
-    # (ADR-0023). Cancelled again and again, the kill still runs to its end.
-    ws = await prepare_workspace(host_repo)
-    started = asyncio.Event()
-    linger = "( while :; do printf x >> /tmp/pulse; sleep 0.05; done ) & "
-
-    async with DockerSandbox(image).start(ws, env={}) as sandbox:
-        running = asyncio.create_task(
-            sandbox.exec(
-                ["sh", "-c", linger + "echo started; wait"],
-                on_stdout=lambda line: started.set(),
-            )
-        )
-        await until(started.is_set, running)
-        running.cancel()
-        while insistent and not running.done():
-            await asyncio.sleep(0.02)
-            running.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await running
-        pulse = "wc -c < /tmp/pulse; sleep 0.3; wc -c < /tmp/pulse"
-        sizes = (await sandbox.exec(["sh", "-c", pulse])).stdout.split()
-
-    assert len(sizes) == 2
-    assert sizes[0] == sizes[1]
 
 
 @pytest.mark.docker

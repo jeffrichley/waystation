@@ -11,7 +11,7 @@ import json
 import logging
 import subprocess
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -69,6 +69,7 @@ __all__ = [
     "stalling_ref_hook",
     "subjects",
     "until",
+    "until_batch",
     "workspaces",
 ]
 
@@ -263,6 +264,38 @@ async def until(ready: Callable[[], bool], task: asyncio.Task[Any]) -> None:
         if task.done():
             pytest.fail(f"the run ended first: {task.result()!r}")
         await asyncio.sleep(0.02)
+
+
+async def until_batch(
+    ready: Callable[[], bool], results: AsyncIterator[RunResult[Any]]
+) -> None:
+    """``until`` for a batch: fail at once if any run in ``results`` ends first.
+
+    A batch's runs are tasks the test never holds, so ``until`` has nothing to
+    watch. Asking the batch for a result is the public way to notice: a run
+    that ends queues one, and inside a block that waits for the runs to reach
+    a point, an early result *is* a run that ended.
+
+    It matters because a failure is a value here (ADR-0016). A run whose agent
+    dies before the point being waited for ends quietly, nothing raises, and a
+    bare ``Event.wait()`` on that point never returns — on Windows CI that hung
+    a worker past its timeout, which pytest-timeout ends with ``os._exit``,
+    leaving a crash with no traceback to read (#105).
+    """
+    ended = asyncio.ensure_future(anext(results))
+    try:
+        while not ready():
+            if ended.done():
+                pytest.fail(
+                    f"a run ended before the batch was ready: {ended.result()!r}"
+                )
+            await asyncio.sleep(0.02)
+    finally:
+        # The claim goes back when this is cancelled, so the batch is left as
+        # it was found and a later reader still sees every result.
+        ended.cancel()
+        with suppress(asyncio.CancelledError, StopAsyncIteration):
+            await ended
 
 
 def stalling_ref_hook(hooks: Path, started: Path, release: Path) -> Path:

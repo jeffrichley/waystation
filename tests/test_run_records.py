@@ -30,6 +30,7 @@ from helpers import (
     a_run,
     commit_on,
     lifecycle,
+    until_batch,
 )
 from waystation import (
     Flow,
@@ -167,13 +168,10 @@ async def test_a_user_bundle_sees_a_cancellation_as_a_run_file_does(
     logs = tmp_path / "logs"
     watcher = WatchingTheChannel()
     working: set[str] = set()
-    both = asyncio.Event()
 
     def watch(ctx: RunContext, line: AgentLine) -> None:
         if line.raw == "ready":
             working.add(ctx.run_id)
-            if len(working) == 2:
-                both.set()
 
     spec: RunSpec[Summary] = (
         Flow(
@@ -186,8 +184,8 @@ async def test_a_user_bundle_sees_a_cancellation_as_a_run_file_does(
         .on_agent_output(watch)
     )
     try:
-        async with fan_out([spec, spec]):
-            await both.wait()
+        async with fan_out([spec, spec]) as results:
+            await until_batch(lambda: len(working) == 2, results)
     finally:
         watcher.close()
 

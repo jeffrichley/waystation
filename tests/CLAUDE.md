@@ -45,6 +45,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `lifecycle(caplog)` | the records a run logged per lifecycle event (`waystation.run`), in order |
 | `workspaces(temp)` | the run workspaces left under a temp dir — assert `== []` to prove a run cleaned up |
 | `until(ready, task)` | wait until `ready()` holds — a run reached a known point, say a stalled git — failing at once if the run ends first |
+| `until_batch(ready, results)` | `until` for a batch, whose run tasks a test never holds: it asks `results` for a result, and a result arriving before `ready()` holds *is* a run that ended first. Reach for it instead of `await some_event.wait()` inside a `fan_out` block — a failure is a value (ADR-0016), so a run that dies before the point being waited for ends quietly and a bare wait on it hangs until CI kills the worker (#105) |
 | `stalling_ref_hook(hooks, started, release)` | a `reference-transaction` hook that holds the first ref update git prepares until `release` exists; point a host at it with `core.hooksPath` |
 | `awaited(spec)` | a coroutine awaiting a `RunSpec`, for `asyncio.create_task` — reach for it when a test cancels or drives a run from outside |
 | `Gate` / `GatedSandbox(gate, at)` | a point a run is held at until the test sets `gate.release` — `gate.reached` once it waits, `gate.passed` once it goes on; `GatedSandbox` is `NoSandbox` held at `"start"`, `"collect"` (its git execs) or `"teardown"`, for cancelling a run mid-stage |

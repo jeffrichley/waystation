@@ -21,6 +21,7 @@ from helpers import (
     WORKS_UNTIL_STOPPED,
     ShellAgent,
     a_run,
+    until_batch,
 )
 from waystation import (
     Errored,
@@ -199,13 +200,10 @@ async def test_leaving_a_fan_out_early_finishes_every_run_file(
     logs = tmp_path / "logs"
     before = _attached()
     working: set[str] = set()
-    both = asyncio.Event()
 
     def watch(ctx: RunContext, line: AgentLine) -> None:
         if line.raw == "ready":
             working.add(ctx.run_id)
-            if len(working) == 2:
-                both.set()
 
     spec: RunSpec[Summary] = (
         Flow(
@@ -217,8 +215,8 @@ async def test_leaving_a_fan_out_early_finishes_every_run_file(
         .run("work until stopped")
         .on_agent_output(watch)
     )
-    async with fan_out([spec, spec]):
-        await both.wait()
+    async with fan_out([spec, spec]) as results:
+        await until_batch(lambda: len(working) == 2, results)
 
     for run_id in working:
         lines = (logs / f"{run_id}.log").read_text(encoding="utf-8").splitlines()

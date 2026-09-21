@@ -31,6 +31,7 @@ from helpers import (
     init_host_repo,
     subjects,
     until,
+    until_batch,
     workspaces,
 )
 from waystation import (
@@ -264,7 +265,7 @@ async def test_leaving_the_block_early_stops_runs_in_flight_and_never_starts_que
     never = a_run(host_repo).on_run_start(lambda ctx: queued.append(ctx.run_id))
 
     async with fan_out([*stuck.runs(), never], max_concurrency=2) as results:
-        await stuck.all_ready.wait()
+        await until_batch(stuck.all_ready.is_set, results)
 
     # By the time the block is left, every run it stopped has wound down.
     assert len(stuck.started) == 2
@@ -302,8 +303,8 @@ async def test_a_consumer_cancelled_as_the_block_winds_down_waits_for_it(
     stuck = Stuck(host_repo, count=1, sandbox=GatedSandbox(gate, at="teardown"))
 
     async def consume() -> None:
-        async with fan_out(stuck.runs()):
-            await stuck.all_ready.wait()
+        async with fan_out(stuck.runs()) as results:
+            await until_batch(stuck.all_ready.is_set, results)
 
     consumer = asyncio.create_task(consume())
     await until(gate.reached.is_set, consumer)  # left; the run's teardown is held
@@ -409,3 +410,42 @@ async def test_a_problem_anywhere_in_the_batch_stops_it_before_any_run_starts(
     assert started == []
     assert workspaces(isolated_tempdir) == []
     assert host_state(host_repo) == before
+
+
+@pytest.mark.git
+async def test_waiting_inside_a_batch_ends_when_a_run_does_rather_than_hanging(
+    host_repo: Path,
+) -> None:
+    """A run that ends before the point being waited for must not wedge the wait.
+
+    A failure is a value (ADR-0016): a run whose agent dies before the point
+    a test is waiting for completes quietly, so a bare wait on that point
+    never returns and the whole batch waits with it. On Windows CI that hung
+    a worker past its timeout, which pytest-timeout ends with ``os._exit``
+    — a crash with no traceback for the next reader (#105).
+    """
+    working: set[str] = set()
+
+    def watch(ctx: RunContext, line: AgentLine) -> None:
+        if line.raw == "ready":
+            working.add(ctx.run_id)
+
+    works: RunSpec[Summary] = (
+        Flow(host_repo, agent=ShellAgent(WORKS_UNTIL_STOPPED), sandbox=NoSandbox())
+        .run("work until stopped")
+        .on_agent_output(watch)
+    )
+    # The other run never reaches `ready` — what a git call failing under
+    # `set -e` does to WORKS_UNTIL_STOPPED on a loaded host.
+    dies: RunSpec[Summary] = (
+        Flow(host_repo, agent=ShellAgent("exit 3"), sandbox=NoSandbox())
+        .run("end before saying anything")
+        .on_agent_output(watch)
+    )
+
+    with pytest.raises(pytest.fail.Exception, match="ended"):
+        # The bound is the regression's shape, not a behaviour under test: a
+        # wait that wedges hangs forever, and this says so instead.
+        async with asyncio.timeout(30):
+            async with fan_out([works, dies]) as results:
+                await until_batch(lambda: len(working) == 2, results)

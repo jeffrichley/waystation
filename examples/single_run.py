@@ -24,7 +24,9 @@ touching your machine. The container sees a clone of your committed work,
 never your uncommitted changes, and it is removed when the run ends.
 
 **Your credential goes in by name, never by value.** ``ClaudeCode`` passes
-``ANTHROPIC_API_KEY`` or ``CLAUDE_CODE_OAUTH_TOKEN`` through from your shell.
+``ANTHROPIC_API_KEY`` or ``CLAUDE_CODE_OAUTH_TOKEN`` through from the
+environment this script runs in: exported in your shell, or loaded by
+``uv run --env-file .env``. Waystation itself reads no file.
 Nothing else from your shell reaches the container: its environment is the
 image's own plus what you name. Name more with ``pass_env=`` if the agent
 needs them. Logs and command lines elide what a credential holds.
@@ -56,6 +58,9 @@ script from inside the repo you want the agent to work on::
     cd path/to/your/repo
     uv run --project path/to/waystation --group examples \\
         python path/to/waystation/examples/single_run.py
+
+To keep the credential in a gitignored ``.env`` instead of exporting it, add
+``--env-file path/to/.env`` to that ``uv run``.
 
 **What to watch.** The log lines on stderr walk the run's stages: workspace,
 sandbox, agent, collect, integrate. The agent stage takes a minute or two.

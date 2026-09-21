@@ -17,12 +17,17 @@ your own repo and changed, not a framework to configure.
 
   Its header lists what `DockerSandbox` needs from any image, so you can trim
   it or write your own.
-- **A Claude credential** exported in your shell. `ClaudeCode` passes it into
-  the sandbox by name, and nothing else of yours goes in:
+- **A Claude credential** in the environment the rung runs in. `ClaudeCode`
+  passes it into the sandbox by name, and nothing else of yours goes in.
+  Export it in your shell:
 
   ```sh
   export ANTHROPIC_API_KEY=...   # or CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`)
   ```
+
+  Or keep that same `KEY=value` line in a `.env` at this repo's root, which is
+  gitignored, and add `--env-file .env` to the `uv run` commands below. uv
+  loads it into the process; waystation itself reads no file.
 
 ## Running one
 
@@ -30,6 +35,7 @@ From the root of this repo:
 
 ```sh
 uv run --group examples python examples/<rung>.py
+uv run --env-file .env --group examples python examples/<rung>.py   # with a .env
 ```
 
 The `examples` dependency group adds what the rungs use beyond the library,
@@ -39,8 +45,11 @@ such as typer for the flagship. A rung works on the repo you run it from, so
 ```sh
 cd path/to/your/repo
 uv run --project path/to/waystation --group examples \
+    --env-file path/to/waystation/.env \
     python path/to/waystation/examples/single_run.py
 ```
+
+`--env-file` is resolved from where you run, hence the full path.
 
 These call a real agent, which costs money, so CI only lints and type-checks
 them and never runs them.

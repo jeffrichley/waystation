@@ -55,11 +55,16 @@ work onto the batch branch, is rung 6 of the [examples](examples/README.md).
   just example-image
   ```
 
-- **A Claude credential** in your shell, passed into the sandbox by name:
+- **A Claude credential** in the flow's environment, passed into the sandbox
+  by name. Export it, or keep it in a gitignored `.env` and let uv load it:
 
   ```sh
   export ANTHROPIC_API_KEY=...   # or CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`)
+  uv run --env-file .env ...     # or this, with the same line in .env
   ```
+
+  Waystation reads no file of its own: whatever is in the environment of the
+  process running your flow is what it can pass through.
 
 Then start with the [examples](examples/README.md), a seven-rung ladder that
 adds one idea per rung.

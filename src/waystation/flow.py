@@ -12,35 +12,25 @@ from pathlib import Path
 from typing import Any, Literal
 
 from waystation._outcome import outcome_schema
+from waystation._run_record import RunRecord, log_later_failure
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
-from waystation.collect import PatchSeries, collect
+from waystation.collect import collect
 from waystation.errors import StageError
-from waystation.hooks import (
-    HookEntry,
-    HookName,
-    HookRegistry,
-    RunContext,
-    RunState,
-)
+from waystation.hooks import HookEntry, HookName, HookRegistry, RunContext
 from waystation.integration import (
     Integration,
     IntegrationStrategy,
     integrate,
     preserve_series,
 )
-from waystation.observability import bind_run, package_logger
-from waystation.observers import RunLog
+from waystation.observability import bind_run
 from waystation.preflight import preflight
 from waystation.results import (
     AgentExit,
     Errored,
     IntegrationReport,
-    RunConflicted,
-    RunFailed,
     RunResult,
-    RunSucceeded,
-    Series,
     Stage,
     Summary,
     Timeouts,
@@ -50,26 +40,6 @@ from waystation.stages import StageRunner, stages
 from waystation.workspace import Workspace, prepare_workspace
 
 __all__ = ["Flow", "RunSpec"]
-
-_logger = package_logger()
-
-
-def _log_unreported(run_id: str, err: StageError, why: str) -> None:
-    """Log a failure no result will carry, saying ``why`` it goes unreported."""
-    exception = getattr(err.failure, "exception", None)
-    _logger.error(
-        "run %s: %s failed %s: %r",
-        run_id,
-        err.stage,
-        why,
-        err.failure,
-        exc_info=exception,
-    )
-
-
-def _log_later_failure(run_id: str, err: StageError) -> None:
-    """Log a failure met after the run already failed; never report it (ADR-0024)."""
-    _log_unreported(run_id, err, "after the run had already failed")
 
 
 def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
@@ -81,106 +51,6 @@ def _as_stage_error(stage: Stage, exc: Exception) -> StageError:
     if isinstance(exc, StageError):
         return exc.at(stage)
     return StageError(stage, Errored(exc))
-
-
-@dataclass(slots=True)
-class _RunRecord:
-    """What a run has gathered so far, and the one failure it will report.
-
-    The bound each stage ran under, the cancellation held until that stage's
-    work ended and the time it took are not here: they are the stage
-    runner's, and this run is its first user, not a privileged path
-    (ADR-0032). ``elapsed`` is the runner's own live view.
-    """
-
-    run_id: str
-    log: RunLog
-    # Where the orchestrator is *between* stages — reading the prompt, firing
-    # a hook — which is work the runner never sees, so it cannot name it. Each
-    # phase below sets it as it begins; inside a stage the runner attributes.
-    stage: Stage = "workspace"
-    base_sha: str | None = None
-    # The workspace's own branch name, kept here because preservation happens
-    # after the workspace is gone; nobody re-derives it (#76).
-    branch: str | None = None
-    elapsed: Mapping[Stage, float] = field(default_factory=dict)
-    agent: AgentExit | None = None
-    series: Series | None = None
-    patches: PatchSeries | None = None
-    preserved: str | None = None
-    landed_on: str | None = None
-    failure: StageError | None = None
-    # The stage a cancellation arrived during, once the runner has held one.
-    cancelled_during: Stage | None = None
-
-    def collected(self, series: PatchSeries) -> None:
-        """Keep what collect cut, whether or not it went on to refuse it."""
-        self.patches = series
-        self.series = Series(commits=series.commits, salvaged=series.salvaged)
-
-    def fail(self, err: StageError) -> None:
-        """Keep the first failure; log any later one (ADR-0024)."""
-        # The net that lets ``failed()`` assert a stage: a failure raised
-        # between stages, by a hook say, is claimed by the stage under way.
-        err.at(self.stage)
-        if self.failure is not None:
-            _log_later_failure(self.run_id, err)
-            return
-        self.failure = err
-        if err.agent is not None:
-            self.agent = err.agent
-
-    def log_cancelled(self) -> None:
-        """Say where a cancelled run's series went: no ``run_end`` will."""
-        if self.failure is not None:
-            _log_unreported(self.run_id, self.failure, "in a run that was cancelled")
-        stage = self.cancelled_during or self.stage
-        self.log.cancelled(stage, kept_on=self.preserved, landed_on=self.landed_on)
-
-    def failed(self) -> RunFailed:
-        assert self.failure is not None
-        assert self.failure.stage is not None  # fail() attributes every failure
-        return RunFailed(
-            run_id=self.run_id,
-            name=None,
-            base_sha=self.base_sha,
-            elapsed=dict(self.elapsed),
-            agent=self.agent,
-            series=self.series,
-            preserved=self.preserved,
-            stage=self.failure.stage,
-            failure=self.failure.failure,
-        )
-
-    def succeeded[OutcomeT](
-        self, outcome: OutcomeT, report: IntegrationReport | None
-    ) -> RunSucceeded[OutcomeT]:
-        return RunSucceeded(
-            run_id=self.run_id,
-            name=None,
-            base_sha=self.base_sha,
-            elapsed=dict(self.elapsed),
-            agent=self.agent,
-            series=self.series,
-            preserved=self.preserved,
-            outcome=outcome,
-            report=report,
-        )
-
-    def conflicted[OutcomeT](
-        self, outcome: OutcomeT, report: IntegrationReport
-    ) -> RunConflicted[OutcomeT]:
-        return RunConflicted(
-            run_id=self.run_id,
-            name=None,
-            base_sha=self.base_sha,
-            elapsed=dict(self.elapsed),
-            agent=self.agent,
-            series=self.series,
-            preserved=self.preserved,
-            outcome=outcome,
-            report=report,
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,10 +390,9 @@ class RunSpec[OutcomeT]:
                 reports a cancelled run, but what its agent left is still
                 collected and kept first (ADR-0017).
         """
-        state = RunState(run_id=secrets.token_hex(4), name=None, repo=self.repo)
-        ctx = RunContext(state)
-        record = _RunRecord(run_id=state.run_id, log=RunLog(state.run_id, state.name))
-        with bind_run(state.run_id, state.name):
+        record = RunRecord(run_id=secrets.token_hex(4), name=None, repo=self.repo)
+        ctx = RunContext(record)
+        with bind_run(record.run_id, record.name):
             # Bound, so what preflight logs carries the id, but a run that
             # fails it never began: no hook fires and no workspace is made.
             # A lone run is a batch of one, checked the way fan-out checks
@@ -532,14 +401,11 @@ class RunSpec[OutcomeT]:
                 await preflight((self,))
             record.log.on_run_start(ctx)
             try:
-                result = await self._staged(ctx, state, record)
-                end_stage = (
-                    result.stage if isinstance(result, RunFailed) else record.stage
-                )
+                result = await self._staged(ctx, record)
                 try:
                     # Every run_end hook sees the result, even after one raises.
                     await self.hook_registry.fire(
-                        "run_end", end_stage, ctx, result, stop_on_raise=False
+                        "run_end", ctx, result, stop_on_raise=False
                     )
                 except StageError as err:
                     record.fail(err)
@@ -551,9 +417,7 @@ class RunSpec[OutcomeT]:
             record.log.on_run_end(ctx, result)
             return result
 
-    async def _staged(
-        self, ctx: RunContext, state: RunState, record: _RunRecord
-    ) -> RunResult[OutcomeT]:
+    async def _staged(self, ctx: RunContext, record: RunRecord) -> RunResult[OutcomeT]:
         """Run the lifecycle through one stage runner, which holds the guarantees.
 
         Every bound, every held cancellation and every elapsed time below
@@ -563,7 +427,7 @@ class RunSpec[OutcomeT]:
         async with stages(self.bounds) as run:
             record.elapsed = run.elapsed
             try:
-                return await self._lifecycle(run, ctx, state, record)
+                return await self._lifecycle(run, ctx, record)
             finally:
                 record.cancelled_during = run.cancelled_during
 
@@ -571,8 +435,7 @@ class RunSpec[OutcomeT]:
         self,
         run: StageRunner,
         ctx: RunContext,
-        state: RunState,
-        record: _RunRecord,
+        record: RunRecord,
     ) -> RunResult[OutcomeT]:
         """Run the stages in order; each phase below owns its own stages."""
         try:
@@ -580,16 +443,16 @@ class RunSpec[OutcomeT]:
             # read waits its turn: the run started, and then it failed.
             prompt_error: StageError | None = None
             try:
-                state.prompt = self._prompt_text()
+                record.prompt = self._prompt_text()
             except StageError as err:
                 prompt_error = err
-            await self.hook_registry.fire("run_start", "workspace", ctx)
+            await self.hook_registry.fire("run_start", ctx)
             if prompt_error is not None:
                 raise prompt_error
-            workspace = await self._prepare(run, ctx, state, record)
+            workspace = await self._prepare(run, record)
             try:
                 await self._workspace_ready(run, ctx, record)
-                outcome = await self._in_sandbox(run, ctx, state, record, workspace)
+                outcome = await self._in_sandbox(run, ctx, record, workspace)
                 if record.failure is not None or run.cancelled_during is not None:
                     await self._preserve(run, record)
                     run.surface()  # before integrate starts: it never will
@@ -620,9 +483,7 @@ class RunSpec[OutcomeT]:
         except (OSError, UnicodeDecodeError) as exc:
             raise StageError("agent", Errored(exception=exc)) from exc
 
-    async def _prepare(
-        self, run: StageRunner, ctx: RunContext, state: RunState, record: _RunRecord
-    ) -> Workspace:
+    async def _prepare(self, run: StageRunner, record: RunRecord) -> Workspace:
         """Workspace stage: a private clone of the base ref.
 
         Announcing it is ``_workspace_ready``, a step later, so that the
@@ -634,24 +495,23 @@ class RunSpec[OutcomeT]:
             "workspace",
             prepare_workspace(self.repo, base=self.base_ref, run_id=record.run_id),
         )
-        record.base_sha = state.base_sha = workspace.base_sha
+        record.base_sha = workspace.base_sha
         record.branch = workspace.branch
         return workspace
 
     async def _workspace_ready(
-        self, run: StageRunner, ctx: RunContext, record: _RunRecord
+        self, run: StageRunner, ctx: RunContext, record: RunRecord
     ) -> None:
         """Tell the observers there is a workspace, and fire the hook."""
         run.surface()  # held while the workspace was cloned
         record.log.on_workspace_ready(ctx)
-        await self.hook_registry.fire("workspace_ready", "workspace", ctx)
+        await self.hook_registry.fire("workspace_ready", ctx)
 
     async def _in_sandbox(
         self,
         run: StageRunner,
         ctx: RunContext,
-        state: RunState,
-        record: _RunRecord,
+        record: RunRecord,
         workspace: Workspace,
     ) -> OutcomeT | None:
         """Sandbox, agent and collect stages; the sandbox is gone on return."""
@@ -672,9 +532,9 @@ class RunSpec[OutcomeT]:
         sandbox = await run.stage("sandbox", cm.__aenter__())
         try:
             run.surface()  # held while the sandbox started
-            state.sandbox = sandbox
+            record.sandbox = sandbox
             record.log.on_sandbox_ready(ctx)
-            await self.hook_registry.fire("sandbox_ready", "sandbox", ctx)
+            await self.hook_registry.fire("sandbox_ready", ctx)
             try:
                 outcome = await self._run_agent(run, ctx, record, sandbox, host_env)
             except asyncio.CancelledError:
@@ -685,14 +545,14 @@ class RunSpec[OutcomeT]:
             await self._collect(run, record, sandbox, workspace)
             return outcome
         finally:
-            state.sandbox = None
+            record.sandbox = None
             await self._teardown(run, cm, record)
 
     async def _run_agent(
         self,
         run: StageRunner,
         ctx: RunContext,
-        record: _RunRecord,
+        record: RunRecord,
         sandbox: Sandbox,
         host_env: Mapping[str, str],
     ) -> OutcomeT | None:
@@ -701,7 +561,7 @@ class RunSpec[OutcomeT]:
 
         async def _on_output(line: AgentLine) -> None:
             record.log.on_agent_output(ctx, line)
-            await self.hook_registry.fire("agent_output", "agent", ctx, line)
+            await self.hook_registry.fire("agent_output", ctx, line)
 
         prompt_text = ctx.prompt
         # Built before agent_start: a provider that cannot build its command
@@ -741,7 +601,7 @@ class RunSpec[OutcomeT]:
             )
         record.log.on_agent_end(ctx, record.agent)
         try:
-            await self.hook_registry.fire("agent_end", "agent", ctx, record.agent)
+            await self.hook_registry.fire("agent_end", ctx, record.agent)
         except StageError as err:
             record.fail(err)
         return outcome
@@ -749,7 +609,7 @@ class RunSpec[OutcomeT]:
     async def _collect(
         self,
         run: StageRunner,
-        record: _RunRecord,
+        record: RunRecord,
         sandbox: Sandbox,
         workspace: Workspace,
     ) -> None:
@@ -772,7 +632,7 @@ class RunSpec[OutcomeT]:
             record.fail(err)
 
     async def _land(
-        self, run: StageRunner, ctx: RunContext, record: _RunRecord, outcome: OutcomeT
+        self, run: StageRunner, ctx: RunContext, record: RunRecord, outcome: OutcomeT
     ) -> RunResult[OutcomeT]:
         """Integrate stage, or preservation when the run integrates nowhere."""
         patches, strategy = record.patches, self.integration
@@ -812,14 +672,14 @@ class RunSpec[OutcomeT]:
             return record.conflicted(outcome, report)
         record.log.on_integrated(ctx, report)
         try:
-            await self.hook_registry.fire("integrated", "integrate", ctx, report)
+            await self.hook_registry.fire("integrated", ctx, report)
         except StageError as err:
             # The series landed; a hook failure must not preserve it.
             record.fail(err)
             return record.failed()
         return record.succeeded(outcome, report)
 
-    async def _preserve(self, run: StageRunner, record: _RunRecord) -> None:
+    async def _preserve(self, run: StageRunner, record: RunRecord) -> None:
         """Keep a series that reached no target on ``waystation/<run-id>``.
 
         Unbounded, and run ``anyway``: preservation is how a cancelled or
@@ -844,7 +704,7 @@ class RunSpec[OutcomeT]:
         self,
         run: StageRunner,
         cm: AbstractAsyncContextManager[Sandbox],
-        record: _RunRecord,
+        record: RunRecord,
     ) -> None:
         """Leave the sandbox; a failure is logged, never reported (ADR-0016).
 
@@ -856,4 +716,4 @@ class RunSpec[OutcomeT]:
                 "sandbox", cm.__aexit__(None, None, None), bound="teardown"
             )
         except Exception as exc:
-            _log_later_failure(record.run_id, _as_stage_error("sandbox", exc))
+            log_later_failure(record.run_id, _as_stage_error("sandbox", exc))

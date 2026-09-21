@@ -24,9 +24,9 @@ from waystation import (
     RunSucceeded,
     configure_logging,
 )
+from waystation._run_record import RunRecord
 from waystation.agents import AgentLine
 from waystation.clock import ManualClock, use_clock
-from waystation.hooks import RunState
 
 
 def recording_console() -> Console:
@@ -224,7 +224,7 @@ async def test_a_display_that_cannot_draw_costs_a_log_line_not_the_work(
 def test_a_named_run_shows_its_name_and_what_it_cost(tmp_path: Path) -> None:
     """Driven directly: no run is named until #29, and no agent reports usage
     until ClaudeCode lands (#36)."""
-    ctx = RunContext(RunState(run_id="0badcafe", name="nightly", repo=tmp_path))
+    ctx = RunContext(RunRecord(run_id="0badcafe", name="nightly", repo=tmp_path))
     usage = AgentUsage(input_tokens=1200, output_tokens=300, cost_usd=0.4217)
     dashboard = Dashboard()
 

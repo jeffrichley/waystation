@@ -37,8 +37,9 @@ from waystation import (
     fan_out,
     observers,
 )
+from waystation._run_record import RunRecord
 from waystation.agents import AgentLine
-from waystation.hooks import RunContext, RunState
+from waystation.hooks import RunContext
 
 
 @pytest.mark.git
@@ -127,7 +128,7 @@ async def test_a_hooks_own_lines_interleave_with_the_agents(
 @pytest.mark.unit
 def test_a_named_run_writes_a_file_named_for_it(tmp_path: Path) -> None:
     """Until #29 lands ``RunSpec.name()`` no run can be named, so drive it here."""
-    state = RunState(run_id="0badcafe", name="nightly", repo=tmp_path, prompt="hi")
+    state = RunRecord(run_id="0badcafe", name="nightly", repo=tmp_path, prompt="hi")
     logs = tmp_path / "logs"
     bundle = RunLogFiles(logs)
     ctx = RunContext(state)
@@ -139,7 +140,7 @@ def test_a_named_run_writes_a_file_named_for_it(tmp_path: Path) -> None:
         bundle.on_run_end(ctx, _unfinished(state))
 
 
-def _unfinished(state: RunState) -> RunFailed:
+def _unfinished(state: RunRecord) -> RunFailed:
     """The shape of a result, only so a test can close the file it opened."""
     return RunFailed(
         run_id=state.run_id,

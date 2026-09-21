@@ -397,6 +397,85 @@ async def test_run_context_is_read_only_and_sandbox_is_scoped(
 
 @pytest.mark.git
 @pytest.mark.asyncio
+async def test_every_hook_reads_the_stage_and_what_each_stage_took_from_ctx(
+    host_repo: Path,
+) -> None:
+    """What the run knows, without a hook point per stage (#79)."""
+    reader = StageReader()
+    flow = Flow(
+        host_repo,
+        agent=committed_then_reports("add feat"),
+        sandbox=NoSandbox(),
+        integration=Integration("agents/stages"),
+        hooks=[reader],
+    )
+
+    result = await flow.run("read", outcome=Answer)
+
+    assert isinstance(result, RunSucceeded)
+    before_agent = {"workspace", "sandbox"}
+    assert reader.seen == {
+        "run_start": ("workspace", set()),
+        "workspace_ready": ("workspace", {"workspace"}),
+        "sandbox_ready": ("sandbox", before_agent),
+        "agent_output": ("agent", before_agent),
+        "agent_end": ("agent", before_agent | {"agent"}),
+        "integrated": ("integrate", set(result.elapsed)),
+        "run_end": ("integrate", set(result.elapsed)),
+    }
+
+
+class StageReader:
+    """Keeps what ``ctx`` said at each hook's first firing: stage, stages timed."""
+
+    def __init__(self) -> None:
+        self.seen: dict[str, tuple[str, set[str]]] = {}
+
+    def _read(self, hook: str, ctx: RunContext) -> None:
+        self.seen.setdefault(hook, (ctx.stage, set(ctx.elapsed)))
+
+    def on_run_start(self, ctx: RunContext) -> None:
+        self._read("run_start", ctx)
+
+    def on_workspace_ready(self, ctx: RunContext) -> None:
+        self._read("workspace_ready", ctx)
+
+    def on_sandbox_ready(self, ctx: RunContext) -> None:
+        self._read("sandbox_ready", ctx)
+
+    def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
+        self._read("agent_output", ctx)
+
+    def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> None:
+        self._read("agent_end", ctx)
+
+    def on_integrated(self, ctx: RunContext, report: IntegrationReport) -> None:
+        self._read("integrated", ctx)
+
+    def on_run_end(self, ctx: RunContext, result: Any) -> None:
+        self._read("run_end", ctx)
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
+async def test_a_failed_run_ends_in_the_stage_it_failed_in(host_repo: Path) -> None:
+    """Collect still runs after the agent fails; the run ended at the agent."""
+    read: list[str] = []
+    flow = Flow(
+        host_repo,
+        agent=ShellAgent("echo giving up; exit 3"),
+        sandbox=NoSandbox(),
+    )
+
+    result = await flow.run("fail").on_run_end(lambda ctx, r: read.append(ctx.stage))
+
+    assert isinstance(result, RunFailed)
+    assert result.stage == "agent"
+    assert read == ["agent"]
+
+
+@pytest.mark.git
+@pytest.mark.asyncio
 async def test_sandbox_ready_hook_sets_up_what_the_agent_sees(
     host_repo: Path,
 ) -> None:
@@ -455,7 +534,10 @@ async def test_raising_hook_fails_run_at_the_stage_whose_boundary_fired(
         hooks=[recorder],
     )
 
+    read: list[str] = []
+
     def boom(ctx: RunContext, *args: Any) -> None:
+        read.append(ctx.stage)
         raise error
 
     spec = flow.run("raise", outcome=Answer)
@@ -463,6 +545,7 @@ async def test_raising_hook_fails_run_at_the_stage_whose_boundary_fired(
 
     assert isinstance(result, RunFailed)
     assert result.stage == stage
+    assert read[0] == stage, "a hook reads the stage its raise is charged to"
     assert isinstance(result.failure, HookRaised)
     assert result.failure.hook == hook
     assert result.failure.function.endswith("boom")

@@ -61,10 +61,12 @@ them and never runs them.
    `DockerSandbox`, awaited and consumed with `match` over the three result
    types. It lands on the HEAD of the repo you run it from, so read its loud
    note first.
-2. `observability`: hooks, `configure_logging`, `on_agent_output`, `ctx.log`
-   and `EventLog`. *Coming in #40.*
-3. `primitives`: the run loop composed by hand, with a two-line `NoSandbox`
-   swap. *Coming in #40.*
+2. [`observability.py`](observability.py): hooks, `configure_logging`,
+   `on_agent_output` streaming the agent's narration, `ctx.log` and an
+   `EventLog` file. Lands on the branch `agents/observability`.
+3. [`primitives.py`](primitives.py): the run loop composed by hand from its
+   five primitives through the stage runner, with a two-line `NoSandbox`
+   swap. Lands on the branch `agents/primitives`.
 4. `implement_then_review`: an implement run lands on a branch, a review run
    judges it, and one bounded fix run follows a rejection. *Coming in #41.*
 5. `control_room`: one `Flow` per checkout across several repos, in one

@@ -25,4 +25,10 @@ Why: the promise is that the user's uncommitted work is never clobbered. Git's o
 
 A series that adds a path the user has ignored cannot land on HEAD until the user moves that file. The refusal names the file, and the series is preserved. A run stuck on the refusal lands on a named branch instead.
 
+**A flow can land on the HEAD of the repo it lives in.** That is allowed, and its own untracked output, such as `RunLogFiles("logs/")` inside the repo, does not block it. The landing does change the checkout the flow script was started from, including the script itself if the series edits it. The running process already has the script loaded; the next run reads the new version. `test_a_flow_lands_onto_the_head_of_the_repo_that_holds_it` runs this as a real subprocess.
+
+Only `"HEAD"` names the checkout. A lowercase `"head"` is an ordinary branch name to git, and here too. The placeholder refusal before #25 caught both spellings; that refusal is gone.
+
+A fast-forward runs the user's `post-merge` hook, as their own `git merge` would. The plumbing up to the swap runs no hooks (ADR-0020).
+
 Decided in [#25](https://github.com/jeffrichley/waystation/issues/25).

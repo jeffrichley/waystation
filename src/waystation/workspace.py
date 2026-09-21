@@ -127,17 +127,17 @@ async def prepare_workspace(
         base_sha = resolved.stdout.strip()
 
         name, email = await git_identity(host)
-        extras = await _resolve_extra_refs(host, extra_refs)
+        extra_tips = await _resolve_extra_refs(host, extra_refs)
 
         tmp = Path(tempfile.mkdtemp(prefix=f"waystation-{rid}-"))
         branch = f"waystation/{rid}"
-        refs = (f"refs/heads/{branch}", *extras)
+        refs = (f"refs/heads/{branch}", *extra_tips)
         try:
             await run_git(
                 host, "clone", "--local", "--no-checkout", str(host), str(tmp)
             )
             await run_git(tmp, "checkout", "-B", branch, base_sha)
-            if extras:
+            if extra_tips:
                 # The clone has every object the host has, hardlinked, so a
                 # ref is all an extra needs — no fetch (ADR-0037).
                 await run_git(
@@ -145,7 +145,7 @@ async def prepare_workspace(
                     "update-ref",
                     "--stdin",
                     stdin=encode(
-                        "".join(f"update {r} {s}\n" for r, s in extras.items())
+                        "".join(f"update {r} {s}\n" for r, s in extra_tips.items())
                     ),
                 )
             await _strip_to(tmp, refs)
@@ -160,10 +160,12 @@ async def prepare_workspace(
 
 
 async def _resolve_extra_refs(host: Path, names: Sequence[str]) -> dict[str, str]:
-    """Each extra ref's full name on the host, and what it points at.
+    """Each extra ref's full name on the host, and the object it points at.
 
-    A name must be a ref, not just a revision: ``HEAD~1`` or a sha has no
-    name to travel under, so it is refused the way a missing ref is.
+    Only a branch or a tag, named as itself, has a same name to travel under.
+    ``HEAD~1`` or a sha names no ref; ``HEAD`` would arrive as whichever
+    branch it pointed at; ``origin/x`` is a remote's, and no remote travels
+    (ADR-0037). Each is refused the way a missing ref is.
     """
     resolved: dict[str, str] = {}
     for name in names:
@@ -177,7 +179,7 @@ async def _resolve_extra_refs(host: Path, names: Sequence[str]) -> dict[str, str
             check=False,
         )
         full = shown.stdout.strip()
-        if not full.startswith("refs/"):
+        if name not in _names_for(full):
             detail = (
                 f"extra ref {name!r} names no branch or tag in {host}; an "
                 "extra ref travels under its own name, so it must be one"
@@ -186,6 +188,14 @@ async def _resolve_extra_refs(host: Path, names: Sequence[str]) -> dict[str, str
         target = await run_git(host, "rev-parse", "--verify", full)
         resolved[full] = target.stdout.strip()
     return resolved
+
+
+def _names_for(full: str) -> tuple[str, ...]:
+    """What a flow script may call the branch or tag ``full`` — nothing else."""
+    for namespace in ("refs/heads/", "refs/tags/"):
+        if full.startswith(namespace):
+            return (full, full.removeprefix(namespace))
+    return ()
 
 
 async def _strip_to(workspace: Path, keep: Sequence[str]) -> None:

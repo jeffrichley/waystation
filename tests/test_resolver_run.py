@@ -55,6 +55,17 @@ async def test_an_extra_ref_is_visible_in_the_workspace_under_its_own_name(
     assert result.outcome == Summary(summary=tip)
 
 
+async def test_an_extra_ref_may_be_named_in_full(host_repo: Path) -> None:
+    tip = commit_on(host_repo, "side/work", {"side.txt": "side\n"})
+
+    result = await _shell_run(
+        host_repo, _reports("git rev-parse refs/heads/side/work")
+    ).extra_refs("refs/heads/side/work")
+
+    assert isinstance(result, RunSucceeded), result
+    assert result.outcome == Summary(summary=tip)
+
+
 async def test_a_workspace_holds_the_extra_refs_and_nothing_else_of_the_hosts(
     host_repo: Path,
 ) -> None:
@@ -75,11 +86,19 @@ async def test_a_workspace_holds_the_extra_refs_and_nothing_else_of_the_hosts(
     ]
 
 
-@pytest.mark.parametrize("ref", ["no/such/branch", "HEAD~1", "0" * 40])
-async def test_an_extra_ref_that_names_no_host_ref_is_refused(
+@pytest.mark.parametrize(
+    "ref", ["no/such/branch", "HEAD~1", "0" * 40, "HEAD", "origin/work"]
+)
+async def test_an_extra_ref_that_names_no_host_branch_or_tag_is_refused(
     host_repo: Path, isolated_tempdir: Path, ref: str
 ) -> None:
-    """Missing, or a revision rather than a name: neither has a same-name ref."""
+    """Only a branch or tag named as itself has a same name to travel under.
+
+    Missing, a revision, ``HEAD`` (which would arrive as the branch it points
+    at), or a remote's ref — and no remote travels (ADR-0037).
+    """
+    git(host_repo, "update-ref", "refs/remotes/origin/work", "HEAD")
+
     result = await a_run(host_repo).extra_refs(ref)
 
     assert isinstance(result, RunFailed), result

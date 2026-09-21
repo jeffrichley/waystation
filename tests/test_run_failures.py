@@ -181,9 +181,8 @@ async def test_run_agent_primitive_raises_stage_error(host_repo: Path) -> None:
         backend = NoSandbox()
         agent = ScriptedAgent(outcome=None)
         async with backend.start(ws, env={}) as sandbox:
-            cmd = agent.command("p", {"type": "object"})
             with pytest.raises(StageError) as caught:
-                await run_agent(sandbox, agent, cmd, Answer)
+                await run_agent(sandbox, agent, "p", Answer)
             assert isinstance(caught.value, WaystationError)
             assert caught.value.stage == "agent"
             assert isinstance(caught.value.failure, OutcomeMissing)

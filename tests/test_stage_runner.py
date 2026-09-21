@@ -85,7 +85,7 @@ async def test_a_loop_composed_by_hand_lands_the_series(host_repo: Path) -> None
         async with run.entering("sandbox", NoSandbox().start(ws, env={})) as box:
             exit, outcome = await run.stage(
                 "agent",
-                run_agent(box, agent, agent.command("by hand", {}), Answer),
+                run_agent(box, agent, "by hand", Answer),
                 bound=None,
             )
             series = await run.stage("collect", collect(box, ws))
@@ -120,7 +120,7 @@ async def test_the_sandbox_is_gone_before_integrate_begins(host_repo: Path) -> N
         async with run.entering("sandbox", NoSandbox().start(ws, env={})) as box:
             await run.stage(
                 "agent",
-                run_agent(box, agent, agent.command("x", {}), Answer),
+                run_agent(box, agent, "x", Answer),
                 bound=None,
             )
             await run.stage("collect", collect(box, ws))
@@ -144,7 +144,7 @@ async def test_collect_refuses_a_nonlinear_series_rather_than_squashing_it_quiet
         async with run.entering("sandbox", NoSandbox().start(ws, env={})) as box:
             await run.stage(
                 "agent",
-                run_agent(box, agent, agent.command("merge", {}), Summary),
+                run_agent(box, agent, "merge", Summary),
                 bound=None,
             )
             with pytest.raises(StageError) as raised:
@@ -422,7 +422,7 @@ async def test_a_hand_composed_loop_cancelled_mid_agent_keeps_what_the_agent_lef
                         run_agent(
                             box,
                             agent,
-                            agent.command("work until stopped", {}),
+                            "work until stopped",
                             Summary,
                             on_output=watch,
                         ),

@@ -20,7 +20,7 @@ import logging
 from collections.abc import Iterator, MutableMapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Literal, get_args
+from typing import Any, Literal
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -29,7 +29,7 @@ from rich.logging import RichHandler
 # must not import this one; observability is its public home.
 from waystation._redaction import redact_argv
 
-__all__ = ["configure_logging", "log_argv", "redact_argv", "run_logger"]
+__all__ = ["RunEvent", "configure_logging", "log_argv", "redact_argv", "run_logger"]
 
 RunEvent = Literal[
     "run_start",
@@ -45,8 +45,6 @@ RunEvent = Literal[
     "cancelled",
 ]
 """What a record on the run channel says happened; ``docs/log-records.md``."""
-
-RUN_EVENTS: tuple[RunEvent, ...] = get_args(RunEvent)
 
 # One run reaches a record three ways, and each does a different job: ``tag``
 # binds it explicitly, so the record carries the run even when logged from a
@@ -80,17 +78,34 @@ class _RunTag(logging.Filter):
 _RUN_TAG = _RunTag()
 
 
-def tagged_logger(name: str) -> logging.Logger:
+def _tagged(name: str) -> logging.Logger:
     """A logger, by full name, that stamps the running run onto its records.
 
     Not a plain lookup: it installs the filter that does the stamping, which
-    ``logging`` applies only to the logger the call was made on. Takes a full
-    name because two loggers here are the package's own; ``run_logger`` is
-    what a caller naming a stream of its own wants.
+    ``logging`` applies only to the logger the call was made on.
     """
     logger = logging.getLogger(name)
     logger.addFilter(_RUN_TAG)
     return logger
+
+
+def _stream(name: str) -> logging.Logger:
+    """One stream on the channel, under the package logger and unguarded.
+
+    What ``run_logger`` is minus its guard, because the guard exists to keep
+    a caller off the names below and waystation owning its own is not that.
+    """
+    return _tagged(f"{PACKAGE}.{name}")
+
+
+def package_logger() -> logging.Logger:
+    """The package logger itself: where waystation's own troubles go.
+
+    A failure that arrived after the run already failed (ADR-0024), or a
+    built-in observer that failed and was ignored (ADR-0026) — at ERROR, and
+    tagged, so it reaches the file of the run it happened in.
+    """
+    return _tagged(PACKAGE)
 
 
 def run_logger(name: str) -> logging.Logger:
@@ -115,31 +130,57 @@ def run_logger(name: str) -> logging.Logger:
     tell one run of a fan-out from another. They carry no ``event``: that is
     the lifecycle channel's, and yours are lines, not events
     (``docs/log-records.md``).
+
+    Raises:
+        ValueError: When ``name`` is one waystation already ships, or is
+            already spelled under the package. Writing to ``run`` would put
+            records with no ``event`` on the lifecycle channel, where every
+            record is documented to carry one, and every observer reading it
+            would have to cope with a shape the docs rule out.
     """
-    return tagged_logger(f"{PACKAGE}.{name}")
+    if not name:
+        msg = "run_logger needs a name for your stream, e.g. run_logger('myco.docker')"
+        raise ValueError(msg)
+    if name in SHIPPED_STREAMS:
+        msg = (
+            f"{name!r} is a stream waystation ships, and its records are "
+            f"documented down to their extras: pick a name of your own, such "
+            f"as run_logger('myco.{name}')"
+        )
+        raise ValueError(msg)
+    if name == PACKAGE or name.startswith(f"{PACKAGE}."):
+        msg = (
+            f"run_logger puts {name!r} under {PACKAGE!r} for you, so this one "
+            f"would land at 'waystation.{name}': pass the part after it"
+        )
+        raise ValueError(msg)
+    return _stream(name)
 
 
 logging.getLogger(PACKAGE).addHandler(logging.NullHandler())
 
-# Built through the public function, because there is no privileged path: the
-# streams waystation ships join the channel exactly as a user's adapter does.
+# The streams waystation ships. A user's adapter joins the channel exactly as
+# these do — `run_logger` is `_stream` plus a guard keeping callers off these
+# names — so there is no privileged path in, only names already spoken for.
 
-RUN = run_logger("run")
+SHIPPED_STREAMS = frozenset({"run", "agent", "agent.output", "hook", "git", "sandbox"})
+
+RUN = _stream("run")
 """One INFO line per lifecycle event of a run, each tagged with its ``event``."""
 
-AGENT = run_logger("agent")
+AGENT = _stream("agent")
 """An agent provider's own lines — which credential its preflight found, at INFO."""
 
-AGENT_OUTPUT = run_logger("agent.output")
+AGENT_OUTPUT = _stream("agent.output")
 """Every line the agent emits, at DEBUG: an N-way fan-out is unreadable at INFO."""
 
-HOOK = run_logger("hook")
+HOOK = _stream("hook")
 """Where ``ctx.log`` writes, so a hook author's lines are separable from ours."""
 
-GIT = run_logger("git")
+GIT = _stream("git")
 """Host git command lines, at DEBUG."""
 
-SANDBOX = run_logger("sandbox")
+SANDBOX = _stream("sandbox")
 """Sandbox lifecycle and the command lines it execs, at DEBUG."""
 
 

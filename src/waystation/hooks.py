@@ -11,7 +11,7 @@ from typing import Any, get_args
 
 from waystation.agents.protocol import AgentLine
 from waystation.errors import StageError
-from waystation.observability import HOOK, RunLoggerAdapter, tag, tagged_logger
+from waystation.observability import HOOK, RunLoggerAdapter, package_logger, tag
 from waystation.results import (
     AgentExit,
     HookName,
@@ -22,7 +22,7 @@ from waystation.results import (
 )
 from waystation.sandbox.protocol import Sandbox
 
-_logger = tagged_logger("waystation")
+_logger = package_logger()
 
 HOOK_NAMES: tuple[HookName, ...] = get_args(HookName)
 

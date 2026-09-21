@@ -47,34 +47,55 @@ Every record on the channel carries all three:
 | --- | --- | --- |
 | `event` | `str` | Which of the rows above. Only records on `waystation.run` have it. |
 | `run_id` | `str` | The run's id — 8 lowercase hex characters. |
-| `run_name` | `str \| None` | What `.name()` set, or `None`. It is `run_name` and not `name` because `name` is the logger's own record attribute, and stdlib refuses to let an extra overwrite it. |
+| `run_name` | `str \| None` | The run's name, or `None`. Always `None` today: nothing sets one until runs can be named ([#29](https://github.com/jeffrichley/waystation/issues/29)). The extra is present either way, so a reader has one shape rather than two. It is `run_name` and not `name` because `name` is the logger's own record attribute, and stdlib refuses to let an extra overwrite it. |
 
 ### Reading it
 
-A bundle watches the channel with stdlib logging and nothing else:
+A bundle watches the channel with stdlib logging and nothing else. Join it
+**when the bundle is constructed** — that is when a flow script opts in — and
+let one handler serve every run, sorting by `run_id`:
 
 ```python
 import logging
-from waystation import HookBundle, RunContext
+from waystation import HookBundle
 
 class WatchForCancellation(HookBundle):
-    def on_run_start(self, ctx: RunContext) -> None:
-        channel = logging.getLogger("waystation.run")
-        channel.setLevel(logging.INFO)          # so the records exist to handle
-        channel.addHandler(_Mine(ctx.run_id))
+    def __init__(self) -> None:
+        self.channel = logging.getLogger("waystation.run")
+        self.was = self.channel.level
+        self.channel.setLevel(logging.INFO)   # so the records exist to handle
+        self.handler = _Mine()                # sorts records by record.run_id
+        self.channel.addHandler(self.handler)
+
+    def close(self) -> None:                  # give back what you took
+        self.channel.removeHandler(self.handler)
+        self.channel.setLevel(self.was)
 ```
 
-Two things make that as reliable as the shipped `RunLogFiles`:
+Three things to get right, and the reasons are the ones ADR-0026 worked out
+for `RunLogFiles`:
 
-- **Set a level yourself.** Without `configure_logging`, the hierarchy sits at
-  the root's WARNING and an INFO record is never *created*, so no handler can
-  see it. Turning `waystation.run` up is per-logger tuning, which waystation
-  honours everywhere — a logger the script tuned itself reaches the console and
-  a host's handlers too (ADR-0026).
-- **Take the run's task at `run_start`.** A cancelled run fires no `run_end`,
-  so nothing hook-shaped tells you to stop watching. `run_start` fires in the
-  task performing the run, which is where `RunLogFiles` takes it; `agent_output`
-  does not, since it fires from the exec's reader tasks (ADR-0026).
+- **Set a level, and give it back.** Without `configure_logging`, the hierarchy
+  sits at the root's WARNING and an INFO record is never *created*, so no
+  handler can see it. Turning `waystation.run` up is per-logger tuning, which
+  waystation honours everywhere — a logger the script tuned itself reaches the
+  console and a host's handlers too (ADR-0026). That last part is why you
+  restore it: a level left up keeps feeding a host's handlers long after the
+  bundle stopped being used. `RunLogFiles` has to go further — it turns the
+  *whole hierarchy* to DEBUG without being asked, so it also cuts propagation
+  and relays what the host was getting anyway. Turning up one logger you chose
+  is the thing per-logger tuning is for, and needs none of that.
+- **Attach once, not per run.** A handler added in `on_run_start` misses the
+  `run_start` record itself: the orchestrator logs it *before* it fires that
+  hook. It also lands you with per-run attach and detach, which is machinery
+  only something writing a per-run file actually needs.
+- **Have a way out.** A cancelled run fires no `run_end`, so nothing
+  hook-shaped tells you to stop. A bundle holding a level wants a `close()`,
+  the way `RunLogFiles`, `EventLog` and `logging.Handler` all do. If you do
+  attach per run instead, take the run's task at `run_start` — it fires in the
+  task performing the run, which is where `RunLogFiles` takes it, and
+  `agent_output` does not, since it fires from the exec's reader tasks
+  (ADR-0026).
 
 ## The other loggers
 
@@ -108,6 +129,12 @@ a run's observers attach to the package logger, and `logging` routes by dotted
 name alone, so a logger outside the hierarchy is never reached however it is
 tagged. Celery's `get_task_logger` and Prefect's `get_run_logger` parent a
 caller's logger for the same reason.
+
+The names in the table above are waystation's, and `run_logger` refuses them —
+a record with no `event` on `waystation.run` would break the very first table
+on this page for every observer reading it. It also refuses a name you have
+already spelled `waystation.…`, rather than quietly giving you
+`waystation.waystation.…`.
 
 Your own loggers are untouched by this. Keep `myco.docker` for lines that are
 your library's business rather than a run's; `run_logger` is only for the ones

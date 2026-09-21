@@ -23,7 +23,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from waystation.observability import tagged_logger
+from waystation.observability import package_logger
 
 __all__ = [
     "PosixProcesses",
@@ -49,7 +49,7 @@ _WINDOWS_BASE_ENV = (
     "HOMEPATH",
 )
 
-_logger = tagged_logger("waystation")
+_logger = package_logger()
 
 
 @runtime_checkable

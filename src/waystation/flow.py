@@ -31,7 +31,7 @@ from waystation.integration import (
     integrate,
     preserve_series,
 )
-from waystation.observability import bind_run, tagged_logger
+from waystation.observability import bind_run, package_logger
 from waystation.observers import RunLog
 from waystation.preflight import preflight
 from waystation.results import (
@@ -53,7 +53,7 @@ from waystation.workspace import Workspace, prepare_workspace
 
 __all__ = ["Flow", "RunSpec"]
 
-_logger = tagged_logger("waystation")
+_logger = package_logger()
 
 
 def _assert_object_outcome(outcome_type: type[Any]) -> None:

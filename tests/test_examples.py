@@ -80,6 +80,30 @@ def test_every_rung_starts_with_good_habits(rung: Path) -> None:
 
 
 @pytest.mark.unit
+def test_the_readme_flagship_parses_and_imports_only_public_names() -> None:
+    """The front door's snippet is code a newcomer pastes, so it must be code.
+
+    Parsing it and holding its imports to ``waystation.__all__`` catches the
+    drift that matters most, a renamed or dropped name, without running an
+    agent.
+    """
+    import waystation
+
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    snippet = readme.split("```python\n", 1)[1].split("```", 1)[0]
+    tree = ast.parse(snippet)
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "waystation"
+        for alias in node.names
+    }
+
+    assert imported, "the README flagship imports nothing from waystation"
+    assert imported <= set(waystation.__all__), imported - set(waystation.__all__)
+
+
+@pytest.mark.unit
 def test_the_root_readme_sends_newcomers_to_the_examples() -> None:
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     assert "](examples/README.md)" in readme

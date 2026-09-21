@@ -51,6 +51,11 @@ _WINDOWS_BASE_ENV = (
 
 _logger = package_logger()
 
+# A child created suspended cannot spawn anything before it is in its job.
+# `subprocess` has no name for this flag; the value is CREATE_SUSPENDED from
+# the Windows process-creation flags.
+_CREATE_SUSPENDED = 0x00000004
+
 
 @runtime_checkable
 class ProcessTree(Protocol):
@@ -124,10 +129,35 @@ class WindowsProcesses:
     def spawn_options(self) -> dict[str, Any]:
         if sys.platform != "win32":
             raise RuntimeError("WindowsProcesses needs a Windows host")
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        # Suspended, so it cannot spawn anything before it is in the job: see
+        # `adopt`, which is where the reason lives (#105).
+        return {
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED
+        }
 
     def adopt(self, process: asyncio.subprocess.Process) -> ProcessTree:
-        return _JobObject(process, _job_for(process))
+        """Put the process in its job, then let it run — in that order (#105).
+
+        The order is the whole point. ``AssignProcessToJobObject`` adds one
+        process, never the descendants it already has, and asyncio's spawn
+        takes long enough under load — 150 ms to 3 s was measured — for a
+        shell to have forked several. Those are outside the job, so they
+        survive its kill, still holding the stdout they inherited; and
+        ``Process.wait()`` on Windows waits for every pipe to close rather
+        than for the process to exit, so one of them wedges a cancelled run
+        for ever (cpython gh-119710, present on 3.12, 3.13 and 3.14 alike).
+        Creating suspended closes that window: nothing has run, so there is
+        nothing to leave behind.
+        """
+        handle = _handle_of(process)
+        job = None
+        try:
+            job = _job_for(handle)
+        finally:
+            # Whatever the job did, the process must not be left stopped:
+            # a suspended process nobody resumes is one nothing collects.
+            _resume(handle)
+        return _JobObject(process, job)
 
 
 @dataclass(slots=True)
@@ -136,16 +166,17 @@ class _JobObject:
     job: int | None
 
     def kill(self) -> None:
+        """Terminate the job, which is every process the exec started.
+
+        No ``taskkill``: it walks live parent-child links at snapshot time,
+        so it misses exactly the orphan a job is for. It also blocked the
+        event loop for half a second per exec, to report "process not found"
+        on all 129 kills of a measured run (#105). ``process.kill`` stays as
+        the fallback for a host that gave us no job.
+        """
         if self.job is not None:
             with suppress(OSError):
                 _kernel32().TerminateJobObject(self.job, 1)
-        # taskkill /T also reaches children started before the job existed.
-        with suppress(OSError):
-            subprocess.run(
-                ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
-                check=False,
-                capture_output=True,
-            )
         with suppress(ProcessLookupError, OSError):
             self.process.kill()
 
@@ -167,15 +198,100 @@ def host_processes() -> ProcessStrategy:
 
 
 def _kernel32() -> Any:
+    """kernel32 with every prototype declared.
+
+    Without ``restype`` ctypes hands back a C ``int``, which truncates a
+    64-bit ``HANDLE`` and turns one with the top bit set negative; without
+    ``argtypes`` it marshals each argument as a 32-bit int. Handle values are
+    small enough that this worked, which is what makes it worth declaring —
+    the failure would be silent and would arrive on someone else's machine.
+    A mismatch also raises ``ctypes.ArgumentError``, which is not an
+    ``OSError``, so it would walk straight out through a ``suppress(OSError)``
+    (#105).
+    """
     if sys.platform != "win32":
         raise RuntimeError("kernel32 exists only on Windows")
     import ctypes
+    from ctypes import wintypes
 
-    return ctypes.WinDLL("kernel32", use_last_error=True)
+    dll = ctypes.WinDLL("kernel32", use_last_error=True)
+    dll.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    dll.CreateJobObjectW.restype = wintypes.HANDLE
+    dll.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    dll.SetInformationJobObject.restype = wintypes.BOOL
+    dll.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    dll.AssignProcessToJobObject.restype = wintypes.BOOL
+    dll.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    dll.TerminateJobObject.restype = wintypes.BOOL
+    dll.CloseHandle.argtypes = [wintypes.HANDLE]
+    dll.CloseHandle.restype = wintypes.BOOL
+    dll.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    dll.OpenProcess.restype = wintypes.HANDLE
+    return dll
 
 
-def _job_for(process: asyncio.subprocess.Process) -> int | None:
-    """Put ``process`` in a new kill-on-close Job Object; ``None`` if that fails."""
+def _handle_of(process: asyncio.subprocess.Process) -> int:
+    """The process handle asyncio already holds, not a fresh one by pid.
+
+    ``OpenProcess(pid)`` is a race: a pid identifies a process only while
+    something holds a handle to it, and reopening one asyncio is already
+    holding buys nothing but the chance of opening someone else's (#105).
+    The transport is private, so a host whose asyncio has moved it falls
+    back — safely, because the handle asyncio holds is what pins the pid.
+    """
+    transport = getattr(process, "_transport", None)
+    popen = None if transport is None else transport.get_extra_info("subprocess")
+    handle = getattr(popen, "_handle", None)
+    if handle:
+        return int(handle)
+    process_set_quota_and_terminate = 0x0100 | 0x0001
+    opened = _kernel32().OpenProcess(
+        process_set_quota_and_terminate, False, process.pid
+    )
+    if not opened:
+        msg = f"could not open the process just started (pid {process.pid})"
+        raise OSError(msg)
+    return int(opened)
+
+
+def _resume(handle: int) -> None:
+    """Let a process created suspended start running.
+
+    ``ResumeThread`` has nothing to take: CPython closes the child's thread
+    handle inside ``Popen._execute_child`` and keeps no thread id, so the
+    only way back to a running process is by process handle.
+    ``NtResumeProcess`` is not in the SDK headers, but it has been in ntdll
+    since NT 4 and is what Sysinternals' ``pssuspend`` uses; the documented
+    alternative is to walk every thread in a Toolhelp32 snapshot, which is
+    more code to get wrong for the same effect.
+
+    It raises rather than returning a failure: a process left suspended is
+    one that will never exit, never write, and never be collected, so a run
+    that cannot resume its agent is better off failing here (ADR-0016 covers
+    results, not this — nothing has started yet to have a result).
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    ntdll.NtResumeProcess.restype = ctypes.c_long
+    status = int(ntdll.NtResumeProcess(wintypes.HANDLE(handle)))
+    if status < 0:
+        msg = (
+            "could not resume the process just started "
+            f"(NTSTATUS 0x{status & 0xFFFFFFFF:08X})"
+        )
+        raise OSError(msg)
+
+
+def _job_for(handle: int) -> int | None:
+    """Put the process at ``handle`` in a kill-on-close job; ``None`` if that fails."""
     import ctypes
     from ctypes import wintypes
 
@@ -214,11 +330,11 @@ def _job_for(process: asyncio.subprocess.Process) -> int | None:
 
     job_object_limit_kill_on_job_close = 0x00002000
     process_extend_limit_information = 9
-    process_all_access = 0x1F0FFF
     try:
         kernel32 = _kernel32()
         job = kernel32.CreateJobObjectW(None, None)
         if not job:
+            _logger.warning("could not make a job object: %s", ctypes.get_last_error())
             return None
         info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         info.BasicLimitInformation.LimitFlags = job_object_limit_kill_on_job_close
@@ -228,15 +344,16 @@ def _job_for(process: asyncio.subprocess.Process) -> int | None:
             ctypes.byref(info),
             ctypes.sizeof(info),
         ):
+            _logger.warning("could not set job limits: %s", ctypes.get_last_error())
             kernel32.CloseHandle(job)
             return None
-        handle = kernel32.OpenProcess(process_all_access, False, process.pid)
-        if not handle:
-            kernel32.CloseHandle(job)
-            return None
-        joined = kernel32.AssignProcessToJobObject(job, handle)
-        kernel32.CloseHandle(handle)
-        if not joined:
+        if not kernel32.AssignProcessToJobObject(job, wintypes.HANDLE(handle)):
+            # Worth saying out loud: without the job this exec's descendants
+            # outlive its kill, which is what #105 was.
+            _logger.warning(
+                "could not put the process in its job object: %s",
+                ctypes.get_last_error(),
+            )
             kernel32.CloseHandle(job)
             return None
         return int(job)

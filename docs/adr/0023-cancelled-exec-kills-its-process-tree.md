@@ -7,6 +7,8 @@ type: adr
 
 The sandbox protocol's `exec` carries a cancellation contract: when the awaiting task is cancelled — a silence or wall bound firing, `completion_grace` running out, a signal, a fan-out left early — the backend terminates the exec's whole process tree inside the sandbox before the cancellation completes. Docker starts each exec in its own process group and kills that group with a second `docker exec`; `NoSandbox` kills the process group on POSIX and the Job Object on Windows. Collect therefore always runs against a workspace nothing is still writing to.
 
+**Amended by [ADR-0042](0042-nothing-escapes-the-job-and-a-kill-is-not-waited-on-for-ever.md).** "Kills the Job Object on Windows" left out *when* the job has to exist: adopting a process after it was already running let its descendants start outside the job, survive the kill, and hold the pipe that a cancelled exec was waiting to close. The child is created suspended and resumed only once it is in the job, and the wait after a kill is bounded rather than endless.
+
 Why: cancelling the `docker exec` client leaves the process inside the container running. Sandcastle accepts that and lets teardown kill the agent, so its salvage races a live agent — it can commit half-written files, and an agent holding `index.lock` makes salvage's `git add` fail, losing the series ADR-0016 promises to preserve.
 
 ## Considered options

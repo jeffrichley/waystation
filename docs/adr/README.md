@@ -1,13 +1,8 @@
----
-type: playbook
----
 # Decisions
 
 Each ADR is one decision, why it was made, and the options it beat. Reading one saves you re-walking a road that was already walked.
 
 You are not expected to read them all. Scan the **Read it when** column, open the two or three that touch what you're about to change, and move on. If your change contradicts one, say so out loud rather than quietly overriding it — a decision can be revisited, but not by accident.
-
-The rules for writing an ADR and changing one are [the law of ADRs](CLAUDE.md).
 
 ## The shape of the library
 
@@ -29,6 +24,7 @@ The rules for writing an ADR and changing one are [the law of ADRs](CLAUDE.md).
 | [0024](0024-first-failure-wins.md) The first failure wins; later failures are logged | handling an error that arrives after the run already failed |
 | [0023](0023-cancelled-exec-kills-its-process-tree.md) A cancelled exec kills its process tree | touching cancellation, signals, or how a process is killed |
 | [0027](0027-host-git-is-killable-and-a-ref-swap-finishes.md) Host git is killable, and a ref swap, once started, finishes | running git on the host, or deciding what a bound may kill |
+| [0042](0042-nothing-escapes-the-job-and-a-kill-is-not-waited-on-for-ever.md) Nothing escapes the job, and a kill is not waited on for ever | spawning, adopting or killing a host process, or changing what happens after a tree is killed |
 
 ## Workspace, commits and integration
 

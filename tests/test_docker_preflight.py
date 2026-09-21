@@ -96,8 +96,10 @@ async def test_an_image_that_is_here_but_will_not_inspect_is_not_called_missing(
 ) -> None:
     """#97: docker says the image is here, so nobody is sent to rebuild it.
 
-    Docker Desktop does exactly this after its VM auto-pauses: lookup by name
-    fails while the image is listed and readable by id.
+    Docker Desktop is seen doing exactly this: a lookup by name fails while
+    the image is listed and readable by id. What brings it on is not pinned
+    down, which is the argument for classifying on what docker says rather
+    than on a theory of why it said it.
     """
     monkeypatch.setattr(
         docker_module,

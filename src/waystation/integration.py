@@ -759,7 +759,9 @@ async def _refuse_tracked_changes(repo: GitRepo) -> None:
             None,
             Refused(
                 reason="dirty_tree",
-                detail=f"uncommitted changes to tracked files: {_listed(paths)}",
+                detail=(
+                    f"uncommitted changes to tracked files: {_named_for_detail(paths)}"
+                ),
             ),
         )
 
@@ -787,7 +789,7 @@ async def _fast_forward(repo: GitRepo, target: Target, tip: str) -> None:
                 reason="dirty_tree",
                 detail=(
                     "untracked files the landing would overwrite: "
-                    f"{_listed(in_the_way)}"
+                    f"{_named_for_detail(in_the_way)}"
                 ),
             ),
         )
@@ -813,6 +815,8 @@ async def _untracked_in_the_way(repo: GitRepo, target: Target, tip: str) -> list
     would overwrite them without a word, and they are the user's all the same.
     """
     top = Path(await repo.git("rev-parse", "--show-toplevel"))
+    # --full-tree: ls-tree lists from where git runs, and a GitRepo opened in
+    # a subdirectory runs there; diff lists from the top, and so must this.
     if target.exists:
         added = await _listing(
             repo,
@@ -823,24 +827,43 @@ async def _untracked_in_the_way(repo: GitRepo, target: Target, tip: str) -> list
             target.tip,
             tip,
         )
-        tracked = set(
-            await _listing(repo, "ls-tree", "-r", "-t", "--name-only", target.tip)
+        tracked = await _listing(
+            repo, "ls-tree", "-r", "-t", "--full-tree", "--name-only", target.tip
         )
     else:
         # An unborn branch: everything the landing checks out is new.
-        added = await _listing(repo, "ls-tree", "-r", "--name-only", tip)
-        tracked = set()
+        added = await _listing(repo, "ls-tree", "-r", "--full-tree", "--name-only", tip)
+        tracked = []
+    tracked_here = set(tracked)
+    by_case = {path.casefold(): path for path in tracked}
     in_the_way: set[str] = set()
     for path in added:
         parts = path.split("/")
         for depth in range(1, len(parts)):
             above = "/".join(parts[:depth])
             on_disk = top / above
-            if above not in tracked and (on_disk.is_symlink() or on_disk.is_file()):
+            if above not in tracked_here and (
+                on_disk.is_symlink() or on_disk.is_file()
+            ):
                 in_the_way.add(above)
-        if os.path.lexists(top / path):
+        if os.path.lexists(top / path) and not _is_tracked_as(top, path, by_case):
             in_the_way.add(path)
     return sorted(in_the_way)
+
+
+def _is_tracked_as(top: Path, path: str, by_case: Mapping[str, str]) -> bool:
+    """Whether ``path`` on disk is a tracked file under another case.
+
+    On a case-insensitive filesystem a landing that renames ``Foo`` to
+    ``foo`` finds ``foo`` already there, and it is the tracked ``Foo``.
+    """
+    other = by_case.get(path.casefold())
+    if other is None:
+        return False
+    try:
+        return os.path.samefile(top / path, top / other)
+    except OSError:
+        return False  # the tracked one isn't on disk: a sparse checkout, say
 
 
 async def _listing(repo: GitRepo, *args: str) -> list[str]:
@@ -854,7 +877,7 @@ async def _listing(repo: GitRepo, *args: str) -> list[str]:
     return [entry for entry in listed.stdout.split("\0") if entry]
 
 
-def _listed(paths: list[str]) -> str:
+def _named_for_detail(paths: list[str]) -> str:
     """Paths for a refusal's detail: a few named, the rest counted."""
     # Five is for a person reading one line, not a bound on any work.
     shown = ", ".join(paths[:5])

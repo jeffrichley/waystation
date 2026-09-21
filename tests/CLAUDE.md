@@ -41,6 +41,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `TEST_IMAGE` | the name of the docker tier's image — for a test that must name it outside the `image` fixture, as a preflight test does |
 | `branches(repo, pattern)` | the short names of the branches matching `pattern` — `"waystation/*"` for the preservation branches a run kept |
 | `printf_bytes(path, data)` | a sh command writing `data` to `path` byte for byte, as octal escapes — so a CR or a non-UTF-8 byte reaches the file, not just the command line |
+| `assert_refused(result, reason, repo)` | a run that failed at integrate with `Refused(reason)`, `a_run`'s default series kept on its preservation branch — for a target a landing refused |
 | `subjects(repo, revisions)` | the commit subjects in a range like `HEAD..waystation/<id>`, newest first — what a preserved or landed series holds |
 | `lifecycle(caplog)` | the records a run logged per lifecycle event (`waystation.run`), in order |
 | `workspaces(temp)` | the run workspaces left under a temp dir — assert `== []` to prove a run cleaned up |

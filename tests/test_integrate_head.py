@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import a_run, git, host_state, subjects
+from helpers import a_run, assert_refused, git, host_state, subjects
 from waystation import (
     Integration,
     PatchSeries,
@@ -22,6 +22,7 @@ from waystation import (
     RunSucceeded,
     ScriptedCommit,
     Squash,
+    integrate,
 )
 from waystation.integration import (
     GitRepo,
@@ -37,16 +38,6 @@ STRATEGIES = pytest.mark.parametrize(
     [Integration("HEAD"), Integration("HEAD", mechanism="merge"), Squash("HEAD")],
     ids=["apply", "merge", "squash"],
 )
-
-
-def assert_refused(result: object, reason: str, repo: Path) -> None:
-    """Failed at integrate for ``reason``, with the series kept all the same."""
-    assert isinstance(result, RunFailed)
-    assert result.stage == "integrate"
-    assert isinstance(result.failure, Refused)
-    assert result.failure.reason == reason
-    assert result.preserved == f"waystation/{result.run_id}"
-    assert git(repo, "log", "-1", "--format=%s", result.preserved) == "add a file"
 
 
 @STRATEGIES
@@ -323,6 +314,76 @@ async def test_nothing_to_land_leaves_head_alone(host_repo: Path) -> None:
     assert result.report is not None
     assert result.report.landed == ()
     assert host_state(host_repo) == before
+
+
+def commit_of(repo: Path, files: Mapping[str, bytes]) -> str:
+    """A commit atop HEAD whose tree is exactly ``files``, the checkout untouched.
+
+    Built in a scratch index, so it can delete, rename or recase a path —
+    what a ``ScriptedCommit`` cannot.
+    """
+    env = {**os.environ, "GIT_INDEX_FILE": str(repo / ".git" / "scratch-index")}
+    for path, data in files.items():
+        blob = (
+            subprocess.run(
+                ["git", "hash-object", "-w", "--stdin"],
+                cwd=repo,
+                input=data,
+                capture_output=True,
+                check=True,
+            )
+            .stdout.decode()
+            .strip()
+        )
+        subprocess.run(
+            ["git", "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}"],
+            cwd=repo,
+            env=env,
+            check=True,
+        )
+    tree = (
+        subprocess.run(
+            ["git", "write-tree"], cwd=repo, env=env, capture_output=True, check=True
+        )
+        .stdout.decode()
+        .strip()
+    )
+    (repo / ".git" / "scratch-index").unlink()
+    return git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "reshape")
+
+
+async def test_a_host_opened_from_a_subdirectory_lands_every_path(
+    host_repo: Path,
+) -> None:
+    # README becomes a directory: a tracked file replaced, not one in the way.
+    (host_repo / "sub").mkdir()
+    (host_repo / "sub" / "keep").write_bytes(b"k\n")
+    git(host_repo, "add", "sub")
+    git(host_repo, "commit", "-q", "-m", "a subdirectory")
+    base = git(host_repo, "rev-parse", "HEAD")
+    tip = commit_of(host_repo, {"README/x": b"x\n", "sub/keep": b"k\n"})
+    series = await PatchSeries.from_range(host_repo, base, tip)
+    repo = await GitRepo.open(host_repo / "sub")
+
+    report = await integrate(repo, series, Integration("HEAD"))
+
+    assert report.target_after == git(host_repo, "rev-parse", "HEAD")
+    assert (host_repo / "README" / "x").read_bytes() == b"x\n"
+
+
+async def test_a_landing_that_only_recases_a_path_is_not_in_its_own_way(
+    host_repo: Path,
+) -> None:
+    # On a case-insensitive filesystem the new name is already on disk,
+    # and it is the tracked file under its old case.
+    base = git(host_repo, "rev-parse", "HEAD")
+    tip = commit_of(host_repo, {"readme": b"committed\n"})
+    series = await PatchSeries.from_range(host_repo, base, tip)
+
+    report = await integrate(host_repo, series, Integration("HEAD"))
+
+    assert report.target_after == git(host_repo, "rev-parse", "HEAD")
+    assert git(host_repo, "ls-files") == "readme"
 
 
 FLOW = """\

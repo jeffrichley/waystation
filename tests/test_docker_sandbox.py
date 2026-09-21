@@ -76,11 +76,19 @@ TRANSPORTS = [
 
 @pytest.fixture
 async def image() -> str:
-    """The docker tier's image — or a failure saying how to build it."""
+    """The docker tier's image — or a failure saying what to do about it."""
     try:
         await DockerSandbox(TEST_IMAGE).preflight()
     except PreflightError as err:
-        pytest.fail(f"{err}\nThe docker tier runs in it: `just test-image` builds it.")
+        # Only an image docker says is absent wants building; a lookup that
+        # merely failed wants the error itself, not a rebuild of what is
+        # already here (#97).
+        hint = (
+            "The docker tier runs in it: `just test-image` builds it."
+            if isinstance(err.failure, Refused)
+            else "The image is not the problem; docker could not answer for it."
+        )
+        pytest.fail(f"{err}\n{hint}")
     return TEST_IMAGE
 
 

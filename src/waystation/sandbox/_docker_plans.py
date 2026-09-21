@@ -18,6 +18,7 @@ __all__ = [
     "plan_create",
     "plan_destroy",
     "plan_exec",
+    "plan_image_ls",
     "plan_inspect",
     "plan_kill",
     "plan_list",
@@ -166,6 +167,19 @@ def plan_list(run_id: str | None) -> tuple[str, ...]:
 def plan_inspect(image: str) -> tuple[str, ...]:
     """Is the image here? Fails if it is not, or if the daemon is not."""
     return ("docker", "image", "inspect", "--format", "{{.Id}}", image)
+
+
+def plan_image_ls(image: str) -> tuple[str, ...]:
+    """The id of every image matching ``image`` as a reference; none when absent.
+
+    The question ``plan_inspect`` cannot answer. An inspect that fails says
+    only that it failed — "No such image" and "the daemon would not answer"
+    come back the same way, and telling them apart by reading the message is
+    how a present image gets called missing. Here the answer is in the shape
+    of the result instead: the exit code says whether docker answered, and
+    the output says whether the image is here.
+    """
+    return ("docker", "image", "ls", "--quiet", "--filter", f"reference={image}")
 
 
 def plan_ping() -> tuple[str, ...]:

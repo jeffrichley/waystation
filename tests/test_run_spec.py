@@ -38,6 +38,7 @@ _BUILDERS = (
     "env",
     "pass_env",
     "name",
+    "extra_refs",
 )
 
 _ANY_REPO = Path("repo")
@@ -88,6 +89,7 @@ def test_a_spec_stores_its_values_under_the_glossary_s_words() -> None:
     assert spec.environment == {}
     assert spec.pass_through == ()
     assert spec.label is None
+    assert spec.visible_refs == ()
 
 
 _OTHER_AGENT = ScriptedAgent(outcome={"summary": "different"})
@@ -107,6 +109,11 @@ _OTHER_SANDBOX = NoSandbox(env={"WAYSTATION": "1"})
         (lambda s: s.env({"WAYSTATION": "1"}), "environment", {"WAYSTATION": "1"}),
         (lambda s: s.pass_env("CI", "HOME"), "pass_through", ("CI", "HOME")),
         (lambda s: s.name("fix-the-flake"), "label", "fix-the-flake"),
+        (
+            lambda s: s.extra_refs("waystation/0a1b"),
+            "visible_refs",
+            ("waystation/0a1b",),
+        ),
     ],
     ids=[
         "agent",
@@ -118,6 +125,7 @@ _OTHER_SANDBOX = NoSandbox(env={"WAYSTATION": "1"})
         "env",
         "pass_env",
         "name",
+        "extra_refs",
     ],
 )
 def test_a_builder_returns_a_new_spec_and_leaves_the_old_one_alone(
@@ -155,6 +163,15 @@ def test_the_environment_builders_replace_rather_than_merge_too() -> None:
 
     assert replaced.environment == {"B": "2"}
     assert replaced.pass_through == ("HOME",)
+
+
+@pytest.mark.unit
+def test_extra_refs_replaces_rather_than_merges() -> None:
+    """Like ``.pass_env()``: the refs named last are the refs that travel."""
+    spec = a_run(_ANY_REPO).extra_refs("one", "two")
+
+    assert spec.extra_refs("three").visible_refs == ("three",)
+    assert spec.extra_refs().visible_refs == ()
 
 
 @pytest.mark.unit

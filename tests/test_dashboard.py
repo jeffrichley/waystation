@@ -257,8 +257,7 @@ async def test_a_display_that_cannot_draw_costs_a_log_line_not_the_work(
 
 @pytest.mark.unit
 def test_a_named_run_shows_its_name_and_what_it_cost(tmp_path: Path) -> None:
-    """Driven directly: no run is named until #29, and no agent reports usage
-    until ClaudeCode lands (#36)."""
+    """Driven directly, so the usage is known to the cent."""
     ctx = RunContext(RunRecord(run_id="0badcafe", name="nightly", repo=tmp_path))
     usage = AgentUsage(input_tokens=1200, output_tokens=300, cost_usd=0.4217)
     dashboard = Dashboard()

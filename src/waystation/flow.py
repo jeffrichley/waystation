@@ -36,6 +36,7 @@ from waystation.results import (
     Summary,
     Timeouts,
 )
+from waystation.sandbox import allowlisted_env
 from waystation.sandbox.protocol import Sandbox, SandboxBackend
 from waystation.stages import StageRunner, stages
 from waystation.workspace import Workspace, prepare_workspace
@@ -183,6 +184,12 @@ class RunSpec[OutcomeT]:
             ``.integrate()`` sets it.
         hook_registry: The hooks that fire — ``.hooks()`` and ``.on_<hook>()``
             append to it.
+        environment: The per-run tier's literal values — ``.env()`` sets
+            them.
+        pass_through: The per-run tier's host variables — ``.pass_env()``
+            sets them.
+        label: The name the run's results and console carry, or ``None`` —
+            ``.name()`` sets it.
     """
 
     repo: Path
@@ -195,6 +202,9 @@ class RunSpec[OutcomeT]:
     salvaging: bool = True
     integration: IntegrationStrategy | None = None
     hook_registry: HookRegistry = field(default_factory=HookRegistry)
+    environment: Mapping[str, str] = field(default_factory=dict)
+    pass_through: tuple[str, ...] = ()
+    label: str | None = None
 
     # Builders. Each replaces the value it names and returns a new spec, the
     # way ``dataclasses.replace`` does; the hook builders below append instead
@@ -287,6 +297,54 @@ class RunSpec[OutcomeT]:
             A new spec; this one is unchanged.
         """
         return replace(self, bounds=bounds)
+
+    def env(self, values: Mapping[str, str]) -> RunSpec[OutcomeT]:
+        """Replace this run's literal environment values.
+
+        The per-run tier is the most specific of the three, so it wins over
+        the sandbox spec's and the agent provider's (ADR-0013), and it goes
+        in when the sandbox starts, so every exec of the run sees it — collect
+        included, unlike a provider's (ADR-0034). Within the tier a literal
+        beats a ``.pass_env()`` name. ``GIT_AUTHOR_NAME`` and
+        ``GIT_AUTHOR_EMAIL`` here author the agent's commits instead of the
+        identity the workspace copied from the host.
+
+        Args:
+            values: The variables and values to set. Replaces what an earlier
+                ``.env()`` set rather than merging with it.
+
+        Returns:
+            A new spec; this one is unchanged.
+        """
+        return replace(self, environment=dict(values))
+
+    def pass_env(self, *names: str) -> RunSpec[OutcomeT]:
+        """Replace the host variables this run passes through.
+
+        Each is read from the host when the run starts, not now, and one the
+        host lacks is skipped (ADR-0034). They rank with ``.env()``: over the
+        sandbox spec and the agent provider, into every exec of the run.
+
+        Args:
+            *names: The variables to pass through. Replaces what an earlier
+                ``.pass_env()`` named.
+
+        Returns:
+            A new spec; this one is unchanged.
+        """
+        return replace(self, pass_through=names)
+
+    def name(self, label: str) -> RunSpec[OutcomeT]:
+        """Name this run, for the results it returns and the console.
+
+        Args:
+            label: What to call it. The run id is still made and still
+                carried; a name only stands beside it.
+
+        Returns:
+            A new spec; this one is unchanged.
+        """
+        return replace(self, label=label)
 
     # Per-run hooks: each returns a new RunSpec whose hooks fire after the
     # flow's. Bundles are any objects with a subset of the ``on_<hook>`` methods.
@@ -391,7 +449,7 @@ class RunSpec[OutcomeT]:
                 reports a cancelled run, but what its agent left is still
                 collected and kept first (ADR-0017).
         """
-        record = RunRecord(run_id=secrets.token_hex(4), name=None, repo=self.repo)
+        record = RunRecord(run_id=secrets.token_hex(4), name=self.label, repo=self.repo)
         ctx = RunContext(record)
         with bind_run(record.run_id, record.name):
             # Bound, so what preflight logs carries the id, but a run that
@@ -527,15 +585,20 @@ class RunSpec[OutcomeT]:
     ) -> OutcomeT | None:
         """Sandbox, agent and collect stages; the sandbox is gone on return."""
         # Read once for the tiers core owns, so the agent's environment and
-        # #29's per-run one come from one reading of the host, however long
+        # the per-run one come from one reading of the host, however long
         # the sandbox takes to start. A backend reads once for its own tier,
         # inside start(): the protocol hands it literals, not this (ADR-0034).
         host_env = dict(os.environ)
+        # Handed to start(), so it reaches every exec over the spec's tier,
+        # and to the agent exec again, over the provider's (ADR-0013).
+        per_run = allowlisted_env(
+            literal=self.environment, pass_env=self.pass_through, host_env=host_env
+        )
         # start() is an async context manager. ``entering`` is not used:
         # this orchestrator holds "a teardown failure never masks the result"
         # (ADR-0016), which is policy the stage runner leaves to it, so the
         # two halves are paired here instead (ADR-0032).
-        cm = self.backend.start(workspace, env={})
+        cm = self.backend.start(workspace, env=per_run)
         record.stage = "sandbox"
         # A start that failed cleans up after itself: ``async with`` never
         # exits a context it did not enter. The workspace is not part of
@@ -547,7 +610,9 @@ class RunSpec[OutcomeT]:
             record.log.on_sandbox_ready(ctx)
             await self.hook_registry.fire("sandbox_ready", ctx)
             try:
-                outcome = await self._run_agent(run, ctx, record, sandbox, host_env)
+                outcome = await self._run_agent(
+                    run, ctx, record, sandbox, host_env, per_run
+                )
             except asyncio.CancelledError:
                 # The exec killed the agent's tree before this was raised
                 # (ADR-0023), and the runner is holding the cancellation, so
@@ -566,6 +631,7 @@ class RunSpec[OutcomeT]:
         record: RunRecord,
         sandbox: Sandbox,
         host_env: Mapping[str, str],
+        per_run: Mapping[str, str],
     ) -> OutcomeT | None:
         """Agent stage: exec the provider's command, then ``agent_end``."""
         record.stage = "agent"
@@ -587,6 +653,7 @@ class RunSpec[OutcomeT]:
                 timeouts=self.bounds,
                 on_output=_on_output,
                 host_env=host_env,
+                env=per_run,
             )
         except Exception as exc:
             raise StageError("agent", Errored(exception=exc)) from exc

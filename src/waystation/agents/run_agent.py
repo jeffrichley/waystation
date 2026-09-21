@@ -72,6 +72,7 @@ def run_agent[OutcomeT](
     timeouts: Timeouts | None = None,
     on_output: Callable[[AgentLine], Awaitable[None] | None] | None = None,
     host_env: Mapping[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> Coroutine[Any, Any, tuple[AgentExit, OutcomeT]]:
     """Run ``prompt`` through ``provider`` and validate the Outcome it reports.
 
@@ -89,6 +90,11 @@ def run_agent[OutcomeT](
     looked up in; a run passes the one it read at its start, so one run sees
     one environment however long it takes (ADR-0034). On its own it reads
     ``os.environ``, as running a command by hand would.
+
+    ``env`` is resolved literals laid over the provider's tier at the agent
+    exec. A run passes its per-run tier here, since the sandbox already
+    holds that tier but the provider's would otherwise win over it at this
+    one exec — and the most specific tier wins everywhere (ADR-0013).
 
     Raises ``TypeError`` at the call for an ``outcome_type`` that is not
     object-shaped, before the provider is asked for anything, and an
@@ -108,6 +114,7 @@ def run_agent[OutcomeT](
         timeouts=timeouts,
         on_output=on_output,
         host_env=host_env,
+        env=env,
     )
 
 
@@ -120,6 +127,7 @@ async def _run[OutcomeT](
     timeouts: Timeouts | None,
     on_output: Callable[[AgentLine], Awaitable[None] | None] | None,
     host_env: Mapping[str, str] | None,
+    env: Mapping[str, str] | None,
 ) -> tuple[AgentExit, OutcomeT]:
     """Exec ``command`` and validate what it reports; see ``run_agent``."""
     bounds = timeouts if timeouts is not None else Timeouts()
@@ -253,11 +261,14 @@ async def _run[OutcomeT](
 
     # The provider's tier, resolved where every tier is (ADR-0034). A run
     # passes the host it read at its start, so one run sees one environment.
-    exec_env = allowlisted_env(
-        literal=command.env,
-        pass_env=command.pass_env,
-        host_env=os.environ if host_env is None else host_env,
-    )
+    exec_env = {
+        **allowlisted_env(
+            literal=command.env,
+            pass_env=command.pass_env,
+            host_env=os.environ if host_env is None else host_env,
+        ),
+        **(env or {}),
+    }
 
     _arm_silence()
 

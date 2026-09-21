@@ -246,12 +246,17 @@ def test_the_documented_events_are_the_ones_the_library_names() -> None:
 
 
 @pytest.mark.git
+@pytest.mark.parametrize("name", [None, "nightly"])
 async def test_every_record_on_the_channel_carries_the_run_and_its_event(
-    host_repo: Path, clean_logging: None, caplog: pytest.LogCaptureFixture
+    host_repo: Path,
+    clean_logging: None,
+    caplog: pytest.LogCaptureFixture,
+    name: str | None,
 ) -> None:
     """The extras are the interface too: a bundle filters a fan-out by them."""
+    spec = a_run(host_repo) if name is None else a_run(host_repo).name(name)
     with caplog.at_level(logging.INFO, logger="waystation.run"):
-        result = await a_run(host_repo)
+        result = await spec
 
     records = lifecycle(caplog)
     assert records, "a run logs its lifecycle"
@@ -259,10 +264,10 @@ async def test_every_record_on_the_channel_carries_the_run_and_its_event(
         assert record.levelno == logging.INFO
         assert getattr(record, "run_id", None) == result.run_id
         assert getattr(record, "event", None) in get_args(RunEvent)
-        # Present and None until a run can be named (#29); the extra is set
-        # either way, so a bundle reads one attribute rather than two shapes.
+        # Set whether or not the run was named, so a bundle reads one
+        # attribute rather than two shapes.
         assert hasattr(record, "run_name")
-        assert record.run_name is None
+        assert record.run_name == name
 
 
 @pytest.mark.git

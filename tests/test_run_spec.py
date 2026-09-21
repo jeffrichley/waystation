@@ -13,11 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from helpers import a_run
+from helpers import ShellAgent, a_run
 from waystation import (
     Integration,
     NoSandbox,
+    RunFailed,
     RunSpec,
+    RunSucceeded,
     ScriptedAgent,
     Summary,
     Timeouts,
@@ -25,7 +27,18 @@ from waystation import (
 
 # The bare names the builders own, spelled out rather than read off the class:
 # a list derived from `RunSpec` would agree with whatever `RunSpec` became.
-_BUILDERS = ("agent", "sandbox", "base", "salvage", "timeouts", "integrate", "hooks")
+_BUILDERS = (
+    "agent",
+    "sandbox",
+    "base",
+    "salvage",
+    "timeouts",
+    "integrate",
+    "hooks",
+    "env",
+    "pass_env",
+    "name",
+)
 
 _ANY_REPO = Path("repo")
 """No run is performed here, so a spec needs no repo that exists."""
@@ -72,6 +85,9 @@ def test_a_spec_stores_its_values_under_the_glossary_s_words() -> None:
     assert spec.bounds == Timeouts()
     assert spec.salvaging is True
     assert spec.integration is None
+    assert spec.environment == {}
+    assert spec.pass_through == ()
+    assert spec.label is None
 
 
 _OTHER_AGENT = ScriptedAgent(outcome={"summary": "different"})
@@ -88,8 +104,21 @@ _OTHER_SANDBOX = NoSandbox(env={"WAYSTATION": "1"})
         (lambda s: s.timeouts(Timeouts(collect=9.0)), "bounds", Timeouts(collect=9.0)),
         (lambda s: s.salvage(False), "salvaging", False),
         (lambda s: s.integrate("feature"), "integration", Integration("feature")),
+        (lambda s: s.env({"WAYSTATION": "1"}), "environment", {"WAYSTATION": "1"}),
+        (lambda s: s.pass_env("CI", "HOME"), "pass_through", ("CI", "HOME")),
+        (lambda s: s.name("fix-the-flake"), "label", "fix-the-flake"),
     ],
-    ids=["agent", "sandbox", "base", "timeouts", "salvage", "integrate"],
+    ids=[
+        "agent",
+        "sandbox",
+        "base",
+        "timeouts",
+        "salvage",
+        "integrate",
+        "env",
+        "pass_env",
+        "name",
+    ],
 )
 def test_a_builder_returns_a_new_spec_and_leaves_the_old_one_alone(
     build: Callable[[RunSpec[Summary]], RunSpec[Summary]], reads: str, expected: object
@@ -118,6 +147,28 @@ def test_a_builder_replaces_its_value_rather_than_merging_it() -> None:
 
 
 @pytest.mark.unit
+def test_the_environment_builders_replace_rather_than_merge_too() -> None:
+    """``.env()`` names the whole per-run tier, as ``.timeouts()`` does its bounds."""
+    spec = a_run(_ANY_REPO).env({"A": "1"}).pass_env("CI")
+
+    replaced = spec.env({"B": "2"}).pass_env("HOME")
+
+    assert replaced.environment == {"B": "2"}
+    assert replaced.pass_through == ("HOME",)
+
+
+@pytest.mark.unit
+def test_a_spec_keeps_its_own_copy_of_the_environment() -> None:
+    """A mapping changed after ``.env()`` must not reach a spec that is frozen."""
+    given = {"A": "1"}
+    spec = a_run(_ANY_REPO).env(given)
+
+    given["A"] = "changed"
+
+    assert spec.environment == {"A": "1"}
+
+
+@pytest.mark.unit
 def test_a_spec_is_read_only() -> None:
     spec = a_run(_ANY_REPO)
 
@@ -139,3 +190,24 @@ def test_the_builders_chain_in_any_order() -> None:
     assert spec.salvaging is False
     assert spec.bounds.agent_wall == 30.0
     assert spec.integration == Integration("agents/x", mechanism="merge")
+
+
+@pytest.mark.git
+@pytest.mark.parametrize("name", [None, "fix-the-flake"])
+async def test_a_runs_name_is_on_what_it_returns(
+    host_repo: Path, name: str | None
+) -> None:
+    spec = a_run(host_repo) if name is None else a_run(host_repo).name(name)
+
+    result = await spec
+
+    assert isinstance(result, RunSucceeded), result
+    assert result.name == name
+
+
+@pytest.mark.git
+async def test_a_failed_run_carries_its_name_too(host_repo: Path) -> None:
+    result = await a_run(host_repo).agent(ShellAgent("exit 3")).name("doomed")
+
+    assert isinstance(result, RunFailed), result
+    assert result.name == "doomed"

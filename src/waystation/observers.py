@@ -648,7 +648,7 @@ class _Row:
 
     The stage is not kept here: ``ctx`` is live, so the display reads it as
     it draws and sees each stage begin, integrate included, though no hook
-    announces that one (#79).
+    announces that one (ADR-0039).
     """
 
     ctx: RunContext

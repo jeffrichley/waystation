@@ -30,6 +30,7 @@ from waystation.results import (
     AgentExit,
     Errored,
     IntegrationReport,
+    RunFailed,
     RunResult,
     Stage,
     Summary,
@@ -402,6 +403,11 @@ class RunSpec[OutcomeT]:
             record.log.on_run_start(ctx)
             try:
                 result = await self._staged(ctx, record)
+                if isinstance(result, RunFailed):
+                    # Owed work went on after the failure — collect after the
+                    # agent, say — but the run ended where it failed, and
+                    # run_end's hooks read that off ctx (ADR-0039).
+                    record.stage = result.stage
                 try:
                     # Every run_end hook sees the result, even after one raises.
                     await self.hook_registry.fire(
@@ -414,6 +420,11 @@ class RunSpec[OutcomeT]:
                 # Logged, never reported: there is no Cancelled result (ADR-0017).
                 record.log_cancelled()
                 raise
+            finally:
+                # ctx outlives the run in whatever an observer kept — a
+                # Dashboard row does — and the diffs are the heavy part of
+                # what it would hold: nothing reads them once the run is over.
+                record.patches = None
             record.log.on_run_end(ctx, result)
             return result
 

@@ -10,7 +10,7 @@ Three things were scattered, and each was scattered for the same reason: the `Wo
 
 ## The branch was spelled in four places
 
-`waystation/<run-id>` was minted in `workspace.py`, re-derived in `sandbox/transport.py`, derived again for the preservation branch in `flow.py`, and a fourth time in the conformance suite. It is on the value now, and preservation reads it off `_RunRecord`, which is set when the workspace is made — preservation runs after the workspace is gone, so it cannot read the workspace itself.
+`waystation/<run-id>` was minted in `workspace.py`, re-derived in `sandbox/transport.py`, derived again for the preservation branch in `flow.py`, and a fourth time in the conformance suite. It is on the value now, and preservation reads it off the run record (`RunRecord`, ADR-0039), which is set when the workspace is made — preservation runs after the workspace is gone, so it cannot read the workspace itself.
 
 ## What the agent could see depended on the backend
 
@@ -50,7 +50,7 @@ The precedent is ordinary resource ownership: the party that acquires releases. 
 - **Breaking, twice over.** `Workspace` is a frozen dataclass whose fields changed, so anything constructing one by hand breaks; and `SandboxBackend.start` no longer removes the workspace, so a backend written before this now leaks nothing but *keeps* removing a directory core still expects to remove. The conformance suite is what says so, and it states the new contract directly: a sandbox leaves the workspace where it found it.
 - **A hand-composed loop removes its own workspace.** This is the cost of taking the duty off backends: a composer who calls `prepare_workspace` and drives the stages by hand gets no cleanup for free. `await run.anyway("workspace", ws.remove(), bound=None)` is the line, and `test_stage_runner.py` shows it.
 - ADR-0035's `discard_workspace` commitment was made with its expiry written down, and this is that expiry. ADR-0035 is amended rather than left describing a name that is gone.
-- `_RunRecord` gains `branch`. Preservation reads it instead of re-deriving, which is why the record holds it at all.
+- The run record (then `_RunRecord`) gains `branch`. Preservation reads it instead of re-deriving, which is why the record holds it at all.
 - **`Workspace` is the second value object with behaviour**, after `CommandFailed` (ADR-0025). `architecture.md` says so rather than leaving its "one documented exception" line to rot. A workspace is a resource as well as a value; the alternative was a free function that every caller has to remember, which is the shape this decision is removing.
 - **`elapsed["workspace"]` now covers the removal too.** Stage times accumulate, and the removal runs under `run.anyway("workspace", …)` — the same way a sandbox teardown already accumulates into `elapsed["sandbox"]` (`flow.py`'s `_teardown`). Consistent rather than surprising, but it is a change in what the number means.
 - **The copy transport's ref parity is proved without docker.** `DockerSandbox`'s default transport is `auto`, which chooses bind on Linux, so the conformance suite alone would check copy on no CI leg at all. `test_clone_in.py` holds it on the git tier, including a two-ref workspace stood up by hand — the case that made the bundle/fetch mismatch visible, and the one #32 would have hit first.

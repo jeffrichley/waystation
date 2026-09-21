@@ -1,4 +1,4 @@
-"""One run's record: every fact a run gathers, in the one place (#79).
+"""One run's record: every fact a run gathers, in the one place (ADR-0039).
 
 ``RunContext`` is the read-only view over it that hooks get, and a result is
 assembled from it, so a fact written here once is the fact everything reads —
@@ -34,7 +34,7 @@ __all__ = ["RunRecord", "log_later_failure"]
 _logger = package_logger()
 
 
-def log_unreported(run_id: str, err: StageError, why: str) -> None:
+def _log_unreported(run_id: str, err: StageError, why: str) -> None:
     """Log a failure no result will carry, saying ``why`` it goes unreported."""
     exception = getattr(err.failure, "exception", None)
     _logger.error(
@@ -49,7 +49,7 @@ def log_unreported(run_id: str, err: StageError, why: str) -> None:
 
 def log_later_failure(run_id: str, err: StageError) -> None:
     """Log a failure met after the run already failed; never report it (ADR-0024)."""
-    log_unreported(run_id, err, "after the run had already failed")
+    _log_unreported(run_id, err, "after the run had already failed")
 
 
 class _Facts(TypedDict):
@@ -125,19 +125,13 @@ class RunRecord:
     def log_cancelled(self) -> None:
         """Say where a cancelled run's series went: no ``run_end`` will."""
         if self.failure is not None:
-            log_unreported(self.run_id, self.failure, "in a run that was cancelled")
+            _log_unreported(self.run_id, self.failure, "in a run that was cancelled")
         stage = self.cancelled_during or self.stage
         self.log.cancelled(stage, kept_on=self.preserved, landed_on=self.landed_on)
 
     def failed(self) -> RunFailed:
-        """The run's failure as its result; the run ends in the stage it failed.
-
-        Owed work goes on after a failure — collect after the agent, say — so
-        the stage the run moved on to is not where it ended.
-        """
         assert self.failure is not None
         assert self.failure.stage is not None  # fail() attributes every failure
-        self.stage = self.failure.stage
         return RunFailed(
             **self._facts(), stage=self.failure.stage, failure=self.failure.failure
         )

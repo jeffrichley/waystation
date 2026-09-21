@@ -36,7 +36,7 @@ class RunContext:
     """Read-only view of a run, handed to every hook.
 
     One record sits behind it, and a run's result is assembled from the same
-    one, so what a hook reads here is what the result will say (#79). It is
+    one, so what a hook reads here is what the result will say (ADR-0039). It is
     live: read again later, it answers for the run as it stands then.
 
     ``base_sha`` is ``None`` until ``workspace_ready``. ``sandbox`` is usable
@@ -44,35 +44,35 @@ class RunContext:
     that window.
     """
 
-    __slots__ = ("_state",)
+    __slots__ = ("_record",)
 
-    def __init__(self, state: RunRecord) -> None:
-        self._state = state
+    def __init__(self, record: RunRecord) -> None:
+        self._record = record
 
     @property
     def run_id(self) -> str:
         """The run's id, minted before ``run_start``."""
-        return self._state.run_id
+        return self._record.run_id
 
     @property
     def name(self) -> str | None:
         """The run's display name, or ``None`` when unnamed."""
-        return self._state.name
+        return self._record.name
 
     @property
     def repo(self) -> Path:
         """The host repo the run targets."""
-        return self._state.repo
+        return self._record.repo
 
     @property
     def prompt(self) -> str:
         """The prompt handed to the agent, read from disk if it was a path."""
-        return self._state.prompt
+        return self._record.prompt
 
     @property
     def base_sha(self) -> str | None:
         """The resolved base ref; ``None`` until ``workspace_ready``."""
-        return self._state.base_sha
+        return self._record.base_sha
 
     @property
     def stage(self) -> Stage:
@@ -83,7 +83,7 @@ class RunContext:
         run ended: the stage a failed run failed in, even when work it still
         owed, such as collecting, went on after.
         """
-        return self._state.stage
+        return self._record.stage
 
     @property
     def elapsed(self) -> Mapping[Stage, float]:
@@ -93,12 +93,12 @@ class RunContext:
         its work has ended, and a stage run twice — a sandbox entered and
         then left — adds up. The result's ``elapsed`` is this, at the end.
         """
-        return self._state.elapsed
+        return self._record.elapsed
 
     @property
     def sandbox(self) -> Sandbox:
         """The live sandbox, from ``sandbox_ready`` until teardown."""
-        sandbox = self._state.sandbox
+        sandbox = self._record.sandbox
         if sandbox is None:
             msg = "ctx.sandbox is available from sandbox_ready until teardown"
             raise RuntimeError(msg)
@@ -107,7 +107,7 @@ class RunContext:
     @property
     def log(self) -> logging.LoggerAdapter[logging.Logger]:
         """A logger already tagged with this run, for a hook's own lines."""
-        return self._state.hook_log
+        return self._record.hook_log
 
     def __repr__(self) -> str:
         return f"RunContext(run_id={self.run_id!r}, name={self.name!r})"

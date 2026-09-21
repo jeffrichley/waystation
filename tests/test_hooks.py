@@ -10,7 +10,7 @@ from typing import Any, override
 import pytest
 from pydantic import BaseModel
 
-from helpers import OK_OUTCOME_LINE, OUTCOME, ShellAgent, commit_on, git, sh
+from helpers import OK_OUTCOME_LINE, OUTCOME, ShellAgent, commit_on, git
 from waystation import (
     AgentExit,
     AgentExited,
@@ -412,8 +412,7 @@ async def test_sandbox_ready_hook_sets_up_what_the_agent_sees(
     async def setup(ctx: RunContext) -> None:
         done = await ctx.sandbox.exec(
             [
-                sh(),
-                "-c",
+                *ctx.sandbox.shell,
                 'echo setup-noise; printf "%s" "$0" > setup.json',
                 '{"summary": "set up"}',
             ]

@@ -229,32 +229,6 @@ async def test_bad_base_ref_returns_command_failed(host_repo: Path) -> None:
 
 @pytest.mark.git
 @pytest.mark.asyncio
-async def test_capture_false_keeps_only_tails(host_repo: Path) -> None:
-    ws = await prepare_workspace(host_repo)
-    try:
-        backend = NoSandbox()
-        async with backend.start(ws, env={}) as sandbox:
-            # 100 short lines — over the 80-line tail limit
-            script = "i=0; while [ $i -lt 100 ]; do echo line-$i; i=$((i+1)); done"
-            from waystation.agents.scripted import _find_sh
-
-            result = await sandbox.exec(
-                [_find_sh(), "-c", script],
-                capture=False,
-            )
-        assert result.exit_code == 0
-        assert "line-0" not in result.stdout
-        assert "line-99" in result.stdout
-        assert result.stdout.count("\n") <= 80
-        assert len(result.stdout.encode("utf-8")) <= 2048
-    finally:
-        import shutil
-
-        shutil.rmtree(ws.path, ignore_errors=True)
-
-
-@pytest.mark.git
-@pytest.mark.asyncio
 async def test_provider_parse_exception_returns_errored(host_repo: Path) -> None:
     class ParseBoom(ScriptedAgent):
         def parse(self, line: str) -> list[AgentEvent]:
@@ -328,3 +302,25 @@ async def test_teardown_failure_logs_error_keeps_success(
     assert not isinstance(result, RunFailed)
     assert result.outcome == Answer(summary="ok")
     assert any("teardown failed" in r.message for r in caplog.records)
+
+
+@pytest.mark.git
+async def test_an_agent_the_sandbox_does_not_have_says_the_sandbox_is_missing_it(
+    host_repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Exit 127 is the one code that blames the sandbox rather than the agent.
+
+    Preflight cannot catch it — what an image holds is only knowable inside
+    it — so the least it can do is say so plainly (#77, ADR-0036).
+    """
+    agent = ShellAgent("waystation-no-such-binary")
+
+    with caplog.at_level(logging.ERROR, logger="waystation"):
+        result = await Flow(host_repo, agent=agent, sandbox=NoSandbox()).run("go")
+
+    assert isinstance(result, RunFailed)
+    assert isinstance(result.failure, AgentExited)
+    assert result.failure.exit_code == 127
+    said = [r.getMessage() for r in caplog.records if r.name == "waystation.agent"]
+    assert any("not found in this sandbox" in m for m in said), said
+    assert any("waystation-no-such-binary" in m for m in said), said

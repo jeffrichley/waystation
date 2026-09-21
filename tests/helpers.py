@@ -66,7 +66,6 @@ __all__ = [
     "lifecycle",
     "printf_bytes",
     "recorded_claude",
-    "sh",
     "stalling_ref_hook",
     "subjects",
     "until",
@@ -297,29 +296,21 @@ def stalling_ref_hook(hooks: Path, started: Path, release: Path) -> Path:
     return hooks
 
 
-def sh() -> str:
-    """The POSIX sh ``ScriptedAgent`` found on this host (Git Bash on Windows)."""
-    return str(ScriptedAgent().command("", {}).argv[0])
-
-
 def a_run(
     repo: Path,
     prompt: str | Path = PROMPT,
     *,
     commits: Sequence[ScriptedCommit] = (ScriptedCommit("add a file", {"a.txt": "x"}),),
     sandbox: SandboxBackend | None = None,
-    shell: str | None = None,
 ) -> RunSpec[Summary]:
     """A run that says one line, makes ``commits`` (one, by default), and reports.
 
-    It runs on ``NoSandbox`` unless given another ``sandbox``; one that
-    brings its own sh, as ``DockerSandbox`` does, wants ``shell="sh"`` too.
+    It runs on ``NoSandbox`` unless given another ``sandbox``. Whichever it
+    is, the sandbox says which shell the playback runs under (ADR-0036).
     """
     return Flow(
         repo,
-        agent=ScriptedAgent(
-            lines=["working"], outcome=OK_OUTCOME, commits=commits, shell=shell
-        ),
+        agent=ScriptedAgent(lines=["working"], outcome=OK_OUTCOME, commits=commits),
         sandbox=sandbox if sandbox is not None else NoSandbox(),
     ).run(prompt)
 
@@ -355,6 +346,7 @@ class _GatedBox:
 
     def __init__(self, inner: Sandbox, gate: Gate) -> None:
         self.workspace = inner.workspace
+        self.shell = inner.shell
         self._inner, self._gate = inner, gate
 
     async def exec(
@@ -409,13 +401,12 @@ class ShellAgent:
     A ``USAGE <json>`` line reports token usage, as an ``AgentUsage``.
 
     Reach for this over ``ScriptedAgent`` when the test needs to control the
-    script itself — writing to stderr, say, or exiting mid-stream. It runs in
-    this host's sh unless given another ``shell``: a backend that brings its
-    own sh, as ``DockerSandbox`` does, wants ``shell="sh"``.
+    script itself — writing to stderr, say, or exiting mid-stream. The
+    sandbox says which shell it runs under, so it runs the same on every
+    backend (ADR-0036).
     """
 
     script: str
-    shell: str | None = None
     env: Mapping[str, str] = field(default_factory=dict)
     pass_env: Sequence[str] = ()
 
@@ -424,7 +415,7 @@ class ShellAgent:
 
     def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
         return AgentCommand(
-            argv=(self.shell or sh(), "-c", self.script),
+            script=self.script,
             env=dict(self.env),
             pass_env=tuple(self.pass_env),
         )

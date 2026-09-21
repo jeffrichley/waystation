@@ -101,8 +101,9 @@ async def test_run_returns_outcome_missing_when_no_report(tmp_path: Path) -> Non
 def test_scripted_agent_serializes_mapping_and_lines() -> None:
     agent = ScriptedAgent(lines=["hi"], outcome={"summary": "m"})
     cmd = agent.command("p", {"type": "object"})
-    assert "hi" in cmd.argv[-1]
-    assert OUTCOME_MARKER in cmd.argv[-1]
+    assert cmd.script is not None
+    assert "hi" in cmd.script
+    assert OUTCOME_MARKER in cmd.script
     events = agent.parse(f'{OUTCOME_MARKER} {{"summary": "m"}}')
     assert len(events) == 1
 

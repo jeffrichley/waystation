@@ -141,7 +141,7 @@ async def test_a_run_in_docker_lands_its_commits(
 ) -> None:
     sandbox = DockerSandbox(image, transport=transport)
 
-    result = await a_run(host_repo, sandbox=sandbox, shell="sh").integrate("feature")
+    result = await a_run(host_repo, sandbox=sandbox).integrate("feature")
 
     assert isinstance(result, RunSucceeded), result
     assert subjects(host_repo, "HEAD..feature") == ["add a file"]
@@ -156,9 +156,7 @@ async def test_work_left_uncommitted_in_docker_is_salvaged(
 ) -> None:
     flow = Flow(
         host_repo,
-        agent=ScriptedAgent(
-            outcome=OK_OUTCOME, uncommitted={"notes.txt": "draft"}, shell="sh"
-        ),
+        agent=ScriptedAgent(outcome=OK_OUTCOME, uncommitted={"notes.txt": "draft"}),
         sandbox=DockerSandbox(image, transport=transport),
     )
 
@@ -182,7 +180,6 @@ async def test_text_that_is_not_utf8_leaves_a_container_as_it_was_committed(
     agent = ShellAgent(
         f"{printf_bytes('latin1.txt', latin_1)} && "
         f"git add -A && git commit -qm latin1 && echo '{OK_OUTCOME_LINE}'",
-        shell="sh",
     )
 
     result = await Flow(host_repo, agent=agent, sandbox=DockerSandbox(image)).run(
@@ -208,7 +205,7 @@ async def test_every_exec_runs_in_the_workspace_root_as_the_images_user(
         seen.append(shown.stdout)
 
     sandbox = DockerSandbox(image, transport=transport)
-    result = await a_run(host_repo, sandbox=sandbox, shell="sh").on_sandbox_ready(look)
+    result = await a_run(host_repo, sandbox=sandbox).on_sandbox_ready(look)
 
     assert isinstance(result, RunSucceeded), result
     assert seen[0].splitlines() == [
@@ -234,9 +231,7 @@ async def test_a_sandbox_sees_only_the_environment_it_names(
         env={"WAYSTATION_LITERAL": "literal"},
         pass_env=("WAYSTATION_PASSED", "WAYSTATION_ABSENT"),
     )
-    result = await a_run(host_repo, sandbox=sandbox, shell="sh").on_sandbox_ready(
-        env_inside
-    )
+    result = await a_run(host_repo, sandbox=sandbox).on_sandbox_ready(env_inside)
 
     assert isinstance(result, RunSucceeded), result
     inside = dict(line.split("=", 1) for line in seen[0].splitlines() if "=" in line)
@@ -269,7 +264,6 @@ async def test_a_providers_environment_reaches_its_agent_and_nothing_else(
         host_repo,
         agent=ShellAgent(
             f"env\necho '{OK_OUTCOME_LINE}'",
-            shell="sh",
             env={"WAYSTATION_AGENT": "agent"},
             pass_env=("WAYSTATION_HOST",),
         ),
@@ -308,9 +302,9 @@ async def test_a_sandbox_is_labelled_with_its_run_and_gone_after_it(
     def labelled(ctx: RunContext) -> None:
         during.append(_labelled(ctx.run_id))
 
-    result = await a_run(
-        host_repo, sandbox=DockerSandbox(image), shell="sh"
-    ).on_sandbox_ready(labelled)
+    result = await a_run(host_repo, sandbox=DockerSandbox(image)).on_sandbox_ready(
+        labelled
+    )
 
     assert isinstance(result, RunSucceeded), result
     assert len(during[0]) == 1
@@ -352,7 +346,7 @@ async def test_a_run_in_docker_spends_one_exec_on_its_agent_and_one_on_collect(
     sandbox = DockerSandbox(image, transport=transport)
 
     with caplog.at_level(logging.DEBUG, logger="waystation.sandbox"):
-        result = await a_run(host_repo, sandbox=sandbox, shell="sh")
+        result = await a_run(host_repo, sandbox=sandbox)
 
     assert isinstance(result, RunSucceeded), result
     called = [call.split()[:2] for call in _docker_calls(caplog)]
@@ -435,7 +429,6 @@ async def test_a_bound_in_docker_keeps_the_agents_work_and_stops_its_child(
             commits=(ScriptedCommit(message="wip", files={"a.txt": "a"}),),
             linger=True,
             linger_touch="/tmp/pulse",
-            shell="sh",
         ),
         sandbox=DockerSandbox(image),
         timeouts=Timeouts(**{bound: 5.0}),
@@ -480,9 +473,7 @@ async def test_a_hanging_agent_in_docker_succeeds_and_what_it_left_running_is_ki
     # the exec, and the child stops before collect reads the workspace.
     flow = Flow(
         host_repo,
-        agent=ScriptedAgent(
-            outcome=OK_OUTCOME, linger=True, linger_touch="/tmp/pulse", shell="sh"
-        ),
+        agent=ScriptedAgent(outcome=OK_OUTCOME, linger=True, linger_touch="/tmp/pulse"),
         sandbox=DockerSandbox(image),
         timeouts=Timeouts(completion_grace=0.5),
     )
@@ -507,7 +498,7 @@ async def test_a_start_docker_refuses_fails_the_sandbox_stage_and_leaks_nothing(
 ) -> None:
     sandbox = DockerSandbox(image, run_args=("--no-such-flag",))
 
-    result = await a_run(host_repo, sandbox=sandbox, shell="sh")
+    result = await a_run(host_repo, sandbox=sandbox)
 
     assert isinstance(result, RunFailed), result
     assert result.stage == "sandbox"
@@ -529,7 +520,7 @@ async def test_a_missing_image_fails_preflight_with_a_build_hint_and_is_not_pull
 
     # A lone run preflights itself, so it stops before any stage starts (#30).
     with pytest.raises(PreflightError, match="build it first"):
-        await a_run(host_repo, sandbox=DockerSandbox(MISSING_IMAGE), shell="sh")
+        await a_run(host_repo, sandbox=DockerSandbox(MISSING_IMAGE))
     assert workspaces(isolated_tempdir) == []
 
     inspected = subprocess.run(
@@ -550,7 +541,7 @@ async def test_an_image_removed_after_preflight_fails_the_sandbox_stage_as_refus
 
     try:
         result = await a_run(
-            host_repo, sandbox=DockerSandbox(vanishing), shell="sh"
+            host_repo, sandbox=DockerSandbox(vanishing)
         ).on_workspace_ready(remove_it)
     finally:
         subprocess.run(["docker", "image", "rm", vanishing], check=False)
@@ -617,7 +608,7 @@ async def test_nothing_reaps_an_orphan_but_you(
     left = orphan(run_id)
 
     await DockerSandbox(image).preflight()
-    result = await a_run(host_repo, sandbox=DockerSandbox(image), shell="sh")
+    result = await a_run(host_repo, sandbox=DockerSandbox(image))
 
     assert isinstance(result, RunSucceeded), result
     assert _labelled(run_id) == [left]

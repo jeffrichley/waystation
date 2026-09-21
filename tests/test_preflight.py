@@ -192,6 +192,25 @@ async def test_no_git_on_path_fails_preflight_saying_to_install_it(
 
 
 @pytest.mark.git
+async def test_a_host_with_no_sh_fails_nosandbox_preflight_saying_where_to_get_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shell a script runs under is the sandbox's to have, and to check.
+
+    It used to be `ScriptedAgent` that looked, which meant a provider had to
+    know which backend was about to run it (#77, ADR-0036).
+    """
+    empty = tmp_path / "nothing-here"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+
+    with pytest.raises(PreflightError) as refused:
+        await NoSandbox().preflight()
+
+    assert "sh" in str(refused.value)
+
+
+@pytest.mark.git
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason="a stand-in git on PATH needs a POSIX shebang; the check is the same",

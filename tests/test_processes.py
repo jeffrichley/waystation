@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
+from helpers import OUTCOME, ShellAgent
 from waystation import (
     Flow,
     NoSandbox,
@@ -21,38 +20,13 @@ from waystation import (
     ScriptedAgent,
 )
 from waystation.agents import (
-    AgentCommand,
-    AgentEvent,
     AgentLine,
-    AgentText,
-    OutcomeReported,
 )
 from waystation.sandbox import ProcessTree, host_processes
-
-OUTCOME = "OUTCOME "
 
 
 class Answer(BaseModel):
     summary: str
-
-
-@dataclass(frozen=True)
-class ShellAgent:
-    """An agent that is a shell script; an ``OUTCOME <json>`` line reports."""
-
-    script: str
-
-    def preflight(self) -> None:
-        return None
-
-    def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
-        sh = str(ScriptedAgent().command("", {}).argv[0])
-        return AgentCommand(argv=(sh, "-c", self.script))
-
-    def parse(self, line: str) -> Sequence[AgentEvent]:
-        if line.startswith(OUTCOME):
-            return (OutcomeReported(json.loads(line.removeprefix(OUTCOME))),)
-        return (AgentText(line),) if line else ()
 
 
 class _RecordedTree:

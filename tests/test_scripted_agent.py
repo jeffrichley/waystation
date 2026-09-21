@@ -1,28 +1,50 @@
-"""ScriptedAgent plays back under the host's sh, or under the one it is given."""
+"""ScriptedAgent hands back a script; the sandbox says which shell (ADR-0036)."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
-from waystation import PreflightError, ScriptedAgent
+from waystation import ScriptedAgent
 
 
 @pytest.mark.unit
-def test_a_scripted_agent_runs_under_the_sh_it_is_given() -> None:
-    # A sandbox with its own sh has no use for the host's path to one.
-    command = ScriptedAgent(lines=["hi"], shell="sh").command("", {})
+def test_a_scripted_agent_hands_back_a_script_rather_than_a_command_line() -> None:
+    # The provider cannot know whether its sandbox is this host or a
+    # container, so it never spells the shell (#77).
+    command = ScriptedAgent(lines=["hi"]).command("", {})
 
-    assert command.argv[:2] == ("sh", "-c")
+    assert command.argv == ()
+    assert command.script is not None
+    assert "printf '%s\\n' 'hi'" in command.script
 
 
 @pytest.mark.unit
-def test_a_scripted_agent_given_a_shell_needs_none_on_the_host(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_scripted_agents_script_runs_under_whatever_shell_it_is_given() -> None:
+    command = ScriptedAgent(lines=["hi"]).command("", {})
+
+    assert command.argv_in(("sh", "-c")) == ("sh", "-c", command.script)
+    assert command.argv_in(("C:/Git/bin/sh.exe", "-c"))[0] == "C:/Git/bin/sh.exe"
+
+
+@pytest.mark.unit
+def test_a_scripted_agent_needs_nothing_of_the_host_at_preflight(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: str
 ) -> None:
+    """The shell it needs is the sandbox's, and the sandbox is what checks it.
+
+    It used to look for the host's sh here, which is the check that made a
+    provider care which backend it was about to run on.
+    """
     monkeypatch.setenv("PATH", str(tmp_path))  # no sh, and no git to find one by
 
-    ScriptedAgent(shell="sh").preflight()
-    with pytest.raises(PreflightError, match="sh"):
-        ScriptedAgent().preflight()
+    ScriptedAgent().preflight()
+
+
+@pytest.mark.unit
+def test_a_command_runs_an_argv_or_a_script_and_says_so_when_it_names_neither() -> None:
+    from waystation.agents import AgentCommand
+
+    with pytest.raises(ValueError, match="neither"):
+        AgentCommand()
+    with pytest.raises(ValueError, match="both"):
+        AgentCommand(argv=("sh",), script="echo hi")

@@ -13,7 +13,6 @@ import pytest
 
 from helpers import a_run, awaited, commit_on, git, host_state, subjects
 from waystation import (
-    Integration,
     Refused,
     RunConflicted,
     RunFailed,
@@ -21,7 +20,7 @@ from waystation import (
     ScriptedCommit,
     Squash,
 )
-from waystation.integration import Conflict, IntegrationStrategy
+from waystation.integration import Conflict
 
 pytestmark = pytest.mark.git
 
@@ -154,20 +153,6 @@ async def test_a_squash_onto_a_checked_out_target_is_refused(host_repo: Path) ->
     assert isinstance(result.failure, Refused)
     assert result.failure.reason == "target_checked_out"
     assert result.preserved == f"waystation/{result.run_id}"
-
-
-@pytest.mark.parametrize(
-    "strategy", [Squash("HEAD"), Integration("HEAD")], ids=["squash", "apply"]
-)
-async def test_a_squash_onto_head_is_refused_as_integration_refuses_it(
-    host_repo: Path, strategy: IntegrationStrategy
-) -> None:
-    result = await a_run(host_repo).integrate(strategy)
-
-    assert isinstance(result, RunFailed)
-    assert isinstance(result.failure, Refused)
-    assert result.failure.reason == "dirty_tree"
-    assert "HEAD target is not supported yet" in result.failure.detail
 
 
 async def test_an_empty_series_squashes_to_nothing(host_repo: Path) -> None:

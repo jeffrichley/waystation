@@ -11,7 +11,15 @@ from typing import Literal
 
 import pytest
 
-from helpers import a_run, commit_on, git, host_state, lifecycle, subjects
+from helpers import (
+    a_run,
+    assert_refused,
+    commit_on,
+    git,
+    host_state,
+    lifecycle,
+    subjects,
+)
 from waystation import (
     CommandFailed,
     Integration,
@@ -152,16 +160,6 @@ async def test_a_conflict_is_logged_as_one_and_names_the_kept_branch(
     assert end.startswith("run end: conflicted")
     assert TARGET in end
     assert f"{result.preserved}" in end
-
-
-def assert_refused(result: object, reason: str, repo: Path) -> None:
-    """Failed at integrate for ``reason``, with the series kept all the same."""
-    assert isinstance(result, RunFailed)
-    assert result.stage == "integrate"
-    assert isinstance(result.failure, Refused)
-    assert result.failure.reason == reason
-    assert result.preserved == f"waystation/{result.run_id}"
-    assert git(repo, "log", "-1", "--format=%s", result.preserved) == "add a file"
 
 
 async def test_a_target_checked_out_in_the_main_worktree_is_refused(

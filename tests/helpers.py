@@ -23,6 +23,8 @@ from waystation import (
     ExecResult,
     Flow,
     NoSandbox,
+    Refused,
+    RunFailed,
     RunResult,
     RunSpec,
     Sandbox,
@@ -182,6 +184,20 @@ def printf_bytes(path: str, data: bytes) -> str:
     """
     escaped = "".join(f"\\{byte:03o}" for byte in data)
     return f"printf '{escaped}' > {path}"
+
+
+def assert_refused(result: object, reason: str, repo: Path) -> None:
+    """Failed at integrate for ``reason``, with the series kept all the same.
+
+    The series is ``a_run``'s default one, so the kept branch's tip says
+    ``add a file``.
+    """
+    assert isinstance(result, RunFailed)
+    assert result.stage == "integrate"
+    assert isinstance(result.failure, Refused)
+    assert result.failure.reason == reason
+    assert result.preserved == f"waystation/{result.run_id}"
+    assert git(repo, "log", "-1", "--format=%s", result.preserved) == "add a file"
 
 
 def subjects(repo: Path, revisions: str) -> list[str]:

@@ -42,6 +42,14 @@ _Avoid_: provider (reserved for agents)
 An instance of a sandbox backend: the value a flow script supplies describing the sandbox it wants — image, environment, transport. The backend it is an instance of turns it into a live sandbox; two equal specs describe the same sandbox.
 _Avoid_: config, settings
 
+**Host runner**:
+The public value a sandbox backend drives one host process through — `NoSandbox`'s agent, `DockerSandbox`'s client, a bwrap backend's `bwrap`. It keeps the parts of the exec contract that do not depend on what is being isolated, so a backend is a thin adapter rather than a rewrite.
+_Avoid_: executor, driver, process manager
+
+**Conformance suite**:
+The sandbox contract written as tests, shipped so that a backend waystation does not ship runs the same ones. Every shipped backend subclasses it.
+_Avoid_: compliance tests, contract tests (they name a different thing in Pact's sense)
+
 **Transport**:
 How a workspace gets into a sandbox — copied in, or bound in place. An option of the sandbox backend, chosen per host by default.
 _Avoid_: mount (one mechanism, not the concept)

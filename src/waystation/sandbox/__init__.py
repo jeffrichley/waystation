@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from waystation.sandbox._host import allowlisted_env
 from waystation.sandbox.docker import DockerSandbox
+from waystation.sandbox.host import HostRunner, allowlisted_env, discard_workspace
 from waystation.sandbox.no_sandbox import NoSandbox
 from waystation.sandbox.processes import (
     PosixProcesses,
@@ -12,12 +12,19 @@ from waystation.sandbox.processes import (
     WindowsProcesses,
     host_processes,
 )
-from waystation.sandbox.protocol import ExecResult, Sandbox, SandboxBackend
+from waystation.sandbox.protocol import (
+    ExecResult,
+    LineCallback,
+    Sandbox,
+    SandboxBackend,
+)
 from waystation.sandbox.transport import clone_in
 
 __all__ = [
     "DockerSandbox",
     "ExecResult",
+    "HostRunner",
+    "LineCallback",
     "NoSandbox",
     "PosixProcesses",
     "ProcessStrategy",
@@ -27,5 +34,6 @@ __all__ = [
     "WindowsProcesses",
     "allowlisted_env",
     "clone_in",
+    "discard_workspace",
     "host_processes",
 ]

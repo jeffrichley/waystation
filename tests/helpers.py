@@ -48,6 +48,7 @@ __all__ = [
     "OUTCOME",
     "PROMPT",
     "RECORDED_CLAUDE",
+    "TEST_IMAGE",
     "USAGE",
     "WORKS_UNTIL_STOPPED",
     "Gate",
@@ -71,6 +72,9 @@ __all__ = [
     "until",
     "workspaces",
 ]
+
+TEST_IMAGE = "waystation-test"
+"""The image the docker tier runs in; ``just test-image`` builds it."""
 
 OK_OUTCOME = {"summary": "ok"}
 """The Outcome a scripted agent reports when the test doesn't care what it says."""

@@ -13,6 +13,11 @@ dependencies = [
     "rich",
 ]
 
+[project.optional-dependencies]
+# `waystation.testing` ships the sandbox conformance suite, which is pytest
+# tests; nothing else in the library imports pytest.
+testing = ["pytest>=8", "pytest-asyncio>=1.4.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

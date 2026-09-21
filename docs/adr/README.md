@@ -42,6 +42,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | ADR | Read it when you're… |
 | --- | --- |
 | [0010](0010-behavioral-sandbox-protocol.md) The sandbox protocol is behavioral; argv purity is internal | implementing or changing a sandbox backend |
+| [0035](0035-the-host-process-runner-is-public-and-a-suite-states-the-exec-contract.md) The host-process runner is public, and a conformance suite states the exec contract | writing a backend, or changing what `Sandbox.exec` promises |
 | [0011](0011-never-build-or-pull-images.md) Waystation never builds or pulls images | adding anything that would fetch or build an image |
 | [0012](0012-transport-option-copy-on-windows.md) Transport is a backend option, copy by default on Windows | touching how a workspace gets into a sandbox |
 | [0013](0013-clearenv-allowlist.md) The sandbox environment is cleared and allowlisted | passing an environment variable into a run |

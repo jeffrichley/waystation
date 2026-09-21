@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 from waystation._outcome import outcome_schema
@@ -202,7 +203,7 @@ class RunSpec[OutcomeT]:
     salvaging: bool = True
     integration: IntegrationStrategy | None = None
     hook_registry: HookRegistry = field(default_factory=HookRegistry)
-    environment: Mapping[str, str] = field(default_factory=dict)
+    environment: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     pass_through: tuple[str, ...] = ()
     label: str | None = None
 
@@ -316,7 +317,9 @@ class RunSpec[OutcomeT]:
         Returns:
             A new spec; this one is unchanged.
         """
-        return replace(self, environment=dict(values))
+        # A copy behind a read-only view: the spec is frozen, so its mapping
+        # is too, and the caller's is theirs to go on changing (ADR-0022).
+        return replace(self, environment=MappingProxyType(dict(values)))
 
     def pass_env(self, *names: str) -> RunSpec[OutcomeT]:
         """Replace the host variables this run passes through.

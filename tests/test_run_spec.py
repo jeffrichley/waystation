@@ -169,6 +169,15 @@ def test_a_spec_keeps_its_own_copy_of_the_environment() -> None:
 
 
 @pytest.mark.unit
+def test_a_specs_environment_cannot_be_written_through() -> None:
+    """Read-only means the mapping too, not just the attribute (ADR-0022)."""
+    spec = a_run(_ANY_REPO).env({"A": "1"})
+
+    with pytest.raises(TypeError):
+        spec.environment["A"] = "changed"  # type: ignore[index]
+
+
+@pytest.mark.unit
 def test_a_spec_is_read_only() -> None:
     spec = a_run(_ANY_REPO)
 

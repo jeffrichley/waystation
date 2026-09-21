@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import OK_OUTCOME_LINE, ShellAgent, git
+from helpers import OK_OUTCOME_LINE, ShellAgent, a_run, git
 from waystation import (
     Flow,
     NoSandbox,
@@ -27,6 +27,8 @@ from waystation import (
     RunSpec,
     RunSucceeded,
     Summary,
+    prepare_workspace,
+    run_agent,
 )
 from waystation.agents import AgentLine
 from waystation.sandbox import allowlisted_env
@@ -94,12 +96,16 @@ def _env_printing_agent(
     )
 
 
-@pytest.mark.git
-async def test_a_providers_environment_reaches_its_agent_and_nothing_else(
-    host_repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A provider's credential must not reach collect or ``clone_in``."""
-    monkeypatch.setenv(HOST, "from-host")
+def _spec(
+    host_repo: Path, *, sandbox: NoSandbox, agent: ShellAgent
+) -> RunSpec[Summary]:
+    return a_run(host_repo, sandbox=sandbox).agent(agent)
+
+
+async def _environments(
+    spec: RunSpec[Summary],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """What ``spec``'s agent exec saw, and what an exec outside it saw."""
     agent_lines: list[str] = []
     other: list[str] = []
 
@@ -109,21 +115,26 @@ async def test_a_providers_environment_reaches_its_agent_and_nothing_else(
     async def env_outside(ctx: RunContext) -> None:
         other.append((await ctx.sandbox.exec([*ctx.sandbox.shell, "env"])).stdout)
 
-    flow = Flow(
-        host_repo,
-        agent=_env_printing_agent(env={AGENT: "agent"}, pass_env=(HOST,)),
-        sandbox=NoSandbox(env={SPEC: "spec"}),
-    )
-
-    result = await (
-        flow.run("print the environment", outcome=Summary)
-        .on_agent_output(keep)
-        .on_sandbox_ready(env_outside)
-    )
+    result = await spec.on_agent_output(keep).on_sandbox_ready(env_outside)
 
     assert isinstance(result, RunSucceeded), result
-    inside = _as_env("\n".join(agent_lines))
-    outside = _as_env(other[0])
+    return _as_env("\n".join(agent_lines)), _as_env(other[0])
+
+
+@pytest.mark.git
+async def test_a_providers_environment_reaches_its_agent_and_nothing_else(
+    host_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider's credential must not reach collect or ``clone_in``."""
+    monkeypatch.setenv(HOST, "from-host")
+
+    inside, outside = await _environments(
+        _spec(
+            host_repo,
+            sandbox=NoSandbox(env={SPEC: "spec"}),
+            agent=_env_printing_agent(env={AGENT: "agent"}, pass_env=(HOST,)),
+        )
+    )
 
     # The spec's tier reaches every exec.
     assert inside[SPEC] == "spec"
@@ -141,21 +152,16 @@ async def test_a_literal_beats_a_pass_through_name_for_an_agent_too(
 ) -> None:
     """``run_agent`` used to resolve this the other way round from the backends."""
     monkeypatch.setenv(BOTH, "from-host")
-    agent_lines: list[str] = []
 
-    async def keep(ctx: RunContext, line: AgentLine) -> None:
-        agent_lines.append(line.raw)
-
-    flow = Flow(
-        host_repo,
-        agent=_env_printing_agent(env={BOTH: "literal"}, pass_env=(BOTH,)),
-        sandbox=NoSandbox(),
+    inside, _ = await _environments(
+        _spec(
+            host_repo,
+            sandbox=NoSandbox(),
+            agent=_env_printing_agent(env={BOTH: "literal"}, pass_env=(BOTH,)),
+        )
     )
 
-    result = await flow.run("print it", outcome=Summary).on_agent_output(keep)
-
-    assert isinstance(result, RunSucceeded), result
-    assert _as_env("\n".join(agent_lines))[BOTH] == "literal"
+    assert inside[BOTH] == "literal"
 
 
 @pytest.mark.git
@@ -211,33 +217,6 @@ RUN = "WAYSTATION_RUN"
 RUN_HOST = "WAYSTATION_RUN_HOST"
 TIERED = "WAYSTATION_TIERED"
 UNNAMED = "WAYSTATION_UNNAMED"
-
-
-def _spec(
-    host_repo: Path, *, sandbox: NoSandbox, agent: ShellAgent
-) -> RunSpec[Summary]:
-    return Flow(host_repo, agent=agent, sandbox=sandbox).run(
-        "print the environment", outcome=Summary
-    )
-
-
-async def _environments(
-    spec: RunSpec[Summary],
-) -> tuple[dict[str, str], dict[str, str]]:
-    """What ``spec``'s agent exec saw, and what an exec outside it saw."""
-    agent_lines: list[str] = []
-    other: list[str] = []
-
-    async def keep(ctx: RunContext, line: AgentLine) -> None:
-        agent_lines.append(line.raw)
-
-    async def env_outside(ctx: RunContext) -> None:
-        other.append((await ctx.sandbox.exec([*ctx.sandbox.shell, "env"])).stdout)
-
-    result = await spec.on_agent_output(keep).on_sandbox_ready(env_outside)
-
-    assert isinstance(result, RunSucceeded), result
-    return _as_env("\n".join(agent_lines)), _as_env(other[0])
 
 
 @pytest.mark.git
@@ -365,8 +344,8 @@ async def test_a_per_run_author_is_the_author_of_the_agents_commits(
     )
 
     result = await (
-        Flow(host_repo, agent=agent, sandbox=NoSandbox())
-        .run("commit something", outcome=Summary)
+        a_run(host_repo)
+        .agent(agent)
         .env({"GIT_AUTHOR_NAME": "Per Run", "GIT_AUTHOR_EMAIL": "run@example.com"})
         .integrate("agents/authored")
     )
@@ -374,3 +353,28 @@ async def test_a_per_run_author_is_the_author_of_the_agents_commits(
     assert isinstance(result, RunSucceeded), result
     author = git(host_repo, "log", "-1", "--format=%an <%ae>", "agents/authored")
     assert author == "Per Run <run@example.com>"
+
+
+@pytest.mark.git
+async def test_run_agent_lays_the_env_it_is_given_over_the_providers(
+    host_repo: Path,
+) -> None:
+    """The primitive a hand-composed loop calls ranks the tiers as a run does."""
+    lines: list[str] = []
+    ws = await prepare_workspace(host_repo)
+    try:
+        async with NoSandbox().start(ws, env={TIERED: "run"}) as sandbox:
+            await run_agent(
+                sandbox,
+                _env_printing_agent(env={TIERED: "provider", AGENT: "agent"}),
+                "print it",
+                Summary,
+                on_output=lambda line: lines.append(line.raw),
+                env={TIERED: "run"},
+            )
+    finally:
+        await ws.remove()
+
+    seen = _as_env("\n".join(lines))
+    assert seen[TIERED] == "run"
+    assert seen[AGENT] == "agent", "the provider's other values are kept"

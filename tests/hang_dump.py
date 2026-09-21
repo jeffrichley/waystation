@@ -4,30 +4,35 @@
 them: a wedged async test shows the event loop idle in `_poll` and nothing
 about which `await` never came back. That is exactly the evidence #105 needed
 and did not have, twice. This fills the gap — every unfinished task, and the
-line each one is suspended at — and it runs *before* `faulthandler_timeout`,
+whole chain of awaits inside it — and it runs *before* `faulthandler_timeout`,
 because after that the countdown to `os._exit` is already short.
 
 It writes a file. Under xdist a worker's output is not reliably anyone's to
 read, and a worker ended with `os._exit` flushes nothing it had captured, so
-a file on disk is the only channel that survives the thing it is describing.
+a file on disk is the only channel that survives the thing it is describing;
+CI uploads the directory. A copy also goes to the descriptor pytest keeps for
+its own faulthandler, which is the one stream that does reach the log.
 """
 
 from __future__ import annotations
 
 import asyncio
 import gc
+import linecache
 import os
 import re
 import sys
 import threading
 import traceback
+from collections.abc import Iterator
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 __all__ = ["DUMPS", "arm"]
 
 DUMPS = Path(__file__).resolve().parent.parent / "hang-dumps"
-"""Where a dump lands; the soak workflow uploads this directory."""
+"""Where a dump lands; CI and the soak workflow upload this directory."""
 
 # How long before `faulthandler_timeout` this fires. Small, because it only
 # has to land first — the two are describing the same moment from different
@@ -63,50 +68,114 @@ def _unfinished() -> list[asyncio.Task[Any]]:
     ]
 
 
-def _dump(nodeid: str) -> None:
-    """Write every unfinished task and the line it is suspended at."""
-    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
-    DUMPS.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", nodeid)[-120:]
-    path = DUMPS / f"{worker}-{safe}.txt"
+def _frames(task: asyncio.Task[Any]) -> Iterator[FrameType | None]:
+    """Every frame inside one task, outermost first.
 
+    Not ``Task.get_stack()``: for a *suspended* task that returns exactly one
+    frame — the coroutine's own, whose ``f_back`` is ``None`` while it is off
+    the stack (CPython's ``base_tasks._task_get_stack``, and the docs say so
+    outright). The nested awaits hang off ``cr_await`` instead. Walking it by
+    hand is the difference between naming the await that wedged and naming
+    the function the task was created with, which is already known.
+    """
+    coro: Any = task.get_coro()
+    seen: set[int] = set()
+    while coro is not None and id(coro) not in seen:
+        seen.add(id(coro))
+        yield (
+            getattr(coro, "cr_frame", None)
+            or getattr(coro, "gi_frame", None)
+            or getattr(coro, "ag_frame", None)
+        )
+        # The chain ends at a C-level awaitable — a Future's iterator — which
+        # is where one task awaits another; `_fut_waiter` names that edge.
+        coro = next(
+            (
+                getattr(coro, attr)
+                for attr in ("cr_await", "ag_await", "gi_yieldfrom")
+                if hasattr(coro, attr)
+            ),
+            None,
+        )
+
+
+def _where(frame: FrameType | None) -> str:
+    if frame is None:
+        return "      <no python frame: a C-level awaitable>"
+    code = frame.f_code
+    source = linecache.getline(code.co_filename, frame.f_lineno).strip()
+    return (
+        f'      File "{code.co_filename}", line {frame.f_lineno}, in {code.co_name}\n'
+        f"        {source}"
+    )
+
+
+def _report(nodeid: str, worker: str) -> str:
     lines = [f"still running after the hang timer: {nodeid} [{worker}]", ""]
     try:
         tasks = _unfinished()
     except Exception:  # a diagnostic must not become the failure it explains
-        lines.append("could not sweep for tasks:\n" + traceback.format_exc())
-        tasks = []
+        return "\n".join([*lines, "could not sweep for tasks:", traceback.format_exc()])
 
     if not tasks:
         lines.append("no unfinished asyncio tasks: the wedge is not an await")
     for task in tasks:
         lines.append(f"--- {task.get_name()}: {task.get_coro()!r}")
+        lines.append(f"    blocked on: {getattr(task, '_fut_waiter', None)!r}")
         try:
-            stack = task.get_stack()
+            # Outermost first, so the last line is the await that never
+            # came back — read it the way you read a traceback.
+            lines.extend(_where(frame) for frame in _frames(task))
         except Exception:
-            lines.append("    (stack unavailable)")
-            continue
-        if not stack:
-            lines.append("    (no frames: not started, or already unwinding)")
-        # Innermost last, as a traceback reads: the final line is the await.
-        for frame in stack:
-            where = f'{frame.f_code.co_filename}", line {frame.f_lineno}'
-            lines.append(f'    File "{where} in {frame.f_code.co_name}')
+            lines.append("      (chain unavailable)")
         lines.append("")
+    return "\n".join(lines)
 
-    text = "\n".join(lines) + "\n"
-    path.write_text(text, encoding="utf-8")
-    # Best effort as well: readable straight from the log when it does survive.
-    with _suppressed():
-        sys.stderr.write(f"\n=== hang dump: {path} ===\n{text}")
+
+def _dump(nodeid: str) -> None:
+    """Write every unfinished task and the await chain it is suspended in."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    text = _report(nodeid, worker) + "\n"
+
+    try:
+        DUMPS.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", nodeid)[-120:]
+        (DUMPS / f"{worker}-{safe}.txt").write_text(text, encoding="utf-8")
+    except OSError:
+        pass  # the stream below may still carry it
+
+    _to_the_log(text)
+
+
+def _to_the_log(text: str) -> None:
+    """Best effort at the terminal, for a reader who has no artifact to fetch.
+
+    ``sys.stderr`` here is pytest's capture object, and a worker ended with
+    ``os._exit`` discards what it buffered — so the descriptor pytest dup'd
+    for its own faulthandler is tried first: that one is execnet's surviving
+    copy of the worker's real stderr, and it is why `Timeout (0:00:45)!`
+    reaches the log when nothing else does.
+    """
+    config = _CONFIG[0]
+    if config is not None:
+        try:
+            from _pytest.faulthandler import fault_handler_stderr_fd_key
+
+            os.write(config.stash[fault_handler_stderr_fd_key], text.encode("utf-8"))
+            return
+        except Exception:
+            pass  # a private stash may move; the plain stream is the fallback
+    try:
+        sys.stderr.write(text)
         sys.stderr.flush()
+    except Exception:
+        pass
 
 
-class _suppressed:
-    """Swallow whatever writing to a doomed worker's stderr raises."""
+_CONFIG: list[Any] = [None]
+"""The active pytest config, set by ``conftest``; the stash lives on it."""
 
-    def __enter__(self) -> None:
-        return None
 
-    def __exit__(self, *exc: object) -> bool:
-        return True
+def remember(config: Any) -> None:
+    """Hold the config, so a dump can reach pytest's own stderr descriptor."""
+    _CONFIG[0] = config

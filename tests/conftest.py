@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from hang_dump import arm
+from hang_dump import arm, remember
 from helpers import TEST_IMAGE, init_host_repo
 from waystation import DockerSandbox, PreflightError, Refused
 
@@ -137,6 +137,11 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         reason = _no_linux_docker()
         if reason is not None:
             pytest.skip(reason)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Hold the config, so a hang dump can reach pytest's own stderr descriptor."""
+    remember(config)
 
 
 @pytest.hookimpl(wrapper=True)

@@ -43,3 +43,14 @@ jobs:
 
       - name: just check
         run: just check
+
+      # A hung test writes the await it wedged on to `hang-dumps/` before
+      # anything kills the worker. Without this the file dies with the runner
+      # and the log says only "worker 'gwN' crashed" (#105).
+      - name: Keep what a hung test left behind
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hang-dumps-${{ matrix.os }}
+          path: hang-dumps/
+          if-no-files-found: ignore

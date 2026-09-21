@@ -24,14 +24,29 @@ async def _dump_written(dumps: Path) -> str:
     return written.read_text(encoding="utf-8")
 
 
+async def _wedges_deep(gate: asyncio.Event) -> None:
+    await _one_frame_further(gate)
+
+
+async def _one_frame_further(gate: asyncio.Event) -> None:
+    await gate.wait()  # the await that never comes back
+
+
 @pytest.mark.unit
 async def test_a_wedged_test_leaves_a_dump_naming_the_await(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The thing #105 needed twice and did not have: which await never came back."""
+    """The thing #105 needed twice and did not have: which await never came back.
+
+    The wedge is two frames deep inside one task on purpose. ``Task.get_stack``
+    returns a single frame for a suspended task, so a dump built on it names
+    ``_wedges_deep`` — the coroutine the task was made with, which is the one
+    thing already known — and never reaches ``gate.wait()``.
+    """
     dumps = tmp_path / "dumps"
     monkeypatch.setattr(hang_dump, "DUMPS", dumps)
-    wedged = asyncio.create_task(asyncio.Event().wait(), name="the-await-that-hung")
+    gate = asyncio.Event()
+    wedged = asyncio.create_task(_wedges_deep(gate), name="the-await-that-hung")
     timer = hang_dump.arm("tests/imaginary.py::test_that_hung", after=0.0)
     try:
         text = await _dump_written(dumps)
@@ -41,10 +56,11 @@ async def test_a_wedged_test_leaves_a_dump_naming_the_await(
 
     assert "test_that_hung" in text, "the dump says which test was stuck"
     assert "the-await-that-hung" in text, "and names the task that never finished"
-    # Innermost frame last, as a traceback reads: the last line is the await.
-    suspended = text.split("the-await-that-hung")[1].splitlines()[1]
-    assert suspended.strip().startswith('File "'), (
-        f"a task is followed by the line it is suspended at, got {suspended!r}"
+    named = text.split("the-await-that-hung")[1]
+    assert "_wedges_deep" in named, "the task's own frame"
+    assert "_one_frame_further" in named, "and every frame it awaited through"
+    assert "await gate.wait()" in named, (
+        f"the innermost await is the point of the dump, got:\n{named}"
     )
 
 

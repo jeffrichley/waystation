@@ -7,7 +7,7 @@ A bare, hackable Python library for orchestrating sandboxed AI coding agents —
 - **`CONTEXT.md`** is the glossary, and it binds. Name things the way it names them; avoid the words it says to avoid.
 - **`docs/adr/README.md`** indexes every decision with a *read it when* line. Scan it, open the two or three that touch what you're changing — not all of them — and if your change contradicts one, say so out loud instead of quietly overriding it.
 - **`docs/agents/architecture.md`** is the design lens: deep modules, the patterns this codebase already runs on, and when *not* to reach for one.
-- **The ticket is the spec.** Issues live in GitHub (`jeffrichley/waystation`); see `docs/agents/issue-tracker.md`. Its acceptance criteria define the work, and #18 is the parent spec — including the **public import surface**, which is a contract.
+- **The ticket is the spec, and claiming it is your first write.** `gh issue edit <n> --add-assignee @me`, before the branch and before the first edit: an assignee is how the next agent reading the frontier knows this one is taken, so an unclaimed ticket is two agents' work. Issues live in GitHub (`jeffrichley/waystation`); see `docs/agents/issue-tracker.md`. Its acceptance criteria define the work, and #18 is the parent spec — including the **public import surface**, which is a contract.
 - **`tests/CLAUDE.md`** before you write a test. It lists the shared fixtures and helpers, so you reach for `host_repo` rather than writing a fourteenth copy of it.
 
 ## Done means CI is green

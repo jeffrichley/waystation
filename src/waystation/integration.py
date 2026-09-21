@@ -1,7 +1,8 @@
 """Integration: land a PatchSeries on the host repo without a worktree.
 
-The shipped ``Integration`` is built from ``GitRepo``'s public landing steps
-alone, as a user's strategy would be (ADR-0040).
+Two strategies ship, ``Integration`` (apply or merge) and ``Squash`` (one
+commit), and both are built from ``GitRepo``'s public landing steps alone, as
+a user's strategy would be (ADR-0040).
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ __all__ = [
     "IntegrationReport",
     "IntegrationStrategy",
     "PatchSeries",
+    "Squash",
     "Target",
     "integrate",
     "preserve_series",
@@ -152,8 +154,8 @@ class GitRepo:
     for the calls that read an exit code or feed something in (ADR-0033).
 
     The landing steps — ``read_target``, ``commit_series``, ``merge_tree``,
-    ``commit_tree`` and ``move_target`` — are what ``Integration`` is built
-    from, and nothing else is: a user's strategy is
+    ``commit_tree`` and ``move_target`` — are what ``Integration`` and
+    ``Squash`` are built from, and nothing else is: a user's strategy is
     policy over the same steps, never a rewrite of the plumbing (ADR-0040).
     None of them touches a working tree (ADR-0020), and each raises with no
     stage, because ``integrate`` names it (ADR-0032).
@@ -610,6 +612,85 @@ class Integration:
             strategy="Integration",
             target=self.target,
             mechanism=self.mechanism,
+            target_before=target.tip,
+            target_after=after,
+            landed=landed,
+            conflict=conflict,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Squash:
+    """Shipped strategy: land a run's whole series on a named branch as one commit.
+
+    One ``merge-tree`` of the series' net change against the target, so it
+    can land where ``apply`` would conflict partway: a change the series
+    made and then undid is never replayed. On a conflict the target stays
+    where it was and the run keeps the series, unsquashed, on its
+    preservation branch (ADR-0005). Built from ``GitRepo``'s landing steps
+    alone, as a user's strategy would be (ADR-0040).
+
+    The commit is authored as the series' last commit was — the agent, who
+    is the host identity (ADR-0006) — and committed by the host user at
+    landing, as ``apply`` does. It carries no run id: a strategy is handed
+    a repo and a series, not a run.
+
+    Attributes:
+        target: The branch to land on, created at the series' base if missing.
+        message: The squash commit's message. By default a one-commit
+            series keeps its own; a longer one takes its first subject as
+            the subject, then lists every subject, as a forge's squash-merge
+            lists them.
+    """
+
+    target: str
+    message: str | None = None
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        target = await repo.read_target(self.target, base=series.base_sha)
+        if not series.patches:
+            return self._report(target, target.tip if target.exists else None)
+        commits = await repo.commit_series(series)
+        tree = await repo.merge_tree(
+            base=series.base_sha, ours=target.tip, theirs=commits[-1]
+        )
+        if isinstance(tree, Conflict):
+            # Nothing but unreferenced objects was written (ADR-0020).
+            return self._report(target, None, conflict=tree)
+        tip = target.tip
+        landed: tuple[str, ...] = ()
+        if tree != await repo.git("rev-parse", f"{target.tip}^{{tree}}"):
+            message = self.message
+            if message is None and len(commits) > 1:
+                message = await self._summary(repo, series.base_sha, commits[-1])
+            tip = await repo.commit_tree(
+                tree, target.tip, like=commits[-1], message=message
+            )
+            landed = (tip,)
+        await repo.move_target(target, tip)
+        return self._report(target, tip, landed)
+
+    @staticmethod
+    async def _summary(repo: GitRepo, base: str, series_tip: str) -> str:
+        """The first subject, then every subject as a list, oldest first."""
+        listed = await repo.git(
+            "log", "--reverse", "--format=%s", f"{base}..{series_tip}"
+        )
+        subjects = listed.splitlines()
+        return "\n".join([subjects[0], "", *(f"* {subject}" for subject in subjects)])
+
+    def _report(
+        self,
+        target: Target,
+        after: str | None,
+        landed: tuple[str, ...] = (),
+        *,
+        conflict: Conflict | None = None,
+    ) -> IntegrationReport:
+        return IntegrationReport(
+            strategy="Squash",
+            target=self.target,
+            mechanism="squash",
             target_before=target.tip,
             target_after=after,
             landed=landed,

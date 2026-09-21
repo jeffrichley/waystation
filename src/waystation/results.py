@@ -122,7 +122,8 @@ class Conflict:
     """Why a landing stopped: the paths that conflicted.
 
     ``failed_patch`` is set for ``apply``, which replays one patch at a time;
-    ``merge`` lands the series in one step, so there is no patch to name.
+    ``merge`` and ``Squash`` land the series in one step, so there is no
+    patch to name.
     """
 
     paths: tuple[str, ...]

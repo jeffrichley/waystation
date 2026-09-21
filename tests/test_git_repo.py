@@ -360,10 +360,10 @@ def test_the_shipped_strategy_takes_no_private_path_to_host_git() -> None:
 
 
 @pytest.mark.unit
-def test_the_shipped_strategy_names_nothing_private_to_land_a_series() -> None:
-    """``Integration`` is policy over public steps (ADR-0040).
+def test_the_shipped_strategies_name_nothing_private_to_land_a_series() -> None:
+    """``Integration`` and ``Squash`` are policy over public steps (ADR-0040).
 
-    Every name the strategy's body reaches for is public: ``GitRepo``'s
+    Every name either strategy's body reaches for is public: ``GitRepo``'s
     landing steps and the result values. A private helper of the module is
     a path a user's strategy could not take — the thing #81 removed.
     """
@@ -380,7 +380,7 @@ def test_the_shipped_strategy_names_nothing_private_to_land_a_series() -> None:
     strategies = [
         node
         for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name in ("Integration",)
+        if isinstance(node, ast.ClassDef) and node.name in ("Integration", "Squash")
     ]
     reached = {
         name.id
@@ -389,7 +389,7 @@ def test_the_shipped_strategy_names_nothing_private_to_land_a_series() -> None:
         if isinstance(name, ast.Name)
     }
 
-    assert len(strategies) == 1
+    assert len(strategies) == 2
     assert {"_read_ref", "run_git"} <= private, "the scan sees what it guards"
     assert reached & private == set(), reached & private
 

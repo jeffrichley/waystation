@@ -23,6 +23,7 @@ from waystation.integration import (
     GitResult,
     Integration,
     IntegrationStrategy,
+    Squash,
     integrate,
     preserve_series,
 )
@@ -105,6 +106,7 @@ __all__ = [
     "ScriptedAgent",
     "ScriptedCommit",
     "Series",
+    "Squash",
     "Stage",
     "StageError",
     "Summary",

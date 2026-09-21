@@ -21,6 +21,7 @@ from waystation import (
     RunFailed,
     RunSucceeded,
     ScriptedCommit,
+    Squash,
     Summary,
 )
 from waystation.integration import (
@@ -282,8 +283,8 @@ class Raced:
 
 @pytest.mark.parametrize(
     "strategy",
-    [Integration(TARGET), Integration(TARGET, mechanism="merge")],
-    ids=["apply", "merge"],
+    [Integration(TARGET), Integration(TARGET, mechanism="merge"), Squash(TARGET)],
+    ids=["apply", "merge", "squash"],
 )
 async def test_a_target_moved_before_the_swap_is_refused_and_stays_moved(
     host_repo: Path, strategy: IntegrationStrategy

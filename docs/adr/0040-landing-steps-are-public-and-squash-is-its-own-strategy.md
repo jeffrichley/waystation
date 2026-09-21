@@ -6,7 +6,7 @@ status: accepted
 
 `GitRepo` has five public landing steps. They are the plumbing ADR-0020 describes, cut at the points where a landing rule makes a choice:
 
-- **`read_target(branch, *, base) -> Target`** reads the branch a landing will move. It refuses a branch a worktree is using (`target_checked_out`) and refuses `HEAD` (#25). `Target` records the branch, the tip to build on (the base when the branch does not exist yet), and whether it existed.
+- **`read_target(branch, *, base) -> Target`** reads the branch a landing will move. It refuses a branch a worktree is using (`target_checked_out`). `HEAD` is the host's checkout, which `move_target` fast-forwards (ADR-0041). `Target` records the branch, the tip to build on (the base when the branch does not exist yet), and whether it existed.
 - **`commit_series(series) -> tuple[str, ...]`** rebuilds each patch as a commit at the series' base in a temporary index (`mailinfo`, `apply --cached`, `write-tree`, `commit-tree`). It keeps each patch's author, date and message.
 - **`merge_tree(*, base, ours, theirs) -> str | Conflict`** runs one `merge-tree --write-tree` and returns the merged tree, or the paths that conflicted.
 - **`commit_tree(tree, *parents, like, message=None) -> str`** commits a tree. The author and author date come from `like`, and so does the message unless one is given. The committer is the host user at landing.
@@ -33,7 +33,7 @@ Why: #18 story 113 promises strategy authors that "custom landing rules stay sma
 
 The default squash message follows a forge's squash-merge. A one-commit series keeps its own message. A longer series takes its first subject as the subject, then lists every subject, oldest first. The author and author date are the series' last commit's. That is the agent, who is the host identity (ADR-0006), so the squash's author and committer are both the host user, as with `apply`.
 
-`HEAD` is refused in `read_target` and nowhere else, so when #25 lands a HEAD target both strategies get it from the one step, and so does a user's strategy built on the steps.
+`HEAD` is handled in `read_target` and `move_target` and nowhere else, so both strategies land on it from the same steps, and so does a user's strategy built on them (ADR-0041, #25).
 
 The import surface grows: `Squash` at the top level beside `Integration`, as a shipped implementation, and `Squash` and `Target` in `waystation.integration`. `Target` has to be public because a public step returns it. `.integrate(target, mechanism=...)` is unchanged: `mechanism` is still `"apply"` or `"merge"`, and a squash is `.integrate(Squash(target))`.
 

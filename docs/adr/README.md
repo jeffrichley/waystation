@@ -30,6 +30,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | ADR | Read it when you're… |
 | --- | --- |
 | [0002](0002-clone-in-from-committed-refs.md) Runs clone committed refs from a local checkout | changing how a workspace is built, or what an agent can see |
+| [0037](0037-a-workspace-owns-its-branch-its-refs-and-its-removal.md) A workspace owns its branch, the refs that travel with it, and its removal | changing which refs an agent can see, naming the run branch, or deciding who removes a workspace |
 | [0006](0006-linear-series-with-salvage.md) The patch series is linear and salvaged by default | touching collect, salvage, or what counts as a valid series |
 | [0029](0029-collect-looks-over-a-workspace-in-one-exec.md) Collect looks a workspace over in one exec, through git's own shell | adding a git command to collect, or reaching for `sh -c` in a sandbox |
 | [0036](0036-the-sandbox-says-which-shell-and-needs-are-not-probed.md) The sandbox says which shell it has, and what else it holds is not probed | running a script in a sandbox, or wanting preflight to check what an image contains |

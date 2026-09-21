@@ -280,11 +280,16 @@ class Raced:
         return await self.inner.integrate(racing, series)
 
 
+@pytest.mark.parametrize(
+    "strategy",
+    [Integration(TARGET), Integration(TARGET, mechanism="merge")],
+    ids=["apply", "merge"],
+)
 async def test_a_target_moved_before_the_swap_is_refused_and_stays_moved(
-    host_repo: Path,
+    host_repo: Path, strategy: IntegrationStrategy
 ) -> None:
     git(host_repo, "branch", TARGET)
-    raced = Raced(Integration(TARGET))
+    raced = Raced(strategy)
 
     result = await a_run(host_repo).integrate(raced)
 

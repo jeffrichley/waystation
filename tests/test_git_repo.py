@@ -28,6 +28,7 @@ from waystation import (
     integrate,
     preserve_series,
 )
+from waystation.integration import Conflict
 
 TARGET = "agents/landed"
 
@@ -338,8 +339,9 @@ def test_the_shipped_strategy_takes_no_private_path_to_host_git() -> None:
     user's strategy could not do what it does. Only ``_repo_git``, which is
     what ``GitRepo`` runs, reaches the private runner now.
 
-    (``_committer`` still goes through ``_git.git_identity``: ADR-0033 puts
-    the identity check there, in one place, for the workspace path too.)
+    (``GitRepo``'s landing steps still go through ``_git.git_identity``:
+    ADR-0033 puts the identity check there, in one place, for the workspace
+    path too.)
     """
     from waystation import integration
 
@@ -355,3 +357,97 @@ def test_the_shipped_strategy_takes_no_private_path_to_host_git() -> None:
     }
 
     assert runs_git == {"_repo_git"}, runs_git
+
+
+@pytest.mark.unit
+def test_the_shipped_strategy_names_nothing_private_to_land_a_series() -> None:
+    """``Integration`` is policy over public steps (ADR-0040).
+
+    Every name the strategy's body reaches for is public: ``GitRepo``'s
+    landing steps and the result values. A private helper of the module is
+    a path a user's strategy could not take — the thing #81 removed.
+    """
+    from waystation import integration
+
+    tree = ast.parse(Path(integration.__file__).read_text(encoding="utf-8"))
+    # The module's own private names, and what it imports from private modules.
+    private = {
+        name
+        for name, value in vars(integration).items()
+        if (name.startswith("_") and not name.startswith("__"))
+        or str(getattr(value, "__module__", "")).startswith("waystation._")
+    }
+    strategies = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name in ("Integration",)
+    ]
+    reached = {
+        name.id
+        for strategy in strategies
+        for name in ast.walk(strategy)
+        if isinstance(name, ast.Name)
+    }
+
+    assert len(strategies) == 1
+    assert {"_read_ref", "run_git"} <= private, "the scan sees what it guards"
+    assert reached & private == set(), reached & private
+
+
+@dataclass(frozen=True)
+class FastForwardOnly:
+    """A user's rule: land the series as it is, or not at all.
+
+    Policy over the public landing steps: it lands only when the target has
+    not moved past the series' base, so what arrives is exactly what the
+    agent committed. Nothing in it is plumbing.
+    """
+
+    target: str
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        target = await repo.read_target(self.target, base=series.base_sha)
+        if target.tip != series.base_sha:
+            conflict = Conflict(paths=())
+            return self._report(target.tip, None, (), conflict)
+        commits = await repo.commit_series(series)
+        tip = commits[-1] if commits else target.tip
+        await repo.move_target(target, tip)
+        return self._report(target.tip, tip, commits, None)
+
+    def _report(
+        self,
+        before: str,
+        after: str | None,
+        landed: tuple[str, ...],
+        conflict: Conflict | None,
+    ) -> IntegrationReport:
+        return IntegrationReport(
+            strategy="FastForwardOnly",
+            target=self.target,
+            mechanism="fast-forward",
+            target_before=before,
+            target_after=after,
+            landed=landed,
+            conflict=conflict,
+        )
+
+
+@pytest.mark.git
+async def test_a_strategy_of_a_users_own_lands_through_the_public_steps(
+    host_repo: Path,
+) -> None:
+    """#18 story 113, with the plumbing in reach: a rule is its policy alone."""
+    base = git(host_repo, "rev-parse", "HEAD")
+    commit_on(host_repo, "work", {"one.txt": "1\n"}, message="one")
+    commit_on(host_repo, "work", {"two.txt": "2\n"}, message="two")
+    series = await PatchSeries.from_range(host_repo, base, "work")
+
+    report = await integrate(host_repo, series, FastForwardOnly(TARGET))
+
+    assert len(report.landed) == 2
+    assert report.target_after == git(host_repo, "rev-parse", TARGET)
+    assert git(host_repo, "log", "--format=%s", f"{base}..{TARGET}") == "two\none"
+    commit_on(host_repo, TARGET, {"theirs.txt": "t\n"})
+    refused = await integrate(host_repo, series, FastForwardOnly(TARGET))
+    assert refused.conflict is not None, "a moved target is its rule's to refuse"

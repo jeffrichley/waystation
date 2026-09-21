@@ -25,9 +25,10 @@ your own repo and changed, not a framework to configure.
   export ANTHROPIC_API_KEY=...   # or CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`)
   ```
 
-  Or keep that same `KEY=value` line in a `.env` at this repo's root, which is
-  gitignored, and add `--env-file .env` to the `uv run` commands below. uv
-  loads it into the process; waystation itself reads no file.
+  Or copy [`.env.example`](../.env.example) to `.env` at this repo's root,
+  which is gitignored, fill in one key, and add `--env-file .env` to the
+  `uv run` commands below. uv loads it into the process; waystation itself
+  reads no file.
 
 ## Running one
 

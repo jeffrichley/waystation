@@ -78,6 +78,10 @@ third being a backend built from the public surface alone, alone in
 module.** A test in `test_docker_sandbox.py` should be about docker: the image's
 user, the transports, a container's labels and teardown.
 
+The suite ships, so it cannot import from here: it carries its own copies of
+`init_host_repo` and `until`. That is the one duplication this guide endorses
+— change either side and look at the other.
+
 ## Idiom
 
 - **Test through the public surface.** Import from `waystation`, not from a private module, unless the seam under test *is* internal. A test that reaches into internals breaks on refactors that changed no behaviour — that's the tell.

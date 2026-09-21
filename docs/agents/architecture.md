@@ -18,7 +18,7 @@ Reach for the one already here before inventing a shape:
 - **Value Object** — results, `Timeouts` and the `Failure` union are frozen dataclasses that hold data and answer questions, with no behaviour worth mocking (ADR-0021). `CommandFailed` redacting itself is the one documented exception, and it has an ADR (ADR-0025).
 - **Adapter / Facade** — `GitRepo` wraps a git runner, `configure_logging` wraps rich and stdlib logging, `RunLoggerAdapter` wraps a logger. Each is a thin, honest hop, not a Middle Man.
 
-Notably absent, on purpose: **Template Method**. Extension here is by injection, not by subclassing a base that calls down into you — inheritance couples a user's code to our call order. `HookBundle` is inheritable only as a convenience for signature checking; it is never required.
+Notably absent, on purpose: **Template Method**. Extension here is by injection, not by subclassing a base that calls down into you — inheritance couples a user's code to our call order. `HookBundle` is inheritable only as a convenience for signature checking; it is never required. The ban is on the library's *extension seams*, where a user's code runs inside a run: `waystation.testing`'s `SandboxConformance` is a base a user subclasses, because there the call order is pytest's and the shape is xUnit's (ADR-0035).
 
 ## When *not* to reach for a pattern
 

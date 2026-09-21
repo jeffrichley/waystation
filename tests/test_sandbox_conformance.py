@@ -63,26 +63,36 @@ def test_the_third_backend_imports_nothing_private() -> None:
     source = Path(__file__).parent / "thin_backend.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
 
-    private = sorted(
-        name
-        for module in _imported_modules(tree)
-        if module.split(".")[0] == "waystation"
-        for name in [module]
-        if any(part.startswith("_") for part in module.split("."))
-    )
+    private = sorted(set(_private_waystation_imports(tree)))
 
     assert not private, (
-        f"{source.name} imports private waystation modules: {private}. "
+        f"{source.name} reaches for private waystation names: {private}. "
         "A third backend cannot, so neither may the one standing in for it."
     )
 
 
-def _imported_modules(tree: ast.Module) -> list[str]:
-    """Every module name the tree imports, ``from a.b import c`` as ``a.b``."""
-    modules: list[str] = []
+def _private_waystation_imports(tree: ast.Module) -> list[str]:
+    """Underscore-private waystation imports: a private module, or a private name.
+
+    Both, because either would break the proof. A public module can hold a
+    name its ``__all__`` leaves out, and importing that is as much a reach
+    inside as importing ``waystation.sandbox._host`` was.
+    """
+    found: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            modules.extend(alias.name for alias in node.names)
+            found += [a.name for a in node.names if _is_private(a.name)]
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            modules.append(node.module)
-    return modules
+            if not node.module.startswith("waystation"):
+                continue
+            if _is_private(node.module):
+                found.append(node.module)
+            found += [
+                f"{node.module}.{a.name}" for a in node.names if a.name.startswith("_")
+            ]
+    return found
+
+
+def _is_private(module: str) -> bool:
+    parts = module.split(".")
+    return parts[0] == "waystation" and any(part.startswith("_") for part in parts)

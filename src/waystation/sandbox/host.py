@@ -77,6 +77,12 @@ def discard_workspace(path: str | os.PathLike[str], *, attempts: int = 5) -> Non
     has only just exited can still hold a handle, and a teardown failure is
     logged rather than raised, because it must not change a result that is
     already decided (ADR-0016).
+
+    ``attempts`` is the one number here, and it is a knob rather than a
+    policy (ADR-0017): a Windows handle outlives the process that held it by
+    milliseconds, so the retries span a moment, not a wedged daemon. #76 is
+    to take this off backends entirely; until then it is what they share
+    rather than five copies of.
     """
     last: OSError | None = None
     for i in range(attempts):

@@ -40,8 +40,14 @@ _MANY_LINES_SCRIPT = (
     f'i=0\nwhile [ $i -lt {_MANY_LINES} ]; do echo "line-$i"; i=$((i+1)); done'
 )
 
-# A grandchild that outlives its parent unless the whole tree is killed.
+# A grandchild that outlives its parent unless the whole tree is killed. It
+# pulses rather than runs, so that "it stopped" can be read off a file: the
+# interval is short enough that the pause below spans several of them.
 _LINGERS = "( while :; do printf x >> pulse; sleep 0.05; done ) & echo started; wait"
+
+# Proving a negative — nothing is still writing — is the one place a wait
+# cannot be a poll: there is no signal to poll for. The pause is a multiple
+# of the pulse above, not a guess about how fast a machine is.
 _PULSE_TWICE = "wc -c < pulse; sleep 0.3; wc -c < pulse"
 
 
@@ -258,6 +264,10 @@ class SandboxConformance:
         assert not workspace.path.exists()
 
 
+# `_git` and `_until` below are this package's own on purpose: waystation
+# ships, and `tests/` does not, so the suite cannot reach `tests/helpers.py`
+# for the `init_host_repo` and `until` it mirrors. Change one, look at the
+# other — tests/CLAUDE.md says the same from that side.
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(
         ["git", *args],

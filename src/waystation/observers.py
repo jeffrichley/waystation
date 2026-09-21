@@ -37,9 +37,10 @@ from waystation.observability import (
     AGENT_OUTPUT,
     PACKAGE,
     RUN,
+    RunEvent,
     configured_console,
+    package_logger,
     tag,
-    tagged_logger,
     would_reach,
 )
 from waystation.results import (
@@ -55,7 +56,7 @@ from waystation.results import (
 
 __all__ = ["Dashboard", "EventLog", "RunLog", "RunLogFiles"]
 
-_logger = tagged_logger(PACKAGE)
+_logger = package_logger()
 
 # How much of a prompt's first line an INFO line may carry. The rest of the
 # prompt never reaches a log record at all.
@@ -72,7 +73,9 @@ class RunLog(HookBundle):
     """One run's lifecycle on the console: an INFO line per event, DEBUG output.
 
     Both loggers are bound to the run, so a line carries its run even when it
-    is logged from a task the run's own context never reached.
+    is logged from a task the run's own context never reached. Each lifecycle
+    line names the event it reports, which is what makes the channel readable
+    by a bundle that never sees the message text (``docs/log-records.md``).
     """
 
     __slots__ = ("_output", "_run")
@@ -81,17 +84,27 @@ class RunLog(HookBundle):
         self._run = tag(RUN, run_id, name)
         self._output = tag(AGENT_OUTPUT, run_id, name)
 
+    def _event(self, event: RunEvent, message: str, *args: object) -> None:
+        """One INFO line on the run channel, tagged with what happened.
+
+        Every line goes through here, so an event can't be left off one: the
+        extra is the interface, and the prose above it is for people.
+        """
+        self._run.info(message, *args, extra={"event": event})
+
     @override
     def on_run_start(self, ctx: RunContext) -> None:
-        self._run.info("run start: %s", ctx.repo)
+        self._event("run_start", "run start: %s", ctx.repo)
 
     @override
     def on_workspace_ready(self, ctx: RunContext) -> None:
-        self._run.info("workspace ready: base %s", (ctx.base_sha or "")[:12])
+        self._event(
+            "workspace_ready", "workspace ready: base %s", (ctx.base_sha or "")[:12]
+        )
 
     @override
     def on_sandbox_ready(self, ctx: RunContext) -> None:
-        self._run.info("sandbox up")
+        self._event("sandbox_ready", "sandbox up")
 
     @override
     def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
@@ -100,12 +113,15 @@ class RunLog(HookBundle):
 
     @override
     def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> None:
-        self._run.info("agent end: exit %d in %.1fs", exit.exit_code, exit.elapsed)
+        self._event(
+            "agent_end", "agent end: exit %d in %.1fs", exit.exit_code, exit.elapsed
+        )
 
     @override
     def on_integrated(self, ctx: RunContext, report: IntegrationReport) -> None:
         landed = len(report.landed)
-        self._run.info(
+        self._event(
+            "integrated",
             "integrated: %d commit%s onto %s",
             landed,
             "" if landed == 1 else "s",
@@ -120,7 +136,8 @@ class RunLog(HookBundle):
     ) -> None:
         elapsed = sum(result.elapsed.values())
         if isinstance(result, RunFailed):
-            self._run.info(
+            self._event(
+                "run_end",
                 "run end: failed at %s (%s) in %.1fs",
                 result.stage,
                 type(result.failure).__name__,
@@ -128,22 +145,26 @@ class RunLog(HookBundle):
             )
             return
         if isinstance(result, RunConflicted):
-            self._run.info(
+            self._event(
+                "run_end",
                 "run end: conflicted landing on %s in %.1fs; series kept on %s",
                 result.report.target,
                 elapsed,
                 result.preserved,
             )
             return
-        self._run.info("run end: succeeded in %.1fs", elapsed)
+        self._event("run_end", "run end: succeeded in %.1fs", elapsed)
 
-    # The agent's start and a run's cancellation are the events with no hook
-    # behind them: the agent stage opens between sandbox_ready and the first
-    # output line, and a cancelled run has no result for run_end (ADR-0017).
+    # The two events with no hook behind them (see ``RunEvent``). They are
+    # ordinary records on the channel, which is what lets a user's bundle see
+    # them without a privileged path in (ADR-0001, ADR-0026).
     def agent_start(self, prompt: str) -> None:
         """Announce the prompt by shape only — its body is never logged."""
-        self._run.info(
-            "agent start: prompt %d chars, first line %r", len(prompt), _head(prompt)
+        self._event(
+            "agent_start",
+            "agent start: prompt %d chars, first line %r",
+            len(prompt),
+            _head(prompt),
         )
 
     def cancelled(
@@ -151,13 +172,21 @@ class RunLog(HookBundle):
     ) -> None:
         """Say a run was cancelled, and where its series went, if anywhere."""
         if kept_on is not None:
-            self._run.info("run cancelled during %s; series kept on %s", stage, kept_on)
+            self._event(
+                "cancelled",
+                "run cancelled during %s; series kept on %s",
+                stage,
+                kept_on,
+            )
         elif landed_on is not None:
-            self._run.info(
-                "run cancelled during %s; series landed on %s", stage, landed_on
+            self._event(
+                "cancelled",
+                "run cancelled during %s; series landed on %s",
+                stage,
+                landed_on,
             )
         else:
-            self._run.info("run cancelled during %s", stage)
+            self._event("cancelled", "run cancelled during %s", stage)
 
 
 class _FlushingFile:

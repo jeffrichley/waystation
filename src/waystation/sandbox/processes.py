@@ -275,6 +275,8 @@ def _resume(handle: int) -> None:
     that cannot resume its agent is better off failing here (ADR-0016 covers
     results, not this — nothing has started yet to have a result).
     """
+    if sys.platform != "win32":
+        raise RuntimeError("resuming a suspended process is Windows-only")
     import ctypes
     from ctypes import wintypes
 
@@ -292,6 +294,8 @@ def _resume(handle: int) -> None:
 
 def _job_for(handle: int) -> int | None:
     """Put the process at ``handle`` in a kill-on-close job; ``None`` if that fails."""
+    if sys.platform != "win32":
+        raise RuntimeError("job objects exist only on Windows")
     import ctypes
     from ctypes import wintypes
 

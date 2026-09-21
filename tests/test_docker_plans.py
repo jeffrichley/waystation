@@ -18,6 +18,7 @@ from waystation.sandbox._docker_plans import (
     plan_create,
     plan_destroy,
     plan_exec,
+    plan_image_ls,
     plan_kill,
     plan_list,
     resolve_transport,
@@ -273,3 +274,16 @@ def test_a_spec_is_a_value_its_callers_dicts_cannot_change() -> None:
 def test_an_unknown_transport_is_refused_when_the_spec_is_made() -> None:
     with pytest.raises(ValueError, match="transport"):
         DockerSandbox(IMAGE, transport="rsync")  # type: ignore[arg-type]
+
+
+@pytest.mark.unit
+def test_an_image_lookup_asks_by_reference_and_answers_in_ids() -> None:
+    """The answer must be in the result's shape, not in docker's prose (#97)."""
+    assert plan_image_ls(IMAGE) == (
+        "docker",
+        "image",
+        "ls",
+        "--quiet",
+        "--filter",
+        f"reference={IMAGE}",
+    )

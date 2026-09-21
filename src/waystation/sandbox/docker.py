@@ -9,6 +9,7 @@ import shutil
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import get_args
 
 from waystation._cancellation import run_to_end
@@ -22,6 +23,7 @@ from waystation.sandbox._docker_plans import (
     plan_create,
     plan_destroy,
     plan_exec,
+    plan_image_ls,
     plan_inspect,
     plan_kill,
     plan_list,
@@ -146,7 +148,11 @@ class DockerSandbox:
     async def preflight(self) -> None:
         """The daemon answers and the image is here; nothing is built or pulled.
 
-        One docker call when all is well; a second only to say which is wrong.
+        One docker call when all is well; the rest only to say which is wrong,
+        and only ever an answer that says the image is absent becomes a
+        refusal. A lookup that merely failed is reported as what it was, with
+        docker's own words on it: telling someone to rebuild an image they
+        already have sends them somewhere there is nothing to find.
         """
         if shutil.which("docker") is None:
             missing = FileNotFoundError("docker CLI not found on PATH")
@@ -154,17 +160,32 @@ class DockerSandbox:
                 "docker CLI not found on PATH: install Docker to use DockerSandbox",
                 failure=Errored(exception=missing),
             )
-        if (await _docker(plan_inspect(self.image))).exit_code == 0:
+        inspect = plan_inspect(self.image)
+        inspected = await _docker(inspect)
+        if inspected.exit_code == 0:
             return
-        ping = plan_ping()
-        answered = await _docker(ping)
-        if answered.exit_code != 0:
+        here, listed = await _image_here(self.image)
+        if here is _Here.NO:
+            refused = _image_missing(self.image)
+            raise PreflightError(refused.detail, failure=refused)
+        if here is _Here.UNKNOWN:
+            ping = plan_ping()
+            answered = await _docker(ping)
+            if answered.exit_code != 0:
+                raise PreflightError(
+                    "Docker daemon not reachable: start Docker, then retry",
+                    failure=_failed(ping, answered),
+                )
             raise PreflightError(
-                "Docker daemon not reachable: start Docker, then retry",
-                failure=_failed(ping, answered),
+                f"could not tell whether image {self.image!r} is on this host: "
+                "docker answered neither way",
+                failure=_failed(plan_image_ls(self.image), listed),
             )
-        refused = _image_missing(self.image)
-        raise PreflightError(refused.detail, failure=refused)
+        raise PreflightError(
+            f"image {self.image!r} is on this host, but docker could not read "
+            "it: try again, and check the daemon if it keeps happening",
+            failure=_failed(inspect, inspected),
+        )
 
     @staticmethod
     async def reap(run_id: str | None = None) -> int:
@@ -234,13 +255,42 @@ class DockerSandbox:
         """Why ``docker run`` failed: an image gone since preflight is refused.
 
         Waystation asks for the image itself rather than read docker's stderr,
-        which never becomes a refusal (ADR-0016); and only a daemon that
-        answers can say an image is missing.
+        which never becomes a refusal (ADR-0016); and only an answer that says
+        the image is absent becomes one. An answer that could not be got is
+        not that answer, so the create's own failure is reported instead.
         """
-        image_gone = (await _docker(plan_inspect(self.image))).exit_code != 0
-        if image_gone and (await _docker(plan_ping())).exit_code == 0:
+        here, _listed = await _image_here(self.image)
+        if here is _Here.NO:
             return _image_missing(self.image)
         return _failed(create, created)
+
+
+class _Here(Enum):
+    """Whether an image is on this host, or whether nothing could say.
+
+    The third case is the whole point. ``docker image inspect`` fails the
+    same way for an image that is absent and for a daemon that would not
+    answer, so a preflight that treats every failed inspect as absence tells
+    people to rebuild images they already have. Only ``NO`` may become a
+    ``Refused`` (ADR-0016).
+    """
+
+    YES = auto()
+    NO = auto()
+    UNKNOWN = auto()
+
+
+async def _image_here(image: str) -> tuple[_Here, ExecResult]:
+    """Ask whether ``image`` is here; hand back the answer and its evidence.
+
+    Reads the shape of docker's result, never its words: a non-zero exit is
+    docker declining to say, and an answer with nothing in it is an image
+    that is not here.
+    """
+    listed = await _docker(plan_image_ls(image))
+    if listed.exit_code != 0:
+        return _Here.UNKNOWN, listed
+    return (_Here.YES if listed.stdout.strip() else _Here.NO), listed
 
 
 def _image_missing(image: str) -> Refused:

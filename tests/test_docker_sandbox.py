@@ -76,11 +76,33 @@ TRANSPORTS = [
 
 @pytest.fixture
 async def image() -> str:
-    """The docker tier's image — or a failure saying how to build it."""
+    """The docker tier's image, ready to use — or a failure saying what to do.
+
+    Asked twice when the first answer could not settle it. Docker Desktop is
+    seen failing a lookup by name for an image that is listed and readable by
+    id, and the listing preflight makes on its way to failing is itself what
+    repairs that, so the second ask is answered. What brings the state on is
+    not pinned down — which is why this turns on what docker said rather than
+    on what kind of host this is. A platform check would encode a guess; this
+    is right wherever a lookup comes back unsettled.
+
+    An image docker says is absent is not asked again — it will be absent
+    again, and building it is the answer (#97).
+    """
     try:
         await DockerSandbox(TEST_IMAGE).preflight()
     except PreflightError as err:
-        pytest.fail(f"{err}\nThe docker tier runs in it: `just test-image` builds it.")
+        if isinstance(err.failure, Refused):
+            pytest.fail(
+                f"{err}\nThe docker tier runs in it: `just test-image` builds it."
+            )
+        try:
+            await DockerSandbox(TEST_IMAGE).preflight()
+        except PreflightError as again:
+            pytest.fail(
+                f"{again}\nAsked twice, so this is not a cold lookup: the image "
+                "is not the problem, and docker could not answer for it."
+            )
     return TEST_IMAGE
 
 

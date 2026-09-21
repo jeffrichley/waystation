@@ -17,7 +17,11 @@ from waystation import (
     AgentUsage,
     Dashboard,
     Flow,
+    GitRepo,
+    Integration,
+    IntegrationReport,
     NoSandbox,
+    PatchSeries,
     RunConflicted,
     RunContext,
     RunFailed,
@@ -143,6 +147,37 @@ async def test_a_row_follows_its_run_while_the_run_is_going(host_repo: Path) -> 
     assert "1m05s" in row, "how long it has been going"
     assert "working" in row, "what the agent just said"
     assert not {"✓", "✗", "!"} & set(row), "no result before the run ends"
+
+
+class _Peeking:
+    """An integration strategy that draws the dashboard while it lands."""
+
+    def __init__(self, dashboard: Dashboard, run_ids: list[str]) -> None:
+        self.dashboard = dashboard
+        self.run_ids = run_ids
+        self.midway: list[str] = []
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        self.midway.append(row_of(drawn(self.dashboard), self.run_ids[0]))
+        return await Integration("landing").integrate(repo, series)
+
+
+@pytest.mark.git
+async def test_a_row_shows_a_stage_no_hook_announces(host_repo: Path) -> None:
+    """Integrate begins with no hook of its own; the row reads it off ``ctx``."""
+    dashboard = Dashboard()
+    started: list[str] = []
+    peeking = _Peeking(dashboard, started)
+
+    result = await (
+        a_run(host_repo)
+        .on_run_start(lambda ctx: started.append(ctx.run_id))
+        .hooks(dashboard)
+        .integrate(peeking)
+    )
+
+    assert isinstance(result, RunSucceeded)
+    assert "integrate" in peeking.midway[0], "the stage the run is in now"
 
 
 @pytest.mark.git

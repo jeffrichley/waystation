@@ -644,12 +644,16 @@ def _fields(value: object) -> dict[str, Any]:
 
 @dataclass(slots=True)
 class _Row:
-    """One run as the dashboard shows it; hooks write it, the display reads it."""
+    """One run as the dashboard shows it; hooks write it, the display reads it.
 
-    label: str
+    The stage is not kept here: ``ctx`` is live, so the display reads it as
+    it draws and sees each stage begin, integrate included, though no hook
+    announces that one (#79).
+    """
+
+    ctx: RunContext
     clock: Clock
     started: float
-    stage: Stage = "workspace"
     said: str = ""
     cost_usd: float | None = None
     ended: float | None = None
@@ -726,19 +730,9 @@ class Dashboard(HookBundle):
     @_safely
     def on_run_start(self, ctx: RunContext) -> None:
         clock = get_clock()
-        row = _Row(label=ctx.name or ctx.run_id, clock=clock, started=clock.monotonic())
+        row = _Row(ctx=ctx, clock=clock, started=clock.monotonic())
         with self._lock:
             self._rows[ctx.run_id] = row
-
-    @override
-    @_safely
-    def on_workspace_ready(self, ctx: RunContext) -> None:
-        self._move(ctx, "sandbox")
-
-    @override
-    @_safely
-    def on_sandbox_ready(self, ctx: RunContext) -> None:
-        self._move(ctx, "agent")
 
     @override
     @_safely
@@ -751,17 +745,9 @@ class Dashboard(HookBundle):
     @override
     @_safely
     def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> None:
-        # Collect follows the agent, and integrate starts with no hook of its
-        # own, so this is as far as the dashboard can see until it lands.
-        self._move(ctx, "collect")
         row = self._rows.get(ctx.run_id)
         if row is not None and exit.usage is not None:
             row.cost_usd = exit.usage.cost_usd
-
-    @override
-    @_safely
-    def on_integrated(self, ctx: RunContext, report: IntegrationReport) -> None:
-        self._move(ctx, "integrate")
 
     @override
     @_safely
@@ -769,17 +755,8 @@ class Dashboard(HookBundle):
         row = self._rows.get(ctx.run_id)
         if row is None:
             return
-        if isinstance(result, RunFailed):
-            row.stage = result.stage
-        elif isinstance(result, RunConflicted):
-            row.stage = "integrate"
         row.ended = row.clock.monotonic()
         row.glyph = _GLYPHS[type(result)]
-
-    def _move(self, ctx: RunContext, stage: Stage) -> None:
-        row = self._rows.get(ctx.run_id)
-        if row is not None:
-            row.stage = stage
 
     def __rich__(self) -> Table:
         """The table as it stands, so ``console.print(dashboard)`` works too."""
@@ -794,8 +771,8 @@ class Dashboard(HookBundle):
             rows = list(self._rows.values())
         for row in rows:
             table.add_row(
-                Text(row.label),
-                row.stage,
+                Text(row.ctx.name or row.ctx.run_id),
+                row.ctx.stage,
                 _clock_face(row.elapsed()),
                 # Text, never markup: an agent's "[/]" is something it said.
                 Text(row.said),

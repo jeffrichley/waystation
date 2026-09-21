@@ -17,8 +17,12 @@ The value a flow script builds to describe a run — prompt, agent, sandbox, int
 _Avoid_: run (that's the execution), builder, job definition
 
 **Workspace**:
-The run's private copy of the host repo at the base ref — what the agent works in. Exists inside the sandbox for the run's lifetime.
+The run's private copy of the host repo at the base ref — what the agent works in. Exists inside the sandbox for the run's lifetime. It names its own branch and the refs that travel with it, and core removes it; a sandbox backend never does (ADR-0037).
 _Avoid_: worktree (a git mechanism, not the concept), checkout
+
+**Refs that travel**:
+The refs a workspace carries into the sandbox — the run branch, and whatever else was asked for. The same set on every transport, which is what makes a bound sandbox and a copied one the same repository.
+_Avoid_: refspec (git's own word for the mapping, not the set), visible refs
 
 **Primitive**:
 A public, composable building block a flow script may use individually instead of the whole loop — a stage of a run, or a cross-run tool such as fan-out.

@@ -6,7 +6,6 @@ from waystation.sandbox.docker import DockerSandbox
 from waystation.sandbox.host import (
     HostRunner,
     allowlisted_env,
-    discard_workspace,
     host_shell,
 )
 from waystation.sandbox.no_sandbox import NoSandbox
@@ -39,7 +38,6 @@ __all__ = [
     "WindowsProcesses",
     "allowlisted_env",
     "clone_in",
-    "discard_workspace",
     "host_processes",
     "host_shell",
 ]

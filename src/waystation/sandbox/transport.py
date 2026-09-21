@@ -48,11 +48,13 @@ async def clone_in(sandbox: Sandbox, ws: Workspace) -> None:
 
     Raises ``StageError("sandbox", CommandFailed)`` when the clone fails.
     """
-    branch = f"waystation/{ws.run_id}"
     with attributing("sandbox"):
-        bundle = await run_git(ws.path, "bundle", "create", "-", f"refs/heads/{branch}")
+        # What travels is the workspace's own answer, so a bundled sandbox and
+        # a bound one show the agent the same refs (#76).
+        bundle = await run_git(ws.path, "bundle", "create", "-", *ws.refs)
         script = _clone_script(
-            branch,
+            ws.branch,
+            ws.refs,
             name=await config_value(ws.path, "user.name"),
             email=await config_value(ws.path, "user.email"),
         )
@@ -92,7 +94,7 @@ async def _setup_exec(
     return await sandbox.exec(argv, stdin=stdin)
 
 
-def _clone_script(branch: str, *, name: str, email: str) -> str:
+def _clone_script(branch: str, refs: Sequence[str], *, name: str, email: str) -> str:
     """One exec does the whole clone: an exec can be a costly round trip.
 
     A ``docker exec`` is about 0.5 s on Docker Desktop, for one.
@@ -102,7 +104,11 @@ def _clone_script(branch: str, *, name: str, email: str) -> str:
     is tried again, and carries on over what it left. The marker in ``.git``
     says that is what the directory holds, so anything else is still refused.
     """
-    ref = f"refs/heads/{branch}"
+    head = f"refs/heads/{branch}"
+    # Every ref the bundle carries, not just the one HEAD lands on: `refs` is
+    # what travels, and a transport that fetched less would quietly make a
+    # copied sandbox a different repository from a bound one (#76).
+    fetched = " ".join(shlex.quote(f"+{ref}:{ref}") for ref in refs)
     lines = [
         "set -e",
         '[ -w . ] || { echo "waystation: $(pwd) is not writable by $(id -un)," '
@@ -117,8 +123,8 @@ def _clone_script(branch: str, *, name: str, email: str) -> str:
         'base64 -d > "$bundle"',
         "git init --quiet",
         # --update-head-ok: a second try's HEAD is already on the branch.
-        f'git fetch --quiet --update-head-ok "$bundle" {shlex.quote(f"+{ref}:{ref}")}',
-        f"git symbolic-ref HEAD {shlex.quote(ref)}",
+        f'git fetch --quiet --update-head-ok "$bundle" {fetched}',
+        f"git symbolic-ref HEAD {shlex.quote(head)}",
         "git reset --quiet --hard",
     ]
     if name:

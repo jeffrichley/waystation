@@ -81,6 +81,13 @@ The suite ships, so it cannot import from here: it carries its own copies of
 `init_host_repo` and `until`. That is the one duplication this guide endorses
 — change either side and look at the other.
 
+**A backend does not remove the workspace.** Core made it and core takes it
+away (ADR-0037), so a backend's teardown is about what the backend made — its
+container, its copy, its runner — and the suite holds it to leaving `ws.path`
+alone. A test that prepares a workspace by hand removes it by hand:
+`await ws.remove()`, or `await run.anyway("workspace", ws.remove(), bound=None)`
+inside a composed loop.
+
 **Need a shell in a test? Ask the sandbox.** `[*ctx.sandbox.shell, "env"]` runs
 under whatever that backend has, on Windows and in a container alike. Naming
 `sh` yourself works on exactly one of them (ADR-0036).

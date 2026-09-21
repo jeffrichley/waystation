@@ -67,6 +67,8 @@ async def test_a_sandbox_starts_on_a_host_whose_shell_cannot_be_found(
         with pytest.raises(FileNotFoundError, match="WAYSTATION_SH"):
             _ = sandbox.shell
 
+    await ws.remove()
+
 
 @pytest.mark.git
 async def test_an_agent_that_names_an_argv_never_asks_for_a_shell(
@@ -84,4 +86,5 @@ async def test_an_agent_that_names_an_argv_never_asks_for_a_shell(
     async with NoSandbox().start(ws, env={}) as sandbox:
         shown = await sandbox.exec(["git", "rev-parse", "--show-prefix"])
 
+    await ws.remove()
     assert shown.exit_code == 0

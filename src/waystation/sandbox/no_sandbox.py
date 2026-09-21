@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from waystation.sandbox.host import (
     HostRunner,
     allowlisted_env,
-    discard_workspace,
     host_shell,
 )
 from waystation.sandbox.processes import ProcessStrategy, host_processes
@@ -101,5 +100,6 @@ class NoSandbox:
         try:
             yield _HostSandbox(workspace=str(ws.path), _env=built, _runner=runner)
         finally:
+            # The workspace is not removed here: core made it and core takes
+            # it away, so a backend cannot leak it by forgetting (#76).
             runner.release()
-            discard_workspace(ws.path)

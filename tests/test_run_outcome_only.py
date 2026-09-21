@@ -147,9 +147,7 @@ async def test_uncommitted_host_changes_are_invisible(host_repo: Path) -> None:
         assert not (ws.path / "SECRET").exists()
         assert (ws.path / "README").read_text(encoding="utf-8") == "committed\n"
     finally:
-        import shutil
-
-        shutil.rmtree(ws.path, ignore_errors=True)
+        await ws.remove()
 
 
 @pytest.mark.git
@@ -175,10 +173,8 @@ async def test_prepare_workspace_checks_out_waystation_branch(host_repo: Path) -
     ws = await prepare_workspace(host_repo)
     try:
         branch = git(ws.path, "branch", "--show-current")
-        assert branch == f"waystation/{ws.run_id}"
+        assert branch == ws.branch
         assert (ws.path / "README").read_text(encoding="utf-8") == "committed\n"
         assert not (ws.path / "SECRET").exists()
     finally:
-        import shutil
-
-        shutil.rmtree(ws.path, ignore_errors=True)
+        await ws.remove()

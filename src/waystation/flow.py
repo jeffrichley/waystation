@@ -117,6 +117,9 @@ class _RunRecord:
     # phase below sets it as it begins; inside a stage the runner attributes.
     stage: Stage = "workspace"
     base_sha: str | None = None
+    # The workspace's own branch name, kept here because preservation happens
+    # after the workspace is gone; nobody re-derives it (#76).
+    branch: str | None = None
     elapsed: Mapping[Stage, float] = field(default_factory=dict)
     agent: AgentExit | None = None
     series: Series | None = None
@@ -637,6 +640,7 @@ class RunSpec[OutcomeT]:
             prepare_workspace(self.repo, base=self.base_ref, run_id=record.run_id),
         )
         record.base_sha = state.base_sha = workspace.base_sha
+        record.branch = workspace.branch
         try:
             run.surface()  # held while the workspace was cloned
             record.log.on_workspace_ready(ctx)
@@ -832,9 +836,12 @@ class RunSpec[OutcomeT]:
         Unbounded, and run ``anyway``: preservation is how a cancelled or
         failed run loses nothing (ADR-0016, ADR-0017).
         """
+        # No branch means no workspace, and so nothing was ever collected;
+        # naming it keeps the type honest rather than asserting.
         if record.patches is None or record.patches.commits == 0:
             return
-        branch = f"waystation/{record.run_id}"
+        if (branch := record.branch) is None:
+            return
         try:
             record.preserved = await run.anyway(
                 "integrate",

@@ -119,7 +119,7 @@ class SandboxConformance:
         branch = await sandbox.exec(["git", "rev-parse", "--abbrev-ref", "HEAD"])
 
         assert prefix.stdout.strip() == ""
-        assert branch.stdout.strip() == f"waystation/{workspace.run_id}"
+        assert branch.stdout.strip() == workspace.branch
 
     async def test_the_sandbox_says_which_shell_it_has(self, sandbox: Sandbox) -> None:
         """ADR-0036: a caller with a script never has to know the sandbox's OS.

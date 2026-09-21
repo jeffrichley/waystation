@@ -48,11 +48,12 @@ async def clone_in(sandbox: Sandbox, ws: Workspace) -> None:
 
     Raises ``StageError("sandbox", CommandFailed)`` when the clone fails.
     """
-    branch = f"waystation/{ws.run_id}"
     with attributing("sandbox"):
-        bundle = await run_git(ws.path, "bundle", "create", "-", f"refs/heads/{branch}")
+        # What travels is the workspace's own answer, so a bundled sandbox and
+        # a bound one show the agent the same refs (#76).
+        bundle = await run_git(ws.path, "bundle", "create", "-", *ws.refs)
         script = _clone_script(
-            branch,
+            ws.branch,
             name=await config_value(ws.path, "user.name"),
             email=await config_value(ws.path, "user.email"),
         )

@@ -20,6 +20,7 @@ from waystation.agents.protocol import (
 )
 from waystation.clock import get_clock
 from waystation.errors import StageError
+from waystation.observability import AGENT
 from waystation.results import (
     AgentExit,
     AgentExited,
@@ -31,6 +32,7 @@ from waystation.results import (
 )
 from waystation.sandbox import allowlisted_env
 from waystation.sandbox.protocol import ExecResult, Sandbox
+from waystation.tails import bound_tail
 
 __all__ = ["run_agent"]
 
@@ -53,6 +55,11 @@ class _AgentBound(Exception):
         self.elapsed = elapsed
         self.hanging = hanging
         super().__init__(bound)
+
+
+# POSIX shells and execvp alike: the command was not there to run. It is the
+# one exit code that says the sandbox is missing something, not the agent.
+_NOT_FOUND = 127
 
 
 async def run_agent[OutcomeT](
@@ -220,7 +227,7 @@ async def run_agent[OutcomeT](
 
     async def _exec() -> ExecResult:
         return await sandbox.exec(
-            list(command.argv),
+            list(command.argv_in(sandbox.shell)),
             stdin=command.stdin,
             env=exec_env,
             capture=False,
@@ -285,6 +292,17 @@ async def run_agent[OutcomeT](
 
     assert result is not None
     agent_exit = _agent_exit(result.exit_code)
+    if result.exit_code == _NOT_FOUND:
+        # The one exit code that means the sandbox, not the agent, was wrong.
+        # Preflight cannot catch it: what an image holds is only knowable
+        # inside it, and looking would cost a sandbox start per (agent,
+        # sandbox) pair, which ADR-0018 keeps preflight out of (ADR-0036).
+        AGENT.error(
+            "the agent's command was not found in this sandbox — waystation "
+            "never installs, builds or pulls one (ADR-0011), so the sandbox "
+            "has to bring it: %s",
+            bound_tail(result.stderr).strip() or "the agent said nothing about it",
+        )
     if result.exit_code != 0:
         raise StageError(
             "agent",

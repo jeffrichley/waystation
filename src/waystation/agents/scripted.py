@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,26 +17,8 @@ from waystation.agents.protocol import (
     AgentText,
     OutcomeReported,
 )
-from waystation.errors import PreflightError
-from waystation.results import Errored
 
 __all__ = ["ScriptedAgent", "ScriptedCommit"]
-
-
-def _find_sh() -> str:
-    found = shutil.which("sh")
-    if found:
-        return found
-    # Not on PATH: look beside git, where Git for Windows ships its sh
-    # (.../Git/cmd/git.exe → .../Git/bin/sh.exe).
-    git = shutil.which("git")
-    if git is not None:
-        root = Path(git).resolve().parent.parent
-        for candidate in (root / "bin" / "sh.exe", root / "usr" / "bin" / "sh.exe"):
-            if candidate.is_file():
-                return str(candidate)
-    msg = "POSIX sh not found (install Git Bash on Windows)"
-    raise FileNotFoundError(msg)
 
 
 def _shell_single_quote(value: str) -> str:
@@ -77,11 +58,10 @@ class ScriptedCommit:
 
 @dataclass(frozen=True, slots=True)
 class ScriptedAgent:
-    """Play back canned lines, commits, and an Outcome through ``sh -c``.
+    """Play back canned lines, commits, and an Outcome through a shell script.
 
-    ``shell`` is the sh the script runs under. ``None`` finds the host's (Git
-    Bash on Windows), which is what ``NoSandbox`` runs; a sandbox with an sh
-    of its own, such as ``DockerSandbox``'s image, is named — ``shell="sh"``.
+    Which shell is the sandbox's to say, so this plays back the same on
+    ``NoSandbox`` and in a container with no argument either way (ADR-0036).
     """
 
     lines: Sequence[str] = ()
@@ -94,15 +74,10 @@ class ScriptedAgent:
     delay: float | None = None
     linger: bool = False
     linger_touch: str | None = None
-    shell: str | None = None
 
     def preflight(self) -> None:
-        if self.shell is not None:
-            return  # the sandbox's own sh; preflight looks only at the host
-        try:
-            _find_sh()
-        except FileNotFoundError as exc:
-            raise PreflightError(str(exc), failure=Errored(exception=exc)) from exc
+        """Nothing: the shell this needs is the sandbox's, and it checks it."""
+        return None
 
     def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
         del prompt, outcome_schema  # scripted playback ignores prompt/schema
@@ -134,7 +109,7 @@ class ScriptedAgent:
         parts.append(f"exit {int(self.exit_code)}")
         script = "\n".join(parts)
         return AgentCommand(
-            argv=(self.shell if self.shell is not None else _find_sh(), "-c", script),
+            script=script,
             stdin=None,
             env=self.env,
             pass_env=self.pass_env,

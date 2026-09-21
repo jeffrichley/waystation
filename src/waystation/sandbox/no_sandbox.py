@@ -7,8 +7,10 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
+from waystation.errors import PreflightError
+from waystation.results import Errored
 from waystation.sandbox.host import HostRunner, allowlisted_env, discard_workspace
-from waystation.sandbox.processes import ProcessStrategy, host_processes
+from waystation.sandbox.processes import ProcessStrategy, host_processes, host_shell
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.workspace import Workspace
 
@@ -18,6 +20,7 @@ __all__ = ["NoSandbox"]
 @dataclass(slots=True)
 class _HostSandbox:
     workspace: str
+    shell: Sequence[str]
     _env: dict[str, str]
     _runner: HostRunner
 
@@ -54,7 +57,17 @@ class NoSandbox:
     processes: ProcessStrategy = field(default_factory=host_processes)
 
     async def preflight(self) -> None:
-        return None
+        """The host has an sh, which is what a script the agent runs needs.
+
+        Every other host check is already someone's: git is the run's
+        (``require_host_git``), and this backend isolates nothing, so there
+        is nothing of its own to prove. A missing sh would otherwise surface
+        as a sandbox that cannot answer ``shell`` (ADR-0036).
+        """
+        try:
+            host_shell()
+        except FileNotFoundError as exc:
+            raise PreflightError(str(exc), failure=Errored(exception=exc)) from exc
 
     @asynccontextmanager
     async def start(
@@ -74,7 +87,12 @@ class NoSandbox:
         )
         runner = HostRunner(self.processes)
         try:
-            yield _HostSandbox(workspace=str(ws.path), _env=built, _runner=runner)
+            yield _HostSandbox(
+                workspace=str(ws.path),
+                shell=host_shell(),
+                _env=built,
+                _runner=runner,
+            )
         finally:
             runner.release()
             discard_workspace(ws.path)

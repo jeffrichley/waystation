@@ -21,10 +21,37 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class AgentCommand:
-    argv: Sequence[str]
+    """What to run for one agent: a literal ``argv``, or a shell ``script``.
+
+    A provider that binds a CLI names ``argv``. One that plays back a script
+    names ``script``, and the sandbox's own shell runs it — a provider never
+    has to know whether its sandbox is this host or a container, which is a
+    question it cannot answer anyway (ADR-0036).
+
+    Exactly one of the two, because "run this argv" and "run this script in
+    whatever shell you have" are different requests and neither implies the
+    other.
+    """
+
+    argv: Sequence[str] = ()
+    script: str | None = None
     stdin: str | None = None
     env: Mapping[str, str] = field(default_factory=dict)
     pass_env: Sequence[str] = ()
+
+    def __post_init__(self) -> None:
+        if bool(self.argv) == (self.script is not None):
+            named = "both" if self.argv else "neither"
+            msg = (
+                f"an AgentCommand runs an argv or a script, and this names "
+                f"{named}: pass argv=(...) for a command line, or "
+                f"script='...' to run one in the sandbox's own shell"
+            )
+            raise ValueError(msg)
+
+    def argv_in(self, shell: Sequence[str]) -> Sequence[str]:
+        """The argv to exec, given the shell of the sandbox it runs in."""
+        return self.argv if self.script is None else (*shell, self.script)
 
 
 @dataclass(frozen=True, slots=True)

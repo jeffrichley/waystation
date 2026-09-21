@@ -44,6 +44,9 @@ class _Container:
     name: str
     _runner: HostRunner
     workspace: str = WORKSPACE
+    # The image's own, named rather than pathed: what `sh` resolves to is the
+    # container's business, and a host path would mean nothing here (ADR-0036).
+    shell: Sequence[str] = ("sh", "-c")
 
     async def exec(
         self,

@@ -56,7 +56,10 @@ async def clone_in(sandbox: Sandbox, ws: Workspace) -> None:
             name=await config_value(ws.path, "user.name"),
             email=await config_value(ws.path, "user.email"),
         )
-    argv = ("sh", "-c", script)
+    # The sandbox's own shell, not a spelling of one: a host path means
+    # nothing in a container, and a bare `sh` is not on a Windows host's
+    # PATH (ADR-0036).
+    argv = (*sandbox.shell, script)
     result = await _setup_exec(
         sandbox, argv, stdin=base64.b64encode(encode(bundle.stdout)).decode("ascii")
     )

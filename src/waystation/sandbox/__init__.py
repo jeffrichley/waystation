@@ -11,6 +11,7 @@ from waystation.sandbox.processes import (
     ProcessTree,
     WindowsProcesses,
     host_processes,
+    host_shell,
 )
 from waystation.sandbox.protocol import (
     ExecResult,
@@ -36,4 +37,5 @@ __all__ = [
     "clone_in",
     "discard_workspace",
     "host_processes",
+    "host_shell",
 ]

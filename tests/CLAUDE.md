@@ -38,7 +38,6 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `commit_on(repo, branch, files)` | a commit on `branch` (made at HEAD if missing) with the checkout put back — a target that moved, or a range for `PatchSeries.from_range`; returns the tip |
 | `host_state(repo)` | the host's refs, HEAD, index and tree in one value — compare before and after to prove something left the host untouched |
 | `init_host_repo(root)` | what `host_repo` is built from — call it directly only for a *second* repo, or one outside `tmp_path` |
-| `sh()` | the POSIX sh on this host (Git Bash on Windows) |
 | `TEST_IMAGE` | the name of the docker tier's image — for a test that must name it outside the `image` fixture, as a preflight test does |
 | `branches(repo, pattern)` | the short names of the branches matching `pattern` — `"waystation/*"` for the preservation branches a run kept |
 | `printf_bytes(path, data)` | a sh command writing `data` to `path` byte for byte, as octal escapes — so a CR or a non-UTF-8 byte reaches the file, not just the command line |
@@ -49,8 +48,8 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `stalling_ref_hook(hooks, started, release)` | a `reference-transaction` hook that holds the first ref update git prepares until `release` exists; point a host at it with `core.hooksPath` |
 | `awaited(spec)` | a coroutine awaiting a `RunSpec`, for `asyncio.create_task` — reach for it when a test cancels or drives a run from outside |
 | `Gate` / `GatedSandbox(gate, at)` | a point a run is held at until the test sets `gate.release` — `gate.reached` once it waits, `gate.passed` once it goes on; `GatedSandbox` is `NoSandbox` held at `"start"`, `"collect"` (its git execs) or `"teardown"`, for cancelling a run mid-stage |
-| `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series, `sandbox=` your own backend, and `shell="sh"` the container's own sh when that backend is Docker |
-| `ShellAgent(script)` | an agent that *is* a shell script — reach for it over `ScriptedAgent` when the test drives stderr, an exit code, timing, or bytes only `printf` can make; `shell="sh"` runs it in a container's own sh, and `env=` / `pass_env=` give it a provider's own environment tier |
+| `a_run(repo)` | a `RunSpec` that says one line, makes one commit, reports an Outcome — chain `.integrate(…)` / `.on_*(…)` onto it; `commits=` swaps in your own series and `sandbox=` your own backend. It runs the same on every backend: the sandbox says which shell (ADR-0036) |
+| `ShellAgent(script)` | an agent that *is* a shell script — reach for it over `ScriptedAgent` when the test drives stderr, an exit code, timing, or bytes only `printf` can make; `env=` / `pass_env=` give it a provider's own environment tier. Needs no shell named: the sandbox says which (ADR-0036) |
 | `WORKS_UNTIL_STOPPED` | a `ShellAgent` script that commits `first`, leaves `wip.txt`, prints `ready`, then works until it is stopped — what a cancelled run's preservation branch should hold |
 | `MAKES_A_MERGE` | a `ShellAgent` script that ends in a merge commit, so the series is nonlinear and collect refuses it — append `exit <n>` to make the agent fail too |
 | `PROMPT` | the prompt `a_run` uses; has a second line, so a test can prove the body stayed unlogged |
@@ -81,6 +80,10 @@ user, the transports, a container's labels and teardown.
 The suite ships, so it cannot import from here: it carries its own copies of
 `init_host_repo` and `until`. That is the one duplication this guide endorses
 — change either side and look at the other.
+
+**Need a shell in a test? Ask the sandbox.** `[*ctx.sandbox.shell, "env"]` runs
+under whatever that backend has, on Windows and in a container alike. Naming
+`sh` yourself works on exactly one of them (ADR-0036).
 
 ## Idiom
 

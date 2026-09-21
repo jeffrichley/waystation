@@ -50,6 +50,14 @@ _Avoid_: executor, driver, process manager
 The sandbox contract written as tests, shipped so that a backend waystation does not ship runs the same ones. Every shipped backend subclasses it.
 _Avoid_: compliance tests, contract tests (they name a different thing in Pact's sense)
 
+**Shell**:
+What a sandbox answers when asked how to run a command string: the argv a script follows there — `("sh", "-c")` in a container, the host's own absolute sh on a host backend. A caller with a script asks rather than spelling one, because only the sandbox knows.
+_Avoid_: sh path, interpreter
+
+**Shell**:
+What a sandbox answers when asked how to run a command string: the argv a script follows there — `("sh", "-c")` in a container, the host's own absolute sh on a host backend. A caller with a script asks rather than spelling one, because only the sandbox knows.
+_Avoid_: sh path, interpreter
+
 **Transport**:
 How a workspace gets into a sandbox — copied in, or bound in place. An option of the sandbox backend, chosen per host by default.
 _Avoid_: mount (one mechanism, not the concept)

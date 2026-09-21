@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 
@@ -189,6 +190,51 @@ async def test_no_git_on_path_fails_preflight_saying_to_install_it(
     assert workspaces(isolated_tempdir) == []
     monkeypatch.undo()
     assert host_state(host_repo) == before
+
+
+@pytest.mark.unit
+async def test_the_hosts_git_is_checked_before_any_agent_or_sandbox() -> None:
+    """Two true answers, and git is the one worth giving.
+
+    A host with no git has no sh either, so `NoSandbox` would otherwise
+    answer first with "install Git Bash" — and a batch would pay a docker
+    daemon ping before finding out it could not run at all (ADR-0036).
+    """
+    order: list[str] = []
+
+    class _Watching(NoSandbox):
+        async def preflight(self) -> None:
+            order.append("sandbox")
+
+    async def _git_first() -> None:
+        order.append("git")
+
+    spec: RunSpec[Summary] = Flow(
+        Path.cwd(), agent=ScriptedAgent(), sandbox=_Watching()
+    ).run("work")
+    with mock.patch("waystation.preflight.require_host_git", _git_first):
+        await preflight([spec])
+
+    assert order == ["git", "sandbox"]
+
+
+@pytest.mark.unit
+async def test_a_host_with_no_sh_fails_nosandbox_preflight_saying_where_to_get_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shell a script runs under is the sandbox's to have, and to check.
+
+    It used to be `ScriptedAgent` that looked, which meant a provider had to
+    know which backend was about to run it (#77, ADR-0036).
+    """
+    empty = tmp_path / "nothing-here"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+
+    with pytest.raises(PreflightError) as refused:
+        await NoSandbox().preflight()
+
+    assert "sh" in str(refused.value)
 
 
 @pytest.mark.git

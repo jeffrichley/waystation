@@ -20,6 +20,7 @@ from waystation.agents.protocol import (
 )
 from waystation.clock import get_clock
 from waystation.errors import StageError
+from waystation.observability import AGENT
 from waystation.results import (
     AgentExit,
     AgentExited,
@@ -53,6 +54,12 @@ class _AgentBound(Exception):
         self.elapsed = elapsed
         self.hanging = hanging
         super().__init__(bound)
+
+
+# What a POSIX shell exits when it cannot find the command it was asked to
+# run. An agent is free to exit 127 meaning something else, so this reads as
+# a likely cause rather than a verdict.
+_NOT_FOUND = 127
 
 
 async def run_agent[OutcomeT](
@@ -220,7 +227,7 @@ async def run_agent[OutcomeT](
 
     async def _exec() -> ExecResult:
         return await sandbox.exec(
-            list(command.argv),
+            list(command.argv_in(sandbox.shell)),
             stdin=command.stdin,
             env=exec_env,
             capture=False,
@@ -285,6 +292,18 @@ async def run_agent[OutcomeT](
 
     assert result is not None
     agent_exit = _agent_exit(result.exit_code)
+    if result.exit_code == _NOT_FOUND:
+        # Preflight cannot rule this out: what a sandbox holds is only
+        # knowable inside it, and looking would cost a sandbox start per
+        # (agent, sandbox) pair, which ADR-0018 keeps preflight out of. So
+        # the run says it here instead (ADR-0036).
+        AGENT.error(
+            "the agent exited 127, which is what a shell exits for a command "
+            "it could not find. If that is what happened, the sandbox has to "
+            "bring it: waystation never installs, builds or pulls anything "
+            "(ADR-0011). It said: %s",
+            result.stderr.strip() or "nothing",
+        )
     if result.exit_code != 0:
         raise StageError(
             "agent",

@@ -98,6 +98,7 @@ def test_flow_timeouts_replaced_per_run(host_repo: Path) -> None:
 class _ClockExecSandbox:
     workspace: str
     lines: Sequence[tuple[float, str]]
+    shell: Sequence[str] = ("sh", "-c")
     hang_after: float | None = None
     hang_git: float | None = None
     exit_code: int = 0
@@ -313,7 +314,8 @@ def test_scripted_delay_and_linger_in_command() -> None:
     )
     assert agent.delay == 1.5
     assert agent.linger is True
-    script = agent.command("p", {}).argv[-1]
+    script = agent.command("p", {}).script
+    assert script is not None
     assert "sleep 1.5" in script
     assert "&" in script
 

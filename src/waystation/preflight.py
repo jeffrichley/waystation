@@ -66,10 +66,13 @@ def _distinct[T](values: Iterable[T]) -> list[T]:
 async def preflight(specs: Sequence[RunSpec[Any]]) -> None:
     """Check what ``specs`` need from the host, repairing nothing.
 
-    Each distinct agent provider and sandbox spec is checked once — equal
+    The host's git comes first: every run needs it whatever its agent and
+    sandbox, and its absence is what explains the others — a host with no git
+    has no sh either, and "install git" is the more useful of two true
+    answers. Then each distinct agent provider and sandbox spec, once — equal
     values describe the same thing, so a batch of fifty runs on one image
-    checks it once — then every prompt file, then the host's git. Any problem
-    raises ``PreflightError`` naming what failed and how to fix it; nothing is
+    checks it once — and then every prompt file. Any problem raises
+    ``PreflightError`` naming what failed and how to fix it; nothing is
     installed, built or pulled (#30, #31, ADR-0011).
 
     A spec whose batch was checked here runs through
@@ -84,6 +87,8 @@ async def preflight(specs: Sequence[RunSpec[Any]]) -> None:
         PreflightError: Naming what failed and how to fix it. No run has
             started.
     """
+    with _preflighting("host git"):
+        await require_host_git()
     for agent in _distinct(spec.provider for spec in specs):
         with _preflighting(type(agent).__name__):
             agent.preflight()
@@ -93,5 +98,3 @@ async def preflight(specs: Sequence[RunSpec[Any]]) -> None:
     for spec in specs:
         with _preflighting("prompt file"):
             _require_prompt_file(spec.prompt)
-    with _preflighting("host git"):
-        await require_host_git()

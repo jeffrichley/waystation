@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import TracebackType
 from typing import Self
 
@@ -27,7 +29,7 @@ from waystation.sandbox.protocol import ExecResult, LineCallback
 from waystation.tails import TailBuffer
 from waystation.workspace import remove_workspace
 
-__all__ = ["HostRunner", "allowlisted_env", "discard_workspace"]
+__all__ = ["HostRunner", "allowlisted_env", "discard_workspace", "host_shell"]
 
 
 def allowlisted_env(
@@ -67,6 +69,31 @@ def allowlisted_env(
     if skipped:
         SANDBOX.debug("pass_env names not on the host, skipped: %s", ", ".join(skipped))
     return env
+
+
+def host_shell() -> Sequence[str]:
+    r"""This host's POSIX sh, as the argv prefix a command string follows.
+
+    What ``NoSandbox`` answers for ``Sandbox.shell``, and what any backend
+    running host processes wants. An absolute path, because a sandbox's own
+    ``PATH`` is not what Windows looks a program up on (ADR-0029).
+
+    Raises ``FileNotFoundError`` when the host has no sh. On Windows that is
+    the ordinary case for a machine without Git for Windows, whose installer
+    puts only ``Git\cmd`` on ``PATH`` while shipping an sh beside it — so it
+    is looked for there before giving up.
+    """
+    found = shutil.which("sh")
+    if found:
+        return (found, "-c")
+    git = shutil.which("git")
+    if git is not None:
+        root = Path(git).resolve().parent.parent
+        for candidate in (root / "bin" / "sh.exe", root / "usr" / "bin" / "sh.exe"):
+            if candidate.is_file():
+                return (str(candidate), "-c")
+    msg = "POSIX sh not found on this host (install Git Bash on Windows)"
+    raise FileNotFoundError(msg)
 
 
 def discard_workspace(path: str | os.PathLike[str], *, attempts: int = 5) -> None:

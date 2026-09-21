@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from waystation.sandbox.docker import DockerSandbox
-from waystation.sandbox.host import HostRunner, allowlisted_env, discard_workspace
+from waystation.sandbox.host import (
+    HostRunner,
+    allowlisted_env,
+    discard_workspace,
+    host_shell,
+)
 from waystation.sandbox.no_sandbox import NoSandbox
 from waystation.sandbox.processes import (
     PosixProcesses,
@@ -36,4 +41,5 @@ __all__ = [
     "clone_in",
     "discard_workspace",
     "host_processes",
+    "host_shell",
 ]

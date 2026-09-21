@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import a_run, git, sh, subjects, workspaces
+from helpers import a_run, git, subjects, workspaces
 from waystation import (
     CommandFailed,
     NoSandbox,
@@ -31,40 +31,12 @@ from waystation.workspace import remove_workspace
 
 
 @dataclass
-class _HostSh:
-    """A sandbox whose ``sh`` is the host's — Windows keeps Git Bash off PATH."""
-
-    inner: Sandbox
-    workspace: str
-
-    async def exec(
-        self,
-        argv: Sequence[str],
-        *,
-        stdin: str | None = None,
-        env: Mapping[str, str] | None = None,
-        capture: bool = True,
-        on_stdout: LineCallback | None = None,
-        on_stderr: LineCallback | None = None,
-    ) -> ExecResult:
-        if argv and argv[0] == "sh":
-            argv = (sh(), *argv[1:])
-        return await self.inner.exec(
-            argv,
-            stdin=stdin,
-            env=env,
-            capture=capture,
-            on_stdout=on_stdout,
-            on_stderr=on_stderr,
-        )
-
-
-@dataclass
 class _KilledAsItFinished:
     """Its first exec does all its work, then exits 137, as a late SIGKILL would."""
 
     inner: Sandbox
     workspace: str
+    shell: Sequence[str]
     killed: bool = False
 
     async def exec(
@@ -117,9 +89,9 @@ class CopyingHost:
             (inside / "leftover").write_text("x", encoding="utf-8")
         try:
             async with NoSandbox().start(replace(ws, path=inside), env=env) as sandbox:
-                box: Sandbox = _HostSh(sandbox, sandbox.workspace)
+                box: Sandbox = sandbox
                 if self.killed:
-                    box = _KilledAsItFinished(box, sandbox.workspace)
+                    box = _KilledAsItFinished(box, sandbox.workspace, sandbox.shell)
                 await clone_in(box, ws)
                 yield sandbox
         finally:
@@ -194,6 +166,7 @@ class _Answers:
     codes: list[int]
     said: list[str | float]
     workspace: str = "/workspace"
+    shell: Sequence[str] = ("sh", "-c")
 
     async def exec(
         self,

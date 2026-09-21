@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import pytest
@@ -68,8 +68,9 @@ class SandboxConformance:
     a ``git``, which any sandbox an agent works in has. It runs async tests,
     so it wants ``asyncio_mode = "auto"`` (pytest-asyncio) or the equivalent.
 
-    Override ``shell`` when ``sh`` is not what names a shell inside your
-    sandbox — as it is not for a backend that runs host processes on Windows.
+    It asks your sandbox which shell it has rather than being told, so there
+    is nothing to override: that is the same ``shell`` a provider's script
+    runs under (ADR-0036).
     """
 
     # ---- what a subclass supplies -------------------------------------
@@ -79,11 +80,6 @@ class SandboxConformance:
         """The backend under test. A subclass must override this."""
         msg = "a SandboxConformance subclass provides a `backend` fixture"
         raise NotImplementedError(msg)
-
-    @pytest.fixture
-    def shell(self) -> Sequence[str]:
-        """Argv a shell command string follows, inside this sandbox."""
-        return ("sh", "-c")
 
     # ---- what the suite builds ----------------------------------------
 
@@ -125,44 +121,54 @@ class SandboxConformance:
         assert prefix.stdout.strip() == ""
         assert branch.stdout.strip() == f"waystation/{workspace.run_id}"
 
+    async def test_the_sandbox_says_which_shell_it_has(self, sandbox: Sandbox) -> None:
+        """ADR-0036: a caller with a script never has to know the sandbox's OS.
+
+        It is an argv prefix, the shape Dockerfile's ``SHELL`` takes, so a
+        sandbox whose shell needs arguments of its own can say so.
+        """
+        ran = await sandbox.exec([*sandbox.shell, "printf ran"])
+
+        assert list(sandbox.shell), "a sandbox names a shell, however it spells it"
+        assert ran.exit_code == 0
+        assert ran.stdout == "ran"
+
     async def test_an_exec_reports_its_exit_code_and_both_its_streams(
-        self, sandbox: Sandbox, shell: Sequence[str]
+        self, sandbox: Sandbox
     ) -> None:
-        result = await sandbox.exec([*shell, "echo out; echo err >&2; exit 7"])
+        result = await sandbox.exec([*sandbox.shell, "echo out; echo err >&2; exit 7"])
 
         assert result.exit_code == 7
         assert result.stdout == "out\n"
         assert result.stderr == "err\n"
 
-    async def test_an_execs_stdin_reaches_the_process(
-        self, sandbox: Sandbox, shell: Sequence[str]
-    ) -> None:
-        result = await sandbox.exec([*shell, "cat"], stdin="one\ntwo\n")
+    async def test_an_execs_stdin_reaches_the_process(self, sandbox: Sandbox) -> None:
+        result = await sandbox.exec([*sandbox.shell, "cat"], stdin="one\ntwo\n")
 
         assert result.stdout == "one\ntwo\n"
 
     async def test_an_exec_that_exits_without_reading_its_stdin_reports_its_exit(
-        self, sandbox: Sandbox, shell: Sequence[str]
+        self, sandbox: Sandbox
     ) -> None:
         """A process may exit without reading all it was given.
 
         Its exit code says why, not the pipe that closed under the write.
         """
         result = await sandbox.exec(
-            [*shell, "echo refused >&2; exit 3"], stdin=_MORE_THAN_A_PIPE_HOLDS
+            [*sandbox.shell, "echo refused >&2; exit 3"], stdin=_MORE_THAN_A_PIPE_HOLDS
         )
 
         assert result.exit_code == 3
         assert result.stderr == "refused\n"
 
     async def test_captured_output_keeps_a_byte_that_is_not_utf8(
-        self, sandbox: Sandbox, shell: Sequence[str]
+        self, sandbox: Sandbox
     ) -> None:
         """ADR-0030: a patch is not always UTF-8, and git must get its bytes back."""
         lines: list[str] = []
 
         result = await sandbox.exec(
-            [*shell, r"printf 'caf\351\n'"], on_stdout=lines.append
+            [*sandbox.shell, r"printf 'caf\351\n'"], on_stdout=lines.append
         )
 
         assert result.stdout.encode("utf-8", errors="surrogateescape") == b"caf\xe9\n"
@@ -170,24 +176,26 @@ class SandboxConformance:
         assert lines == ["caf\N{REPLACEMENT CHARACTER}"]
 
     async def test_a_line_longer_than_a_readers_limit_arrives_whole(
-        self, sandbox: Sandbox, shell: Sequence[str]
+        self, sandbox: Sandbox
     ) -> None:
         """ADR-0017: no line length nobody asked for."""
         lines: list[str] = []
 
-        result = await sandbox.exec([*shell, _LONG_LINE_SCRIPT], on_stdout=lines.append)
+        result = await sandbox.exec(
+            [*sandbox.shell, _LONG_LINE_SCRIPT], on_stdout=lines.append
+        )
 
         assert result.stdout == "x" * _LONG_LINE + "\n"
         assert lines == ["x" * _LONG_LINE]
 
     async def test_output_that_is_not_captured_comes_back_as_a_bounded_tail(
-        self, sandbox: Sandbox, shell: Sequence[str]
+        self, sandbox: Sandbox
     ) -> None:
         """``capture=False`` is how a long agent run stays out of memory."""
         lines: list[str] = []
 
         result = await sandbox.exec(
-            [*shell, _MANY_LINES_SCRIPT], capture=False, on_stdout=lines.append
+            [*sandbox.shell, _MANY_LINES_SCRIPT], capture=False, on_stdout=lines.append
         )
 
         assert lines == [f"line-{i}" for i in range(_MANY_LINES)]
@@ -197,7 +205,7 @@ class SandboxConformance:
 
     @pytest.mark.parametrize("insistent", [False, True])
     async def test_a_cancelled_exec_kills_all_it_started_before_it_completes(
-        self, sandbox: Sandbox, shell: Sequence[str], insistent: bool
+        self, sandbox: Sandbox, insistent: bool
     ) -> None:
         """ADR-0023: nothing the exec started is still writing when collect reads.
 
@@ -205,7 +213,7 @@ class SandboxConformance:
         """
         started = asyncio.Event()
         running = asyncio.create_task(
-            sandbox.exec([*shell, _LINGERS], on_stdout=lambda _: started.set())
+            sandbox.exec([*sandbox.shell, _LINGERS], on_stdout=lambda _: started.set())
         )
 
         await _until(started.is_set, running)
@@ -216,7 +224,7 @@ class SandboxConformance:
         with pytest.raises(asyncio.CancelledError):
             await running
 
-        sizes = (await sandbox.exec([*shell, _PULSE_TWICE])).stdout.split()
+        sizes = (await sandbox.exec([*sandbox.shell, _PULSE_TWICE])).stdout.split()
         assert len(sizes) == 2
         assert sizes[0] == sizes[1]
 
@@ -224,7 +232,6 @@ class SandboxConformance:
         self,
         backend: SandboxBackend,
         workspace: Workspace,
-        shell: Sequence[str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """ADR-0013: cleared and allowlisted — a name nobody wrote never arrives."""
@@ -235,12 +242,12 @@ class SandboxConformance:
         async with backend.start(
             workspace, env={"WAYSTATION_CONFORMANCE": "given"}
         ) as sandbox:
-            shown = await sandbox.exec([*shell, show])
+            shown = await sandbox.exec([*sandbox.shell, show])
 
         assert shown.stdout == "given\n\n"
 
     async def test_an_execs_own_environment_goes_over_the_sandboxes(
-        self, backend: SandboxBackend, workspace: Workspace, shell: Sequence[str]
+        self, backend: SandboxBackend, workspace: Workspace
     ) -> None:
         """ADR-0034: the more specific tier wins, and an exec's is the most."""
         show = 'printf "%s\\n" "${WAYSTATION_CONFORMANCE-}"'
@@ -249,7 +256,7 @@ class SandboxConformance:
             workspace, env={"WAYSTATION_CONFORMANCE": "sandbox"}
         ) as sandbox:
             shown = await sandbox.exec(
-                [*shell, show], env={"WAYSTATION_CONFORMANCE": "exec"}
+                [*sandbox.shell, show], env={"WAYSTATION_CONFORMANCE": "exec"}
             )
 
         assert shown.stdout == "exec\n"

@@ -44,6 +44,11 @@ class _Container:
     name: str
     _runner: HostRunner
     workspace: str = WORKSPACE
+    # The image's own sh, named rather than pathed: what it resolves to is
+    # the container's business, and a host path would mean nothing here.
+    # Not reachable from `DockerSandbox` — ADR-0036 turned that knob down
+    # until an image needs it.
+    shell: Sequence[str] = ("sh", "-c")
 
     async def exec(
         self,

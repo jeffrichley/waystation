@@ -8,12 +8,10 @@ three backends pointed at it, and the guard that keeps the third one honest.
 from __future__ import annotations
 
 import ast
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
-from helpers import sh
 from thin_backend import ThinHost
 from waystation import DockerSandbox, NoSandbox, SandboxBackend
 from waystation.testing import SandboxConformance
@@ -24,12 +22,6 @@ class TestNoSandboxConforms(SandboxConformance):
     @pytest.fixture
     def backend(self) -> SandboxBackend:
         return NoSandbox()
-
-    @pytest.fixture
-    def shell(self) -> Sequence[str]:
-        # This backend's execs are host processes, and Windows has no `sh`
-        # on PATH; naming one is the sandbox's job once #77 lands.
-        return (sh(), "-c")
 
 
 @pytest.mark.docker
@@ -46,10 +38,6 @@ class TestABackendOffThePublicSurfaceConforms(SandboxConformance):
     @pytest.fixture
     def backend(self) -> SandboxBackend:
         return ThinHost()
-
-    @pytest.fixture
-    def shell(self) -> Sequence[str]:
-        return (sh(), "-c")
 
 
 @pytest.mark.unit

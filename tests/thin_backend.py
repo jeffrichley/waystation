@@ -23,6 +23,7 @@ from waystation.sandbox import (
     allowlisted_env,
     discard_workspace,
     host_processes,
+    host_shell,
 )
 
 __all__ = ["ThinHost"]
@@ -31,6 +32,7 @@ __all__ = ["ThinHost"]
 @dataclass(slots=True)
 class _ThinSandbox:
     workspace: str
+    shell: Sequence[str]
     _env: Mapping[str, str]
     _runner: HostRunner
 
@@ -76,6 +78,11 @@ class ThinHost:
         )
         with HostRunner(self.processes) as runner:
             try:
-                yield _ThinSandbox(workspace=str(ws.path), _env=built, _runner=runner)
+                yield _ThinSandbox(
+                    workspace=str(ws.path),
+                    shell=host_shell(),
+                    _env=built,
+                    _runner=runner,
+                )
             finally:
                 discard_workspace(ws.path)

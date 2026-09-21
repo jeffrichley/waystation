@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import OK_OUTCOME_LINE, ShellAgent, sh
+from helpers import OK_OUTCOME_LINE, ShellAgent
 from waystation import (
     Flow,
     NoSandbox,
@@ -105,7 +105,7 @@ async def test_a_providers_environment_reaches_its_agent_and_nothing_else(
         agent_lines.append(line.raw)
 
     async def env_outside(ctx: RunContext) -> None:
-        other.append((await ctx.sandbox.exec([sh(), "-c", "env"])).stdout)
+        other.append((await ctx.sandbox.exec([*ctx.sandbox.shell, "env"])).stdout)
 
     flow = Flow(
         host_repo,
@@ -178,7 +178,7 @@ async def test_the_sandbox_and_the_agent_see_one_host_environment(
         os.environ[MOVES] = "after"
 
     async def read_the_sandbox(ctx: RunContext) -> None:
-        sandbox_env.append((await ctx.sandbox.exec([sh(), "-c", "env"])).stdout)
+        sandbox_env.append((await ctx.sandbox.exec([*ctx.sandbox.shell, "env"])).stdout)
 
     spec = (
         Flow(

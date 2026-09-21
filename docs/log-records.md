@@ -50,7 +50,7 @@ Every record on the channel carries all three:
 | --- | --- | --- |
 | `event` | `str` | Which of the rows above. Only records on `waystation.run` have it. |
 | `run_id` | `str` | The run's id — 8 lowercase hex characters. |
-| `run_name` | `str \| None` | The run's name, or `None`. Always `None` today: nothing sets one until runs can be named ([#29](https://github.com/jeffrichley/waystation/issues/29)). The extra is present either way, so a reader has one shape rather than two. It is `run_name` and not `name` because `name` is the logger's own record attribute, and stdlib refuses to let an extra overwrite it. |
+| `run_name` | `str \| None` | The name `.name()` gave the run, or `None` for a run nobody named. The extra is present either way, so a reader has one shape rather than two. It is `run_name` and not `name` because `name` is the logger's own record attribute, and stdlib refuses to let an extra overwrite it. |
 
 ### Reading it
 

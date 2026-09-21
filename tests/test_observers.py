@@ -24,7 +24,6 @@ from helpers import (
     until_batch,
 )
 from waystation import (
-    Errored,
     EventLog,
     Flow,
     NoSandbox,
@@ -38,7 +37,6 @@ from waystation import (
     fan_out,
     observers,
 )
-from waystation._run_record import RunRecord
 from waystation.agents import AgentLine
 from waystation.hooks import RunContext
 
@@ -126,34 +124,16 @@ async def test_a_hooks_own_lines_interleave_with_the_agents(
     assert hook_line < agent_line, "the hook ran before the agent spoke"
 
 
-@pytest.mark.unit
-def test_a_named_run_writes_a_file_named_for_it(tmp_path: Path) -> None:
-    """Until #29 lands ``RunSpec.name()`` no run can be named, so drive it here."""
-    state = RunRecord(run_id="0badcafe", name="nightly", repo=tmp_path, prompt="hi")
+@pytest.mark.git
+async def test_a_named_run_writes_a_file_named_for_it(
+    host_repo: Path, tmp_path: Path
+) -> None:
     logs = tmp_path / "logs"
-    bundle = RunLogFiles(logs)
-    ctx = RunContext(state)
 
-    bundle.on_run_start(ctx)
-    try:
-        assert (logs / "nightly-0badcafe.log").exists()
-    finally:
-        bundle.on_run_end(ctx, _unfinished(state))
+    result = await a_run(host_repo).name("nightly").hooks(RunLogFiles(logs))
 
-
-def _unfinished(state: RunRecord) -> RunFailed:
-    """The shape of a result, only so a test can close the file it opened."""
-    return RunFailed(
-        run_id=state.run_id,
-        name=state.name,
-        base_sha=None,
-        elapsed={},
-        agent=None,
-        series=None,
-        preserved=None,
-        stage="agent",
-        failure=Errored(exception=RuntimeError("test")),
-    )
+    assert isinstance(result, RunSucceeded), result
+    assert (logs / f"nightly-{result.run_id}.log").exists()
 
 
 @pytest.mark.git

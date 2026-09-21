@@ -4,6 +4,11 @@ Creates a throwaway host repo, runs one ScriptedAgent flow with
 ``Integration("agents/demo")``, and shows the typed result plus the
 target branch — without touching HEAD.
 
+Swap in ``Squash("agents/demo")`` to land the run's whole series as one
+commit instead; ``Integration(..., mechanism="merge")`` lands it with a merge
+commit. All three are built from ``GitRepo``'s public landing steps, which a
+strategy of your own can use too (ADR-0040).
+
 Requires: git ≥ 2.40, POSIX sh (Git Bash on Windows). No Docker, no API keys.
 
 Run::

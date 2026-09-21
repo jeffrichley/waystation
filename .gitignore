@@ -21,3 +21,6 @@ uv.lock.bak
 
 # Secrets
 .env
+
+# Stacks a wedged test left behind (tests/hang_dump.py)
+hang-dumps/

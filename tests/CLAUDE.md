@@ -102,6 +102,28 @@ under whatever that backend has, on Windows and in a container alike. Naming
 - **`isolated_tempdir` is autouse** — every test gets its own temp dir, so a workspace never lands in the host's. Don't reach for `tempfile.mkdtemp` directly.
 - **Assert on log records, not on rendered text.** `caplog.at_level(level, logger="waystation")`, then filter `caplog.records` by `record.name`. The console's formatting is not the contract; the logger a line goes to, and the level it goes at, are.
 
+## When a test hangs
+
+A wedged async test is mute by default, and #105 cost two CI failures and a
+re-run each before anyone could say why. Two things now speak for it, and the
+order between them is deliberate:
+
+| At | What fires | What it shows |
+| --- | --- | --- |
+| `faulthandler_timeout - 5s` | `hang_dump.py`, armed per test by a `pytest_runtest_protocol` hook | every unfinished asyncio task and **the line it is suspended at** — innermost last, so the final line is the await that never came back |
+| `faulthandler_timeout` (45s) | pytest's own faulthandler | every OS thread's stack |
+| `--timeout` (60s) | pytest-timeout | `os._exit`, which under xdist reads as `worker 'gwN' crashed` and nothing else |
+
+**`worker 'gwN' crashed` does not mean a crash.** It means the worker's channel
+went quiet, and on Windows that is nearly always the `os._exit` on the last
+row — the test hung. A real native death says so: it prints `Windows fatal
+exception: access violation` and that reaches the log.
+
+Dumps land in `hang-dumps/` (gitignored). `.github/workflows/soak.yml` runs the
+suite many times over on a `workflow_dispatch` and uploads them: an
+intermittent failure is a rate, so one green run is not evidence that it is
+gone.
+
 ## Coverage
 
 The floor is 85% and CI enforces it. It's a floor, not a target — don't write a test to move the number. If a branch is genuinely unreachable on this platform, say so where it lives rather than chasing it.

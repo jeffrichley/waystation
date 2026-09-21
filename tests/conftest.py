@@ -7,11 +7,12 @@ import logging
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from pathlib import Path
 
 import pytest
 
+from hang_dump import arm
 from helpers import TEST_IMAGE, init_host_repo
 from waystation import DockerSandbox, PreflightError, Refused
 
@@ -136,3 +137,20 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         reason = _no_linux_docker()
         if reason is not None:
             pytest.skip(reason)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(
+    item: pytest.Item, nextitem: pytest.Item | None
+) -> Generator[None, object, object]:
+    """Arm the hang dump for the whole of one test, fixtures included.
+
+    Around the protocol rather than the call: a test that wedges in a fixture
+    — a sandbox that never starts, a workspace that never comes back — is
+    wedged the same way, and is exactly as mute about it (#105).
+    """
+    timer = arm(item.nodeid, float(item.config.getini("faulthandler_timeout")))
+    try:
+        return (yield)
+    finally:
+        timer.cancel()

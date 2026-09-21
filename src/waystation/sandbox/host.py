@@ -134,6 +134,41 @@ async def _read_line(stream: asyncio.StreamReader) -> bytes:
     return b"".join(parts)
 
 
+# A killed tree is gone in under a millisecond; this is not a budget for it to
+# die in, it is the point at which we stop believing it will. Not a knob, for
+# the same reason `_REMOVE_ATTEMPTS` next door is not one: a caller who wants
+# to wait longer for a killed process has asked for the hang (ADR-0042).
+_KILL_GRACE = 5.0
+
+
+async def _wait_for_the_tree_to_die(process: asyncio.subprocess.Process) -> None:
+    """Wait out a killed process, then give up on it rather than on the run.
+
+    Waiting matters: core removes the workspace next, and on Windows a live
+    process holding a handle in it makes that fail. But waiting *for ever*
+    is worse than not waiting. ``Process.wait()`` on Windows returns only
+    once every pipe has closed, not once the process has exited (cpython
+    gh-119710, on 3.12 through 3.14), so a descendant that outlived the kill
+    holding inherited stdout parks this permanently — and because asyncio's
+    cancellation is edge-triggered, a cancelled task that blocks again inside
+    its own handler is never cancelled a second time. That is not "the caller
+    chose to wait": it is the caller losing the ability to choose anything
+    again, Ctrl-C included. So the wait is bounded and the failure is loud
+    (ADR-0042).
+    """
+    try:
+        async with asyncio.timeout(_KILL_GRACE):
+            await process.wait()
+    except TimeoutError:
+        SANDBOX.error(
+            "pid %s outlived its kill by %ss; abandoning it. Something it "
+            "started is still holding its output, so anything left in its "
+            "workspace may fail to delete.",
+            process.pid,
+            _KILL_GRACE,
+        )
+
+
 @dataclass(slots=True)
 class HostRunner:
     """Runs one sandbox's host processes, and lets their trees go with it.
@@ -265,12 +300,12 @@ class HostRunner:
             await asyncio.gather(pump_out, pump_err)
         except asyncio.CancelledError:
             tree.kill()
-            with suppress(asyncio.CancelledError):
-                await process.wait()
+            await _wait_for_the_tree_to_die(process)
             pump_out.cancel()
             pump_err.cancel()
-            with suppress(asyncio.CancelledError):
-                await asyncio.gather(pump_out, pump_err)
+            # Whatever a reader was doing, it must not replace the
+            # cancellation on its way out.
+            await asyncio.gather(pump_out, pump_err, return_exceptions=True)
             if on_cancel is not None:
                 await self._clean_up(on_cancel)
             raise

@@ -1,0 +1,78 @@
+# Run the suite many times over, to find what one run cannot.
+#
+# An intermittent failure is a rate, not an event: a single green run says
+# nothing about a fault that shows up one time in twenty, and "I re-ran it and
+# it passed" is the reasoning this exists to replace. Ten jobs at three
+# repeats is thirty samples, which puts a one-in-twenty fault at roughly 79%
+# chance of showing at least once — enough to act on, and cheap enough to
+# leave to a button.
+#
+# Run it from the Actions tab (`workflow_dispatch`); nothing triggers it
+# automatically, because it costs minutes and answers a question nobody is
+# asking on an ordinary push.
+name: Soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: "Runs of the suite per job (ten jobs run in parallel)"
+        default: "3"
+      tests:
+        description: "What to run; empty means the whole suite"
+        default: "tests/test_fan_out.py tests/test_observers.py tests/test_cancellation.py tests/test_teardown.py"
+      os:
+        description: "Which runner to soak"
+        default: "windows-latest"
+        type: choice
+        options: ["windows-latest", "ubuntu-latest"]
+
+jobs:
+  soak:
+    strategy:
+      # Every job runs: one failure is the sample being collected, not a
+      # reason to stop collecting.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    runs-on: ${{ inputs.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      # The docker tier is skipped on Windows and needs no image; on Linux it
+      # would need one, so the soak leaves that tier out either way.
+      - name: Soak
+        shell: bash
+        run: |
+          for i in $(seq 1 ${{ inputs.repeats }}); do
+            echo "::group::shard ${{ matrix.shard }} run $i"
+            uv run pytest ${{ inputs.tests }} \
+              -p no:cacheprovider --no-cov -m "not live and not docker" \
+              || echo "SOAK_FAILURE shard=${{ matrix.shard }} run=$i" | tee -a failures.txt
+            echo "::endgroup::"
+          done
+          if [ -s failures.txt ]; then
+            echo "### Soak found a failure" >> "$GITHUB_STEP_SUMMARY"
+            cat failures.txt >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # The dumps a hung test leaves behind are the whole point of a soak that
+      # fails, so they go up whether the run passed or not.
+      - name: Keep what a hang left behind
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-${{ inputs.os }}-shard-${{ matrix.shard }}
+          path: |
+            hang-dumps/
+            failures.txt
+          if-no-files-found: ignore

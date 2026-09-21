@@ -176,7 +176,16 @@ class GitRepo:
 
     @classmethod
     async def open(cls, repo: Path | str) -> GitRepo:
+        """Open the repo holding ``repo``, at the top of its working tree.
+
+        The top, not the directory given: git run from a subdirectory
+        narrows to it, and ``apply --cached`` there drops every path of a
+        patch outside it without a word.
+        """
         path = Path(repo).resolve()
+        top = await _repo_git(path, "rev-parse", "--show-toplevel", check=False)
+        if top.exit_code == 0 and top.stdout.strip():
+            path = Path(top.stdout.strip()).resolve()
         common_raw = await _repo_git(path, "rev-parse", "--git-common-dir", check=True)
         common = Path(common_raw.stdout.strip())
         if not common.is_absolute():

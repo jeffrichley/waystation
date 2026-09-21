@@ -67,6 +67,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | ADR | Read it when you're… |
 | --- | --- |
 | [0008](0008-hooks-snapshot-observer.md) Hooks are an Observer with snapshot binding | adding a hook point, or changing when hooks bind |
+| [0039](0039-one-run-record-and-ctx-carries-the-stage.md) One run record sits behind `ctx`, and `ctx` carries the stage; a hook point stays a five-place change | adding a hook point, a fact a hook or a result reads, or an observer that wants to know the stage |
 | [0001](0001-observability-as-hook-bundles.md) Observability is opt-in and ships as hook bundles | adding logging, a dashboard, or any way to watch a run |
 | [0025](0025-credentials-are-elided-in-the-value-not-at-the-call-site.md) Credentials are elided inside the value | logging a command line, or touching redaction |
 | [0026](0026-built-in-observers-guard-themselves-and-hold-the-level.md) A built-in observer guards itself, and a run file holds the level | adding a shipped observer, changing what the console prints, or ending what a cancelled run left open |

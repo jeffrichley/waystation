@@ -24,6 +24,7 @@ from waystation import (
     RunContext,
     RunFailed,
     RunResult,
+    RunSpec,
     RunSucceeded,
     ScriptedAgent,
     ScriptedCommit,
@@ -36,6 +37,8 @@ from waystation.agents import (
     OutcomeReported,
 )
 from waystation.clock import ManualClock, use_clock
+from waystation.hooks import HOOK_NAMES
+from waystation.observers import RunLog
 
 
 class Answer(BaseModel):
@@ -965,3 +968,17 @@ async def test_hook_bundle_subclass_overrides_only_what_it_needs(
 
     assert isinstance(result, RunSucceeded)
     assert bundle.results == [result]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("hook", HOOK_NAMES)
+def test_a_hook_point_is_offered_everywhere_a_hook_is_registered(hook: str) -> None:
+    """A new hook point still touches every one of these (ADR-0039), so none
+    can be missed: each is typed for its own hook's arguments, which a
+    generic ``on(name, fn)`` would lose."""
+    method = f"on_{hook}"
+
+    assert callable(getattr(HookBundle, method, None)), "HookBundle's no-op"
+    assert callable(getattr(Flow, method, None)), "the flow's decorator"
+    assert callable(getattr(RunSpec, method, None)), "the run spec's builder"
+    assert callable(getattr(RunLog, method, None)), "the built-in run log"

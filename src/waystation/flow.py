@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 from waystation._outcome import outcome_schema
 from waystation._run_record import RunRecord, log_later_failure
@@ -134,12 +134,17 @@ class Flow:
         self._hook_entries.append(HookEntry(hook, fn))
         return fn
 
+    # Overloaded, so a run that names no Outcome is a ``RunSpec[Summary]`` to
+    # a type checker rather than one whose Outcome it cannot infer.
+    @overload
+    def run(self, prompt: str | Path) -> RunSpec[Summary]: ...
+
+    @overload
     def run[OutcomeT](
-        self,
-        prompt: str | Path,
-        *,
-        outcome: type[OutcomeT] = Summary,  # type: ignore[assignment]
-    ) -> RunSpec[OutcomeT]:
+        self, prompt: str | Path, *, outcome: type[OutcomeT]
+    ) -> RunSpec[OutcomeT]: ...
+
+    def run(self, prompt: str | Path, *, outcome: type[Any] = Summary) -> RunSpec[Any]:
         outcome_schema(outcome)  # refused here as in run_agent (ADR-0038)
         return RunSpec(
             repo=Path(self.repo),
@@ -445,7 +450,9 @@ class RunSpec[OutcomeT]:
     ) -> RunSpec[OutcomeT]:
         return replace(self, hook_registry=self.hook_registry.with_function(hook, fn))
 
-    def __await__(self):  # type: ignore[no-untyped-def]
+    def __await__(self) -> Generator[Any, None, RunResult[OutcomeT]]:
+        # Typed, so ``await spec`` is a ``RunResult`` a ``match`` can be
+        # checked for exhaustiveness against, not ``Any``.
         return self.perform().__await__()
 
     async def perform(self, *, preflighted: bool = False) -> RunResult[OutcomeT]:

@@ -44,7 +44,7 @@ jobs:
         uses: extractions/setup-just@v2
 
       - name: Sync dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --group examples
 
       # The docker tier fails, rather than skips, without its image. Only the
       # Linux job builds one: the Windows runner has no Linux daemon, and

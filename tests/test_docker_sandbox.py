@@ -367,7 +367,8 @@ async def test_a_copy_runs_again_over_its_own_work_in_the_container(
             ["sh", "-c", "git rev-parse --abbrev-ref HEAD; git status --porcelain"]
         )
 
-    assert shown.stdout.splitlines() == [f"waystation/{ws.run_id}"]
+    await ws.remove()
+    assert shown.stdout.splitlines() == [ws.branch]
 
 
 @pytest.mark.docker
@@ -391,6 +392,7 @@ async def test_an_exec_cancelled_as_it_starts_never_runs_on(
         pulse = "sleep 0.5; cat /tmp/pulse | wc -c; sleep 0.3; cat /tmp/pulse | wc -c"
         sizes = await sandbox.exec(["sh", "-c", f"touch /tmp/pulse; {pulse}"])
 
+    await ws.remove()
     first, second = sizes.stdout.split()
     assert first == second
 

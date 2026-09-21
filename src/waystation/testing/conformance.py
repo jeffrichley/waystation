@@ -138,7 +138,7 @@ class SandboxConformance:
         listed = await sandbox.exec(["git", "for-each-ref", "--format=%(refname)"])
         remotes = await sandbox.exec(["git", "remote"])
 
-        assert listed.stdout.split() == list(workspace.refs)
+        assert sorted(listed.stdout.split()) == sorted(workspace.refs)
         assert remotes.stdout.strip() == ""
 
     async def test_a_sandbox_leaves_the_workspace_where_it_found_it(

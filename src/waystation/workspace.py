@@ -67,11 +67,13 @@ def remove_workspace(path: str | os.PathLike[str]) -> None:
     shutil.rmtree(path, onexc=_writable_and_retry)
 
 
-# A Windows handle outlives the process that held it by milliseconds, so these
-# span a moment rather than a wedged daemon — the one number here, and not a
-# knob, because a caller who wants their own has `remove_workspace` and a loop
-# of their own to put it in (ADR-0017).
-_WHILE_HANDLES_CLOSE = 5
+# A Windows handle outlives the process that held it by milliseconds, so both
+# numbers here span a moment rather than a wedged daemon: five tries, backing
+# off 50 ms further each time, is under a second all told. Neither is a knob —
+# a caller who wants their own has `remove_workspace` and a loop of their own
+# to put it in (ADR-0017).
+_REMOVE_ATTEMPTS = 5
+_BACKOFF_STEP = 0.05
 
 
 def _remove_while_handles_close(path: Path) -> None:
@@ -80,14 +82,14 @@ def _remove_while_handles_close(path: Path) -> None:
     Blocking on purpose: ``Workspace.remove`` runs it on a thread.
     """
     last: OSError | None = None
-    for attempt in range(_WHILE_HANDLES_CLOSE):
+    for attempt in range(_REMOVE_ATTEMPTS):
         try:
             remove_workspace(path)
         except FileNotFoundError:
             return
         except OSError as exc:
             last = exc
-            time.sleep(0.05 * (attempt + 1))
+            time.sleep(_BACKOFF_STEP * (attempt + 1))
         else:
             return
     RUN.error("could not remove the workspace at %s: %s", path, last)

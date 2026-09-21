@@ -126,7 +126,11 @@ async def test_the_loop_keeps_turning_while_a_workspace_is_removed(
 
     def blocking(path: Path) -> None:
         started.set()
-        release.wait()
+        # Bounded so that a regression fails rather than hangs: if this ran on
+        # the loop, nothing could ever reach the `release.set()` below, and an
+        # unbounded wait would take the whole session down with pytest-timeout
+        # rather than this one test.
+        release.wait(timeout=30)
         real(path)
 
     monkeypatch.setattr(_workspace, "_remove_while_handles_close", blocking)

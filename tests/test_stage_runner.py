@@ -97,6 +97,7 @@ async def test_a_loop_composed_by_hand_lands_the_series(host_repo: Path) -> None
     assert outcome == Answer(summary="done")
     assert series.commits == 1
     assert not series.salvaged
+    await ws.remove()
     assert report.landed
     assert git(host_repo, "log", "-1", "--format=%s", "agents/by-hand") == "by hand"
 
@@ -153,6 +154,7 @@ async def test_collect_refuses_a_nonlinear_series_rather_than_squashing_it_quiet
     assert err.stage == "collect"
     assert isinstance(err.failure, Refused)
     assert err.failure.reason == "nonlinear_series"
+    await ws.remove()
     # The squash rides along, so a caller can still keep the work.
     assert err.series is not None
     assert err.series.commits == 1

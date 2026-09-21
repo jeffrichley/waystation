@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import a_run, git, subjects, workspaces
+from helpers import a_run, commit_on, git, subjects, workspaces
 from waystation import (
     CommandFailed,
     NoSandbox,
@@ -120,6 +120,60 @@ async def test_a_copied_workspace_runs_like_the_original(
 
 
 @pytest.mark.git
+async def test_a_copied_workspace_holds_the_refs_that_travel_and_no_others(
+    host_repo: Path, copies: Path
+) -> None:
+    """The copy half of the parity the conformance suite states.
+
+    The suite proves it for whichever transport a backend chose, and
+    `DockerSandbox`'s default chooses bind on Linux — so the script this
+    module owns would otherwise be checked on no CI leg at all. Here it needs
+    no docker: `clone_in` asks nothing of a sandbox but `exec` (ADR-0012).
+    """
+    commit_on(host_repo, "other", {"o.txt": "o\n"})
+    git(host_repo, "tag", "v1")
+    ws = await prepare_workspace(host_repo)
+    inside = copies / ws.run_id
+    inside.mkdir(parents=True)
+
+    async with NoSandbox().start(replace(ws, path=inside), env={}) as sandbox:
+        await clone_in(sandbox, ws)
+
+    listed = git(inside, "for-each-ref", "--format=%(refname)").split()
+    assert sorted(listed) == sorted(ws.refs)
+    assert git(inside, "remote") == ""
+    assert git(inside, "symbolic-ref", "--short", "HEAD") == ws.branch
+    await ws.remove()
+    remove_workspace(inside)
+
+
+@pytest.mark.git
+async def test_every_ref_that_travels_arrives_not_just_the_branch(
+    host_repo: Path, copies: Path
+) -> None:
+    """The bundle carried `refs`; the script fetched only the branch HEAD lands on.
+
+    With one ref that difference is invisible, which is why it survived. It
+    is what #32's `extra_refs` would have hit on its first day, so the second
+    ref is stood up here by hand rather than waiting for it.
+    """
+    ws = await prepare_workspace(host_repo)
+    git(ws.path, "update-ref", "refs/waystation/extra", ws.base_sha)
+    travelling = replace(ws, refs=(*ws.refs, "refs/waystation/extra"))
+    inside = copies / ws.run_id
+    inside.mkdir(parents=True)
+
+    async with NoSandbox().start(replace(ws, path=inside), env={}) as sandbox:
+        await clone_in(sandbox, travelling)
+
+    listed = git(inside, "for-each-ref", "--format=%(refname)").split()
+    assert sorted(listed) == sorted(travelling.refs)
+    assert git(inside, "symbolic-ref", "--short", "HEAD") == ws.branch
+    await ws.remove()
+    remove_workspace(inside)
+
+
+@pytest.mark.git
 async def test_a_copied_workspace_commits_as_the_host_identity(
     host_repo: Path, copies: Path
 ) -> None:
@@ -215,6 +269,7 @@ async def test_a_copy_that_exits_126_or_137_is_tried_again_250_ms_later(
     with use_clock(naps):
         await clone_in(_Answers(codes, naps.said), ws)
 
+    await ws.remove()
     assert naps.said == tries
 
 
@@ -226,6 +281,7 @@ async def test_a_copy_is_tried_again_twice_at_most(host_repo: Path) -> None:
     with use_clock(naps), pytest.raises(StageError) as raised:
         await clone_in(_Answers([137, 126, 137, 0], naps.said), ws)
 
+    await ws.remove()
     assert naps.said == ["exec", 0.25, "exec", 0.25, "exec"]
     assert raised.value.stage == "sandbox"
     assert isinstance(raised.value.failure, CommandFailed)
@@ -243,6 +299,7 @@ async def test_a_copy_that_fails_any_other_way_is_not_tried_again(
     with use_clock(naps), pytest.raises(StageError) as raised:
         await clone_in(_Answers([code, 0], naps.said), ws)
 
+    await ws.remove()
     assert naps.said == ["exec"]
     assert isinstance(raised.value.failure, CommandFailed)
     assert raised.value.failure.exit_code == code

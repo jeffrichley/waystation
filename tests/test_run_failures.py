@@ -188,9 +188,7 @@ async def test_run_agent_primitive_raises_stage_error(host_repo: Path) -> None:
             assert caught.value.stage == "agent"
             assert isinstance(caught.value.failure, OutcomeMissing)
     finally:
-        import shutil
-
-        shutil.rmtree(ws.path, ignore_errors=True)
+        await ws.remove()
 
 
 @pytest.mark.git

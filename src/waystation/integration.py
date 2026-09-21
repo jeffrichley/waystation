@@ -98,7 +98,9 @@ class GitResult:
 # Git commands that move a ref. Once one has started it runs to its end, and a
 # cancellation is raised after it, so a target is moved or left alone and never
 # half-moved. A table here, never a flag a call site can forget (ADR-0027).
-_COMMIT_POINTS = frozenset({"update-ref"})
+# `merge` is how a HEAD target moves: a fast-forward of the checkout, which
+# a kill would leave with the ref moved and half its files not (ADR-0041).
+_COMMIT_POINTS = frozenset({"update-ref", "merge"})
 
 # Git's own options, which come before the subcommand; each takes a value.
 _GIT_OPTIONS_WITH_VALUE = frozenset(
@@ -127,21 +129,28 @@ class Target:
     """A branch a landing is about to move, as it stood when it was read.
 
     Attributes:
-        branch: The branch's short name, as a flow script wrote it.
+        branch: The branch's short name, as a flow script wrote it — or, for
+            a ``HEAD`` target, the branch checked out, and ``"HEAD"`` itself
+            when the checkout is detached.
         tip: What a landing builds on: the branch's commit, or the series'
             base when the branch does not exist yet, since landing creates
             it there.
         exists: Whether the branch existed. The swap checks it, so a branch
             someone else created meanwhile is a moved target too.
+        head: Whether this is the host's checkout, which ``move_target``
+            fast-forwards rather than swapping a ref under it (ADR-0041).
     """
 
     branch: str
     tip: str
     exists: bool
+    head: bool = False
 
     @property
     def ref(self) -> str:
         """The full ref: a bare name would let a tag of the same name win."""
+        if self.head and self.branch == "HEAD":
+            return "HEAD"
         return f"refs/heads/{self.branch}"
 
 
@@ -157,8 +166,9 @@ class GitRepo:
     ``commit_tree`` and ``move_target`` — are what ``Integration`` and
     ``Squash`` are built from, and nothing else is: a user's strategy is
     policy over the same steps, never a rewrite of the plumbing (ADR-0040).
-    None of them touches a working tree (ADR-0020), and each raises with no
-    stage, because ``integrate`` names it (ADR-0032).
+    None of them touches a working tree but ``move_target`` fast-forwarding
+    a ``HEAD`` target, after a conflict is already ruled out (ADR-0020,
+    ADR-0041). Each raises with no stage, because ``integrate`` names it (ADR-0032).
     """
 
     path: Path
@@ -213,24 +223,25 @@ class GitRepo:
             base: Where the branch lands from if it does not exist yet —
                 the series' base.
 
+        ``"HEAD"`` is the host's own checkout: the branch it has out, or the
+        detached commit. Here, not in each strategy, so every strategy built
+        on these steps lands on HEAD alike (ADR-0040).
+
         Returns:
             The target as it stands now; ``move_target`` swaps it.
 
         Raises:
             StageError: ``Refused("target_checked_out")`` when a worktree is
                 using the branch, since ``update-ref`` would move it out from
-                under that checkout (ADR-0020); ``Refused("dirty_tree")`` for
-                ``HEAD``, which no strategy can land on yet (#25).
+                under that checkout (ADR-0020); ``Refused("dirty_tree")``
+                when the target is ``HEAD`` and a tracked file has staged or
+                unstaged changes, before anything is written.
         """
-        if branch in ("HEAD", "head"):
-            # Here, not in each strategy: when #25 lands HEAD, every strategy
-            # built on these steps gets it at once.
-            raise StageError(
-                None,
-                Refused(
-                    reason="dirty_tree",
-                    detail="HEAD target is not supported yet; use a named branch",
-                ),
+        if branch == "HEAD":
+            await _refuse_tracked_changes(self)
+            on, tip = await _read_head(self)
+            return Target(
+                branch=on or "HEAD", tip=tip or base, exists=tip is not None, head=True
             )
         ref = f"refs/heads/{branch}"
         holder = await _worktree_holding(self, ref)
@@ -386,6 +397,11 @@ class GitRepo:
         since ``read_target``. Once started, the swap finishes, even when
         cancelled (ADR-0027).
 
+        A ``HEAD`` target is the checkout, so it moves the way a user's would:
+        ``merge --ff-only``, after checking that the checkout still stands
+        where it was read, is still clean, and has no file of the user's where
+        the landing puts one (ADR-0041).
+
         Args:
             target: The target as ``read_target`` returned it.
             tip: The commit to move it to.
@@ -395,7 +411,13 @@ class GitRepo:
                 branch moved. Any other failed swap is git's own
                 ``CommandFailed``, as it came, so a retry keyed on
                 ``target_moved`` never spins on a lock (ADR-0016, ADR-0020).
+                For ``HEAD``, ``Refused("dirty_tree")`` too, when the
+                checkout gained a tracked change or holds an untracked file
+                the landing would overwrite.
         """
+        if target.head:
+            await _fast_forward(self, target, tip)
+            return
         before = target.tip if target.exists else None
         try:
             await self.git("update-ref", target.ref, tip, before or _ZERO)
@@ -705,6 +727,129 @@ async def _read_ref(repo: GitRepo, ref: str) -> str | None:
     """
     shown = await repo.run("rev-parse", "--verify", "--quiet", ref)
     return shown.stdout.strip() if shown.exit_code == 0 else None
+
+
+async def _read_head(repo: GitRepo) -> tuple[str | None, str | None]:
+    """The branch the checkout has out (``None`` if detached), and its commit.
+
+    The commit is ``None`` on an unborn branch, which a landing creates.
+    """
+    on = await repo.run("symbolic-ref", "--quiet", "--short", "HEAD")
+    tip = await _read_ref(repo, "HEAD")
+    return (on.stdout.strip() or None) if on.exit_code == 0 else None, tip
+
+
+async def _refuse_tracked_changes(repo: GitRepo) -> None:
+    """Refuse a checkout with staged or unstaged changes to tracked files."""
+    status = await _listing(
+        repo, "status", "--porcelain", "--no-renames", "--untracked-files=no"
+    )
+    if status:
+        paths = [entry[3:] for entry in status]  # past the two-letter code
+        raise StageError(
+            None,
+            Refused(
+                reason="dirty_tree",
+                detail=f"uncommitted changes to tracked files: {_listed(paths)}",
+            ),
+        )
+
+
+async def _fast_forward(repo: GitRepo, target: Target, tip: str) -> None:
+    """Move the checkout to ``tip`` as ``merge --ff-only`` does, or refuse."""
+    moved = Refused(
+        reason="target_moved",
+        detail=f"{target.branch} moved while the series was landing",
+    )
+    before = (
+        None if target.branch == "HEAD" else target.branch,
+        target.tip if target.exists else None,
+    )
+    # The checks run again at the swap: a run is long, and its user was
+    # free to go on working while it ran.
+    if await _read_head(repo) != before:
+        raise StageError(None, moved)
+    await _refuse_tracked_changes(repo)
+    in_the_way = await _untracked_in_the_way(repo, target, tip)
+    if in_the_way:
+        raise StageError(
+            None,
+            Refused(
+                reason="dirty_tree",
+                detail=(
+                    "untracked files the landing would overwrite: "
+                    f"{_listed(in_the_way)}"
+                ),
+            ),
+        )
+    if target.exists and tip == target.tip:
+        return  # nothing landed: the checkout is already there
+    try:
+        # --no-autostash: a merge.autoStash in the user's config would put
+        # their work aside and back, which is the clobbering this refuses.
+        await repo.git("merge", "--ff-only", "--no-autostash", "--quiet", tip)
+    except StageError as exc:
+        # As with update-ref: a refusal is only ours if the checkout moved.
+        if await _read_head(repo) == before:
+            raise
+        raise StageError(None, moved) from exc
+
+
+async def _untracked_in_the_way(repo: GitRepo, target: Target, tip: str) -> list[str]:
+    """The files not in HEAD's tree that landing ``tip`` would overwrite.
+
+    Only paths the landing adds can hold one: every other path it touches is
+    tracked, and the checkout is clean. A file in the way is one on such a
+    path, or where a directory above it must go. Ignored files count: git
+    would overwrite them without a word, and they are the user's all the same.
+    """
+    top = Path(await repo.git("rev-parse", "--show-toplevel"))
+    if target.exists:
+        added = await _listing(
+            repo,
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=A",
+            target.tip,
+            tip,
+        )
+        tracked = set(
+            await _listing(repo, "ls-tree", "-r", "-t", "--name-only", target.tip)
+        )
+    else:
+        # An unborn branch: everything the landing checks out is new.
+        added = await _listing(repo, "ls-tree", "-r", "--name-only", tip)
+        tracked = set()
+    in_the_way: set[str] = set()
+    for path in added:
+        parts = path.split("/")
+        for depth in range(1, len(parts)):
+            above = "/".join(parts[:depth])
+            on_disk = top / above
+            if above not in tracked and (on_disk.is_symlink() or on_disk.is_file()):
+                in_the_way.add(above)
+        if os.path.lexists(top / path):
+            in_the_way.add(path)
+    return sorted(in_the_way)
+
+
+async def _listing(repo: GitRepo, *args: str) -> list[str]:
+    """A git listing's entries, ``-z`` separated and never stripped.
+
+    Stripping would eat a path's own leading space; ``-z`` turns off the
+    quoting ``core.quotePath`` would otherwise put on a path.
+    """
+    command, *rest = args
+    listed = await repo.run(command, "-z", *rest, check=True)
+    return [entry for entry in listed.stdout.split("\0") if entry]
+
+
+def _listed(paths: list[str]) -> str:
+    """Paths for a refusal's detail: a few named, the rest counted."""
+    # Five is for a person reading one line, not a bound on any work.
+    shown = ", ".join(paths[:5])
+    return shown if len(paths) <= 5 else f"{shown} and {len(paths) - 5} more"
 
 
 async def _worktree_holding(repo: GitRepo, ref: str) -> str | None:

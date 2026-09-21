@@ -191,6 +191,8 @@ class RunSpec[OutcomeT]:
             sets them.
         label: The name the run's results and console carry, or ``None`` —
             ``.name()`` sets it.
+        travelling_refs: The host refs the workspace carries besides its own
+            branch — ``.extra_refs()`` sets them.
     """
 
     repo: Path
@@ -206,6 +208,7 @@ class RunSpec[OutcomeT]:
     environment: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     pass_through: tuple[str, ...] = ()
     label: str | None = None
+    travelling_refs: tuple[str, ...] = ()
 
     # Builders. Each replaces the value it names and returns a new spec, the
     # way ``dataclasses.replace`` does; the hook builders below append instead
@@ -348,6 +351,24 @@ class RunSpec[OutcomeT]:
             A new spec; this one is unchanged.
         """
         return replace(self, label=label)
+
+    def extra_refs(self, *refs: str) -> RunSpec[OutcomeT]:
+        """Make these host refs travel into the workspace, under the same names.
+
+        A workspace otherwise carries its own branch and nothing else of the
+        host's (ADR-0037). A resolver run names the preservation branch here,
+        so its agent can cherry-pick from it (ADR-0015). Each is resolved when
+        the workspace stage starts, and one that names no branch or tag on
+        the host fails the run there: ``Refused("missing_extra_ref")``.
+
+        Args:
+            *refs: Branch or tag names on the host. Replaces what an earlier
+                ``.extra_refs()`` named.
+
+        Returns:
+            A new spec; this one is unchanged.
+        """
+        return replace(self, travelling_refs=refs)
 
     # Per-run hooks: each returns a new RunSpec whose hooks fire after the
     # flow's. Bundles are any objects with a subset of the ``on_<hook>`` methods.
@@ -565,7 +586,12 @@ class RunSpec[OutcomeT]:
         record.stage = "workspace"
         workspace = await run.stage(
             "workspace",
-            prepare_workspace(self.repo, base=self.base_ref, run_id=record.run_id),
+            prepare_workspace(
+                self.repo,
+                base=self.base_ref,
+                run_id=record.run_id,
+                extra_refs=self.travelling_refs,
+            ),
         )
         record.base_sha = workspace.base_sha
         record.branch = workspace.branch

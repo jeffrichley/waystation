@@ -15,8 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from waystation._git import encode, git_identity, run_git
-from waystation.errors import attributing
+from waystation.errors import StageError, attributing
 from waystation.observability import RUN
+from waystation.results import Refused
 
 __all__ = ["Workspace", "prepare_workspace", "remove_workspace"]
 
@@ -100,8 +101,14 @@ async def prepare_workspace(
     *,
     base: str = "HEAD",
     run_id: str | None = None,
+    extra_refs: Sequence[str] = (),
 ) -> Workspace:
     """Resolve ``base``, mint a run id, and clone committed state into a temp dir.
+
+    Each of ``extra_refs`` — a branch or tag name on the host — travels too,
+    under the same name, so a resolver run can cherry-pick from a
+    preservation branch (ADR-0015). One that names no host ref is refused
+    before anything is cloned: ``Refused("missing_extra_ref")``.
 
     Cancelling it — a workspace bound firing, say — kills the clone's git and
     all it started, and removes the half-made workspace (ADR-0023, #57).
@@ -120,15 +127,27 @@ async def prepare_workspace(
         base_sha = resolved.stdout.strip()
 
         name, email = await git_identity(host)
+        extra_tips = await _resolve_extra_refs(host, extra_refs)
 
         tmp = Path(tempfile.mkdtemp(prefix=f"waystation-{rid}-"))
         branch = f"waystation/{rid}"
-        refs = (f"refs/heads/{branch}",)
+        refs = (f"refs/heads/{branch}", *extra_tips)
         try:
             await run_git(
                 host, "clone", "--local", "--no-checkout", str(host), str(tmp)
             )
             await run_git(tmp, "checkout", "-B", branch, base_sha)
+            if extra_tips:
+                # The clone has every object the host has, hardlinked, so a
+                # ref is all an extra needs — no fetch (ADR-0037).
+                await run_git(
+                    tmp,
+                    "update-ref",
+                    "--stdin",
+                    stdin=encode(
+                        "".join(f"update {r} {s}\n" for r, s in extra_tips.items())
+                    ),
+                )
             await _strip_to(tmp, refs)
             await run_git(tmp, "config", "user.name", name)
             await run_git(tmp, "config", "user.email", email)
@@ -138,6 +157,45 @@ async def prepare_workspace(
             raise
 
     return Workspace(path=tmp, run_id=rid, base_sha=base_sha, branch=branch, refs=refs)
+
+
+async def _resolve_extra_refs(host: Path, names: Sequence[str]) -> dict[str, str]:
+    """Each extra ref's full name on the host, and the object it points at.
+
+    Only a branch or a tag, named as itself, has a same name to travel under.
+    ``HEAD~1`` or a sha names no ref; ``HEAD`` would arrive as whichever
+    branch it pointed at; ``origin/x`` is a remote's, and no remote travels
+    (ADR-0037). Each is refused the way a missing ref is.
+    """
+    resolved: dict[str, str] = {}
+    for name in names:
+        shown = await run_git(
+            host,
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--symbolic-full-name",
+            name,
+            check=False,
+        )
+        full = shown.stdout.strip()
+        if name not in _names_for(full):
+            detail = (
+                f"extra ref {name!r} names no branch or tag in {host}; an "
+                "extra ref travels under its own name, so it must be one"
+            )
+            raise StageError(None, Refused(reason="missing_extra_ref", detail=detail))
+        target = await run_git(host, "rev-parse", "--verify", full)
+        resolved[full] = target.stdout.strip()
+    return resolved
+
+
+def _names_for(full: str) -> tuple[str, ...]:
+    """What a flow script may call the branch or tag ``full`` — nothing else."""
+    for namespace in ("refs/heads/", "refs/tags/"):
+        if full.startswith(namespace):
+            return (full, full.removeprefix(namespace))
+    return ()
 
 
 async def _strip_to(workspace: Path, keep: Sequence[str]) -> None:

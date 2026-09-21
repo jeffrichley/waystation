@@ -153,21 +153,21 @@ async def test_every_ref_that_travels_arrives_not_just_the_branch(
 ) -> None:
     """The bundle carried `refs`; the script fetched only the branch HEAD lands on.
 
-    With one ref that difference is invisible, which is why it survived. It
-    is what #32's `extra_refs` would have hit on its first day, so the second
-    ref is stood up here by hand rather than waiting for it.
+    With one ref that difference is invisible, which is why it survived; an
+    extra ref (#32) is the second ref that makes it show.
     """
-    ws = await prepare_workspace(host_repo)
-    git(ws.path, "update-ref", "refs/waystation/extra", ws.base_sha)
-    travelling = replace(ws, refs=(*ws.refs, "refs/waystation/extra"))
+    tip = commit_on(host_repo, "side/work", {"side.txt": "side\n"})
+    ws = await prepare_workspace(host_repo, extra_refs=("side/work",))
     inside = copies / ws.run_id
     inside.mkdir(parents=True)
 
     async with NoSandbox().start(replace(ws, path=inside), env={}) as sandbox:
-        await clone_in(sandbox, travelling)
+        await clone_in(sandbox, ws)
 
     listed = git(inside, "for-each-ref", "--format=%(refname)").split()
-    assert sorted(listed) == sorted(travelling.refs)
+    assert sorted(listed) == sorted(ws.refs)
+    assert "refs/heads/side/work" in listed
+    assert git(inside, "rev-parse", "refs/heads/side/work") == tip
     assert git(inside, "symbolic-ref", "--short", "HEAD") == ws.branch
     await ws.remove()
     remove_workspace(inside)

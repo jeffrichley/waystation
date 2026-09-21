@@ -69,8 +69,11 @@ them and never runs them.
    judges it, and one bounded fix run follows a rejection. *Coming in #41.*
 5. `control_room`: one `Flow` per checkout across several repos, in one
    `fan_out`. *Coming in #41.*
-6. `parallel_prompts`: the typer flagship, which fans prompts out onto a shared
-   batch branch with a dashboard and resolver runs. *Coming in #42.*
+6. [`parallel_prompts.py`](parallel_prompts.py): the typer flagship. It fans
+   prompts out onto a shared batch branch under a live `Dashboard`, with a
+   `RunLogFiles` file per run, and answers each `RunConflicted` with a
+   resolver run whose instructions live in
+   [`prompts/resolve.md`](prompts/resolve.md).
 7. `bring_your_own_agent`: a provider for the Cursor agent CLI. *Coming in
    #43.*
 

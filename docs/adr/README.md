@@ -60,6 +60,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0009](0009-agent-in-sandbox-outcome-on-stdout.md) The agent runs in the sandbox and reports on stdout | touching how the agent is executed or reports back |
 | [0018](0018-pure-agent-providers-bind-the-cli.md) Agent providers are pure and bind the CLI, not the SDK | writing or changing an agent provider |
 | [0019](0019-provider-reports-outcome-core-validates.md) The provider reports the Outcome; core validates it | moving validation, or making a provider smarter |
+| [0038](0038-run-agent-owns-the-outcome-contract-and-builds-its-command-at-the-call.md) `run_agent` owns the Outcome contract, and builds its command at the call | changing what `run_agent` takes, or where the Outcome schema comes from |
 
 ## Watching a run
 

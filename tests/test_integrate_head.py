@@ -361,14 +361,15 @@ async def test_a_host_opened_from_a_subdirectory_lands_every_path(
     git(host_repo, "add", "sub")
     git(host_repo, "commit", "-q", "-m", "a subdirectory")
     base = git(host_repo, "rev-parse", "HEAD")
-    tip = commit_of(host_repo, {"README/x": b"x\n", "sub/keep": b"k\n"})
+    tip = commit_of(host_repo, {"README/x": b"x", "sub/keep": b"k\n"})
     series = await PatchSeries.from_range(host_repo, base, tip)
     repo = await GitRepo.open(host_repo / "sub")
 
     report = await integrate(repo, series, Integration("HEAD"))
 
     assert report.target_after == git(host_repo, "rev-parse", "HEAD")
-    assert (host_repo / "README" / "x").read_bytes() == b"x\n"
+    # No newline in it: a Windows host with core.autocrlf checks one out as CRLF.
+    assert (host_repo / "README" / "x").read_bytes() == b"x"
 
 
 async def test_a_landing_that_only_recases_a_path_is_not_in_its_own_way(
@@ -406,7 +407,7 @@ async def main() -> int:
     flow = Flow(
         here,
         agent=ScriptedAgent(
-            commits=(ScriptedCommit("improve the flow", {"notes.txt": "n\\n"}),),
+            commits=(ScriptedCommit("improve the flow", {"notes.txt": "n"}),),
             outcome=Summary(summary="ok"),
         ),
         sandbox=NoSandbox(),
@@ -440,6 +441,6 @@ async def test_a_flow_lands_onto_the_head_of_the_repo_that_holds_it(
 
     assert ran.returncode == 0, ran.stdout + ran.stderr
     assert git(host_repo, "rev-parse", "HEAD^") == before
-    assert (host_repo / "notes.txt").read_bytes() == b"n\n"
+    assert (host_repo / "notes.txt").read_bytes() == b"n"
     assert list((host_repo / "logs").glob("*.log")), "its own logs didn't block it"
     assert git(host_repo, "status", "--porcelain", "--untracked-files=no") == ""

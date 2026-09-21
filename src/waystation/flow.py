@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import secrets
 from collections.abc import Callable, Mapping, Sequence
@@ -50,7 +49,7 @@ from waystation.results import (
 )
 from waystation.sandbox.protocol import Sandbox, SandboxBackend
 from waystation.stages import StageRunner, stages
-from waystation.workspace import Workspace, prepare_workspace, remove_workspace
+from waystation.workspace import Workspace, prepare_workspace
 
 __all__ = ["Flow", "RunSpec"]
 
@@ -604,13 +603,20 @@ class RunSpec[OutcomeT]:
             if prompt_error is not None:
                 raise prompt_error
             workspace = await self._prepare(run, ctx, state, record)
-            outcome = await self._in_sandbox(run, ctx, state, record, workspace)
-            if record.failure is not None or run.cancelled_during is not None:
-                await self._preserve(run, record)
-                run.surface()  # before integrate starts: it never will
-                return record.failed()
-            assert outcome is not None
-            return await self._land(run, ctx, record, outcome)
+            try:
+                await self._workspace_ready(run, ctx, record)
+                outcome = await self._in_sandbox(run, ctx, state, record, workspace)
+                if record.failure is not None or run.cancelled_during is not None:
+                    await self._preserve(run, record)
+                    run.surface()  # before integrate starts: it never will
+                    return record.failed()
+                assert outcome is not None
+                return await self._land(run, ctx, record, outcome)
+            finally:
+                # The workspace's whole life, and its one removal. ``anyway``
+                # so a cancelled run still cleans up, and unbounded because
+                # nothing asked for a limit on it (ADR-0017, ADR-0032).
+                await run.anyway("workspace", workspace.remove(), bound=None)
         except Exception as exc:
             record.fail(_as_stage_error(record.stage, exc))
         run.surface()  # a failure never hides a cancellation held meanwhile
@@ -633,7 +639,12 @@ class RunSpec[OutcomeT]:
     async def _prepare(
         self, run: StageRunner, ctx: RunContext, state: RunState, record: _RunRecord
     ) -> Workspace:
-        """Workspace stage: a private clone of the base, then ``workspace_ready``."""
+        """Workspace stage: a private clone of the base ref.
+
+        Announcing it is ``_workspace_ready``, a step later, so that the
+        whole of the workspace's life — hook included — sits inside the one
+        block that removes it (#76).
+        """
         record.stage = "workspace"
         workspace = await run.stage(
             "workspace",
@@ -641,16 +652,15 @@ class RunSpec[OutcomeT]:
         )
         record.base_sha = state.base_sha = workspace.base_sha
         record.branch = workspace.branch
-        try:
-            run.surface()  # held while the workspace was cloned
-            record.log.on_workspace_ready(ctx)
-            await self.hook_registry.fire("workspace_ready", "workspace", ctx)
-        except BaseException:
-            # No sandbox owns the workspace yet, so nothing else removes it.
-            with contextlib.suppress(OSError):
-                remove_workspace(workspace.path)
-            raise
         return workspace
+
+    async def _workspace_ready(
+        self, run: StageRunner, ctx: RunContext, record: _RunRecord
+    ) -> None:
+        """Tell the observers there is a workspace, and fire the hook."""
+        run.surface()  # held while the workspace was cloned
+        record.log.on_workspace_ready(ctx)
+        await self.hook_registry.fire("workspace_ready", "workspace", ctx)
 
     async def _in_sandbox(
         self,
@@ -672,18 +682,10 @@ class RunSpec[OutcomeT]:
         # two halves are paired here instead (ADR-0032).
         cm = self.backend.start(workspace, env={})
         record.stage = "sandbox"
-        try:
-            sandbox = await run.stage("sandbox", cm.__aenter__())
-        except BaseException:
-            # A start that failed cleans up after itself: ``async with``
-            # never exits a context it did not enter, and exiting a
-            # generator that raised fails with a RuntimeError of its own.
-            # Only a start its bound cancelled before it ran leaves the
-            # workspace behind, so no sandbox ever owned it.
-            with contextlib.suppress(OSError):
-                if workspace.path.exists():
-                    remove_workspace(workspace.path)
-            raise
+        # A start that failed cleans up after itself: ``async with`` never
+        # exits a context it did not enter. The workspace is not part of
+        # that — core removes it whether or not a sandbox ever started (#76).
+        sandbox = await run.stage("sandbox", cm.__aenter__())
         try:
             run.surface()  # held while the sandbox started
             state.sandbox = sandbox

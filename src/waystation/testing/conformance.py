@@ -97,9 +97,13 @@ class SandboxConformance:
         return repo
 
     @pytest.fixture
-    async def workspace(self, conformance_repo: Path) -> Workspace:
-        """One run's workspace, for a backend to be handed and to remove."""
-        return await prepare_workspace(conformance_repo)
+    async def workspace(self, conformance_repo: Path) -> AsyncIterator[Workspace]:
+        """One run's workspace, made and removed here as core does (#76)."""
+        prepared = await prepare_workspace(conformance_repo)
+        try:
+            yield prepared
+        finally:
+            await prepared.remove()
 
     @pytest.fixture
     async def sandbox(
@@ -136,6 +140,21 @@ class SandboxConformance:
 
         assert listed.stdout.split() == list(workspace.refs)
         assert remotes.stdout.strip() == ""
+
+    async def test_a_sandbox_leaves_the_workspace_where_it_found_it(
+        self, backend: SandboxBackend, workspace: Workspace
+    ) -> None:
+        """Tear down what the backend made, and nothing else.
+
+        Core made the workspace and core removes it, after this context has
+        exited. A backend that removes it here is removing a directory
+        another backend in the same position never touches, and one a
+        composer may still be holding (#76).
+        """
+        async with backend.start(workspace, env={}) as sandbox:
+            assert sandbox.workspace
+
+        assert workspace.path.exists()
 
     async def test_the_sandbox_says_which_shell_it_has(self, sandbox: Sandbox) -> None:
         """ADR-0036: a caller with a script never has to know the sandbox's OS.
@@ -276,15 +295,6 @@ class SandboxConformance:
             )
 
         assert shown.stdout == "exec\n"
-
-    async def test_a_sandbox_removes_the_workspace_it_was_handed(
-        self, backend: SandboxBackend, workspace: Workspace
-    ) -> None:
-        """The dir holds git's own read-only objects, which Windows will not unlink."""
-        async with backend.start(workspace, env={}) as sandbox:
-            assert sandbox.workspace
-
-        assert not workspace.path.exists()
 
 
 # `_git` and `_until` below are this package's own on purpose: waystation

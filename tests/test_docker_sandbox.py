@@ -333,7 +333,7 @@ async def test_a_sandbox_starts_and_stops_in_as_few_docker_calls_as_it_can(
 
     assert len(started) == to_start
     assert [call.split()[:3] for call in stopped] == [["docker", "rm", "-f"]]
-    assert not ws.path.exists()
+    await ws.remove()
 
 
 @pytest.mark.docker

@@ -95,7 +95,9 @@ class CopyingHost:
                 await clone_in(box, ws)
                 yield sandbox
         finally:
-            remove_workspace(ws.path)
+            # Its own copy, not `ws`: core made that one and core takes it
+            # away, and this backend never touched it after `clone_in` (#76).
+            remove_workspace(inside)
 
 
 @pytest.fixture

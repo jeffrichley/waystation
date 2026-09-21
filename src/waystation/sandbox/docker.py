@@ -28,7 +28,7 @@ from waystation.sandbox._docker_plans import (
     plan_ping,
     resolve_transport,
 )
-from waystation.sandbox.host import HostRunner, allowlisted_env, discard_workspace
+from waystation.sandbox.host import HostRunner, allowlisted_env
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.sandbox.transport import clone_in
 from waystation.tails import bound_tail
@@ -240,11 +240,10 @@ class DockerSandbox:
                 await clone_in(container, ws)
             yield container
         finally:
+            # The workspace stays core's: a copy backend reads it once and
+            # never touches it again, so it was never this teardown's (#76).
             runner.release()
-            try:
-                await _destroy(container.name)
-            finally:
-                discard_workspace(ws.path)
+            await _destroy(container.name)
 
     async def _create_failure(
         self, create: Sequence[str], created: ExecResult

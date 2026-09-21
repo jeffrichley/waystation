@@ -127,7 +127,8 @@ async def test_the_sandbox_is_gone_before_integrate_begins(host_repo: Path) -> N
         await run.stage("integrate", landing())
 
     assert order == ["left the sandbox", "integrate"]
-    assert not ws.path.exists(), "leaving the sandbox discarded the workspace"
+    assert ws.path.exists(), "leaving the sandbox left the workspace alone"
+    await ws.remove()
 
 
 @pytest.mark.git
@@ -427,15 +428,18 @@ async def test_a_hand_composed_loop_cancelled_mid_agent_keeps_what_the_agent_lef
                         interruptible=True,
                     )
                 series = await run.anyway("collect", collect(box, ws))
-            kept.append(
-                await run.anyway(
-                    "integrate",
-                    preserve_series(
-                        host_repo, branch=f"waystation/{ws.run_id}", series=series
-                    ),
-                    bound=None,
+            try:
+                kept.append(
+                    await run.anyway(
+                        "integrate",
+                        preserve_series(host_repo, branch=ws.branch, series=series),
+                        bound=None,
+                    )
                 )
-            )
+            finally:
+                # A hand-composed loop removes the workspace it prepared:
+                # no backend does it any more (#76).
+                await run.anyway("workspace", ws.remove(), bound=None)
 
     task = asyncio.create_task(compose())
     await until(ready.is_set, task)

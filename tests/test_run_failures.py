@@ -281,7 +281,7 @@ async def test_no_git_identity_returns_refused(
 
 @pytest.mark.git
 @pytest.mark.asyncio
-async def test_teardown_failure_logs_error_keeps_success(
+async def test_a_workspace_that_will_not_go_is_logged_and_the_run_still_succeeds(
     host_repo: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -301,7 +301,7 @@ async def test_teardown_failure_logs_error_keeps_success(
         result = await flow.run("teardown", outcome=Answer)
     assert not isinstance(result, RunFailed)
     assert result.outcome == Answer(summary="ok")
-    assert any("teardown failed" in r.message for r in caplog.records)
+    assert any("could not remove the workspace" in r.message for r in caplog.records)
 
 
 @pytest.mark.git

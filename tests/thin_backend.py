@@ -21,7 +21,6 @@ from waystation.sandbox import (
     LineCallback,
     ProcessStrategy,
     allowlisted_env,
-    discard_workspace,
     host_processes,
     host_shell,
 )
@@ -76,13 +75,12 @@ class ThinHost:
             pass_env=(),
             host_env=os.environ,
         )
+        # Nothing removes `ws`: core made it and core takes it away, so a
+        # backend this thin has nothing to tear down but its own runner (#76).
         with HostRunner(self.processes) as runner:
-            try:
-                yield _ThinSandbox(
-                    workspace=str(ws.path),
-                    shell=host_shell(),
-                    _env=built,
-                    _runner=runner,
-                )
-            finally:
-                discard_workspace(ws.path)
+            yield _ThinSandbox(
+                workspace=str(ws.path),
+                shell=host_shell(),
+                _env=built,
+                _runner=runner,
+            )

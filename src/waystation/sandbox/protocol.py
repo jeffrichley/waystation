@@ -98,15 +98,17 @@ class SandboxBackend(Protocol):
         *,
         env: Mapping[str, str],
     ) -> AbstractAsyncContextManager[Sandbox]:
-        """The run's sandbox, which owns ``ws`` from here and removes it on exit.
+        """The run's sandbox, for as long as the context is entered.
 
         ``env`` is literal values only: core has already resolved the tiers it
         owns, and a backend merges them over its own spec's (ADR-0034). Build
         that one with ``allowlisted_env``; do not read ``os.environ`` by hand.
 
-        Removing ``ws.path`` on exit is the backend's, however it got the
-        workspace in: ``discard_workspace`` is that removal, git's read-only
-        objects and Windows' hold on them included.
+        ``ws.path`` is not the backend's to remove. Core made it and core
+        takes it away, after this context has exited — a copy backend reads
+        it once and works in its own container, so a removal here was a duty
+        without a reason and a leak whenever one backend forgot (#76). Tear
+        down what this backend made, and nothing else.
 
         A start whose enter fails cleans up after itself, as ``async with``
         expects of any context manager: nothing exits a start that never

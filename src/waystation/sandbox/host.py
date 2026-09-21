@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -27,9 +26,8 @@ from waystation.observability import SANDBOX, log_argv
 from waystation.sandbox.processes import ProcessStrategy, ProcessTree, host_processes
 from waystation.sandbox.protocol import ExecResult, LineCallback
 from waystation.tails import TailBuffer
-from waystation.workspace import remove_workspace
 
-__all__ = ["HostRunner", "allowlisted_env", "discard_workspace", "host_shell"]
+__all__ = ["HostRunner", "allowlisted_env", "host_shell"]
 
 # Names the host's sh, for a machine whose own is somewhere unusual. On the
 # machine, never in the flow script, so a script stays portable (ADR-0036).
@@ -114,32 +112,6 @@ def host_shell() -> Sequence[str]:
         f"or set {_SH_OVERRIDE} to the one you want used"
     )
     raise FileNotFoundError(msg)
-
-
-def discard_workspace(path: str | os.PathLike[str], *, attempts: int = 5) -> None:
-    """Remove a workspace dir; retry briefly on Windows file-lock races.
-
-    What a backend owes the workspace it was handed, in one call: git writes
-    its objects read-only and Windows refuses to unlink those, an exec that
-    has only just exited can still hold a handle, and a teardown failure is
-    logged rather than raised, because it must not change a result that is
-    already decided (ADR-0016).
-
-    ``attempts`` is the one number here, and it is a knob rather than a
-    policy (ADR-0017): a Windows handle outlives the process that held it by
-    milliseconds, so the retries span a moment, not a wedged daemon. #76 is
-    to take this off backends entirely; until then it is what they share
-    rather than five copies of.
-    """
-    last: OSError | None = None
-    for i in range(attempts):
-        try:
-            remove_workspace(path)
-            return
-        except OSError as exc:
-            last = exc
-            time.sleep(0.05 * (i + 1))
-    SANDBOX.error("teardown failed while removing workspace %s: %s", path, last)
 
 
 async def _read_line(stream: asyncio.StreamReader) -> bytes:

@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import secrets
 import shutil
 import stat
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from waystation._git import encode, git_identity, run_git
 from waystation.errors import attributing
+from waystation.observability import RUN
 
 __all__ = ["Workspace", "prepare_workspace", "remove_workspace"]
 
@@ -33,6 +36,21 @@ class Workspace:
     branch: str
     refs: tuple[str, ...]
 
+    async def remove(self) -> None:
+        """Delete the workspace; a failure is logged, never raised (ADR-0016).
+
+        Core's job, not a backend's. The dir is made here and a backend may
+        never touch it — a copy transport reads it once and works in its own
+        container — so putting the removal on every backend made a leak the
+        fault of whichever one forgot (#76).
+
+        It runs on a thread, because it may have to wait: git writes its
+        objects read-only, Windows refuses to unlink those, and a process
+        that has only just exited can still hold a handle open. Waiting for
+        that on the event loop would stall every other run sharing it.
+        """
+        await asyncio.to_thread(_remove_while_handles_close, self.path)
+
 
 def _writable_and_retry(
     function: Callable[[str], object], path: str, error: BaseException
@@ -47,6 +65,32 @@ def _writable_and_retry(
 def remove_workspace(path: str | os.PathLike[str]) -> None:
     """Delete a workspace dir, read-only git objects included."""
     shutil.rmtree(path, onexc=_writable_and_retry)
+
+
+# A Windows handle outlives the process that held it by milliseconds, so these
+# span a moment rather than a wedged daemon — the one number here, and not a
+# knob, because a caller who wants their own has `remove_workspace` and a loop
+# of their own to put it in (ADR-0017).
+_WHILE_HANDLES_CLOSE = 5
+
+
+def _remove_while_handles_close(path: Path) -> None:
+    """``remove_workspace``, waiting out an exec that has only just exited.
+
+    Blocking on purpose: ``Workspace.remove`` runs it on a thread.
+    """
+    last: OSError | None = None
+    for attempt in range(_WHILE_HANDLES_CLOSE):
+        try:
+            remove_workspace(path)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            last = exc
+            time.sleep(0.05 * (attempt + 1))
+        else:
+            return
+    RUN.error("could not remove the workspace at %s: %s", path, last)
 
 
 async def prepare_workspace(
@@ -91,9 +135,7 @@ async def prepare_workspace(
                 remove_workspace(tmp)
             raise
 
-    return Workspace(
-        path=tmp, run_id=rid, base_sha=base_sha, branch=branch, refs=refs
-    )
+    return Workspace(path=tmp, run_id=rid, base_sha=base_sha, branch=branch, refs=refs)
 
 
 async def _strip_to(workspace: Path, keep: Sequence[str]) -> None:

@@ -61,7 +61,7 @@ from waystation.sandbox import (
 )
 from waystation.signals import handle_signals
 from waystation.stages import stages
-from waystation.workspace import Workspace, prepare_workspace
+from waystation.workspace import Workspace, prepare_workspace, remove_workspace
 
 __all__ = [
     "AgentCommand",
@@ -122,6 +122,7 @@ __all__ = [
     "preserve_series",
     "preflight",
     "prepare_workspace",
+    "remove_workspace",
     "run_agent",
     "stages",
 ]

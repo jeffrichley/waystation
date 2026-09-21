@@ -94,9 +94,7 @@ async def _setup_exec(
     return await sandbox.exec(argv, stdin=stdin)
 
 
-def _clone_script(
-    branch: str, refs: Sequence[str], *, name: str, email: str
-) -> str:
+def _clone_script(branch: str, refs: Sequence[str], *, name: str, email: str) -> str:
     """One exec does the whole clone: an exec can be a costly round trip.
 
     A ``docker exec`` is about 0.5 s on Docker Desktop, for one.

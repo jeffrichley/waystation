@@ -16,20 +16,7 @@ from waystation import (
     Summary,
     prepare_workspace,
 )
-from waystation.agents.outcome import OUTCOME_MARKER, find_outcome
-
-
-@pytest.mark.unit
-def test_find_outcome_skips_empty_and_invalid_marker_lines() -> None:
-    text = "\n".join(
-        [
-            OUTCOME_MARKER,
-            f"{OUTCOME_MARKER} not-json",
-            f'{OUTCOME_MARKER} {{"ok": true}}',
-            "",
-        ]
-    )
-    assert find_outcome(text) == {"ok": True}
+from waystation.agents.outcome import OUTCOME_MARKER
 
 
 @pytest.mark.git

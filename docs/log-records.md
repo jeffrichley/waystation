@@ -1,3 +1,6 @@
+---
+type: reference
+---
 # Log records
 
 Hooks carry most of what happens in a run. Two things they deliberately don't:

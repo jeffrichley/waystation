@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # The sandbox backend protocol is behavioral; argv purity is an internal idiom

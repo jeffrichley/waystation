@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # The landing steps are public on `GitRepo`, and squash is its own strategy built from them

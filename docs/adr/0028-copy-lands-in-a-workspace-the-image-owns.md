@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # A copied workspace rides exec stdin as text, into a `/workspace` the image owns

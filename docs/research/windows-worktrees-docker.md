@@ -1,3 +1,6 @@
+---
+type: reference
+---
 # Git worktrees + Docker bind mounts on Windows hosts
 
 Research for [#9](https://github.com/jeffrichley/waystation/issues/9), part of the

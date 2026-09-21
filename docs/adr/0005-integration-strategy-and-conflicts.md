@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # Integration is a pluggable strategy; conflicts abort and preserve

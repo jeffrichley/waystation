@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # Waystation is a pure library: no CLI, no forge, no magic directory

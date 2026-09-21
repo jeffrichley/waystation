@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # The host-process runner is public, and one conformance suite states the exec contract

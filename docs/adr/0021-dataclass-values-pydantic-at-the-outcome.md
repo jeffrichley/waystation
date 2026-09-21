@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # Waystation's values are dataclasses; pydantic validates only the Outcome

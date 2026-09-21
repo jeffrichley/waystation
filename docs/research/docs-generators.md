@@ -1,3 +1,6 @@
+---
+type: reference
+---
 # Research: docs generators for a Python library with literate examples
 
 Ticket: [#16](https://github.com/jeffrichley/waystation/issues/16)

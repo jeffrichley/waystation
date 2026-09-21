@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # One run record sits behind `ctx`, and `ctx` carries the stage; a hook point stays a five-place change

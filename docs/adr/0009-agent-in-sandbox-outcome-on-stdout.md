@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # The agent runs inside the sandbox and reports an Outcome on stdout

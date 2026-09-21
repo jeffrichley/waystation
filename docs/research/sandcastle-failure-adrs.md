@@ -1,3 +1,6 @@
+---
+type: reference
+---
 # Sandcastle's failure-semantics ADRs
 
 Research for [waystation#13](https://github.com/jeffrichley/waystation/issues/13).

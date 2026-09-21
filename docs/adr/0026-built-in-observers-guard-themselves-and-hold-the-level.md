@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # A built-in observer guards itself, and a run file holds the level while it is open

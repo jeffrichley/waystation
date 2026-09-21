@@ -5,7 +5,7 @@ A bare, hackable Python library for orchestrating sandboxed AI coding agents —
 ## Read before you change anything
 
 - **`CONTEXT.md`** is the glossary, and it binds. Name things the way it names them; avoid the words it says to avoid.
-- **`docs/adr/README.md`** indexes every decision with a *read it when* line. Scan it, open the two or three that touch what you're changing — not all of them — and if your change contradicts one, say so out loud instead of quietly overriding it.
+- **`docs/adr/README.md`** indexes every decision with a *read it when* line. Scan it, open the two or three that touch what you're changing — not all of them. What to do when your change contradicts one, and how to write a new one, is `docs/adr/CLAUDE.md`.
 - **`docs/agents/architecture.md`** is the design lens: deep modules, the patterns this codebase already runs on, and when *not* to reach for one.
 - **The ticket is the spec, and claiming it is your first write.** `gh issue edit <n> --add-assignee @me`, before the branch and before the first edit: an assignee is how the next agent reading the frontier knows this one is taken, so an unclaimed ticket is two agents' work. Issues live in GitHub (`jeffrichley/waystation`); see `docs/agents/issue-tracker.md`. Its acceptance criteria define the work, and #18 is the parent spec — including the **public import surface**, which is a contract.
 - **`tests/CLAUDE.md`** before you write a test. It lists the shared fixtures and helpers, so you reach for `host_repo` rather than writing a fourteenth copy of it.
@@ -24,7 +24,7 @@ This is a public repo, so the gate is **CI green on the PR** — not a passing r
 - **When the library does what a user could do, it uses the user's protocol.** Built-in observers are hook bundles (ADR-0001); sandbox backends, agent providers and integration strategies are the same protocols a user implements. There is no privileged internal path — if you're writing one, that's the signal to stop.
 - **Cite the decision in the code.** A bare `(ADR-0017)` in a comment is how the next reader finds the argument. Keep doing it.
 - **Prefer a test to a paragraph.** A rule a test enforces survives refactors; a rule in prose erodes. When you settle something structural, leave a test holding it.
-- **Write the ADR when the decision would otherwise be re-litigated.** Next number, house style, and add a row to `docs/adr/README.md` — an ADR nobody can find is an ADR nobody reads.
+- **Write the ADR when the decision would otherwise be re-litigated.** How is `docs/adr/CLAUDE.md`.
 
 ## Windows is a first-class host
 
@@ -51,3 +51,7 @@ Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/
 ### Architecture
 
 The standing design lens, separate from any one decision: `docs/agents/architecture.md`.
+
+### Docs
+
+`docs/` is an OKF bundle managed by vaultwright. Read `docs/CLAUDE.md` before creating or changing anything under `docs/`.

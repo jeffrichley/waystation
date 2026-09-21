@@ -18,6 +18,6 @@ Building the command at the call keeps a run's behaviour exactly as it was: a pr
 
 ## Consequences
 
-`run_agent` is a plain function that returns a coroutine. A caller that builds one and never awaits it gets Python's "never awaited" warning, as it would for any coroutine. `test_outcome_contract.py` holds the call-time behaviour.
+`run_agent` is a plain function that returns a coroutine. A caller that builds one and never awaits it gets Python's "never awaited" warning, as it would for any coroutine. A `RunSpec` built by hand, around `flow.run()`, with a non-object type used to run its agent anyway; its agent stage now fails `Errored(TypeError)`, since `run_agent` refuses the type too. `test_outcome_contract.py` holds the call-time behaviour, and `test_provider_command_exception_returns_errored` holds that no agent is announced or ended when its command cannot be built.
 
 Decided in [#80](https://github.com/jeffrichley/waystation/issues/80).

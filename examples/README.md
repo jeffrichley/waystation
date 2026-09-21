@@ -65,10 +65,14 @@ them and never runs them.
    and `EventLog`. *Coming in #40.*
 3. `primitives`: the run loop composed by hand, with a two-line `NoSandbox`
    swap. *Coming in #40.*
-4. `implement_then_review`: an implement run lands on a branch, a review run
-   judges it, and one bounded fix run follows a rejection. *Coming in #41.*
-5. `control_room`: one `Flow` per checkout across several repos, in one
-   `fan_out`. *Coming in #41.*
+4. [`implement_then_review.py`](implement_then_review.py): an implement run
+   lands on a branch, a review run reports a `Verdict` without integrating,
+   and a rejection gets one bounded fix run and one re-review. The review
+   instructions are a reusable prompt file, [`prompts/review.md`](prompts/review.md).
+   HEAD is never touched.
+5. [`control_room.py`](control_room.py): a hardcoded list of checkouts, one
+   `Flow` per checkout, and one `fan_out` over them all, consuming results as
+   they finish.
 6. [`parallel_prompts.py`](parallel_prompts.py): the typer flagship. It fans
    prompts out onto a shared batch branch under a live `Dashboard`, with a
    `RunLogFiles` file per run, and answers each `RunConflicted` with a

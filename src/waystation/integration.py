@@ -780,6 +780,36 @@ async def _fast_forward(repo: GitRepo, target: Target, tip: str) -> None:
     # free to go on working while it ran.
     if await _read_head(repo) != before:
         raise StageError(None, moved)
+    await _refuse_the_users_work(repo, target, tip)
+    if target.exists and tip == target.tip:
+        return  # nothing landed: the checkout is already there
+    try:
+        # --no-autostash: a merge.autoStash in the user's config would put
+        # their work aside and back, which is the clobbering this refuses.
+        # --no-overwrite-ignore: git's own check, made as it writes the
+        # checkout, covers an ignored file that came after ours (ADR-0041).
+        await repo.git(
+            "merge",
+            "--ff-only",
+            "--no-autostash",
+            "--no-overwrite-ignore",
+            "--quiet",
+            tip,
+        )
+    except StageError as exc:
+        # As with update-ref: a refusal is only ours if we saw why. The
+        # checkout moved, or the user's work got in the way after all.
+        if await _read_head(repo) != before:
+            raise StageError(None, moved) from exc
+        try:
+            await _refuse_the_users_work(repo, target, tip)
+        except StageError as refused:
+            raise refused from exc
+        raise
+
+
+async def _refuse_the_users_work(repo: GitRepo, target: Target, tip: str) -> None:
+    """Refuse a landing onto HEAD that would overwrite uncommitted work."""
     await _refuse_tracked_changes(repo)
     in_the_way = await _untracked_in_the_way(repo, target, tip)
     if in_the_way:
@@ -793,17 +823,6 @@ async def _fast_forward(repo: GitRepo, target: Target, tip: str) -> None:
                 ),
             ),
         )
-    if target.exists and tip == target.tip:
-        return  # nothing landed: the checkout is already there
-    try:
-        # --no-autostash: a merge.autoStash in the user's config would put
-        # their work aside and back, which is the clobbering this refuses.
-        await repo.git("merge", "--ff-only", "--no-autostash", "--quiet", tip)
-    except StageError as exc:
-        # As with update-ref: a refusal is only ours if the checkout moved.
-        if await _read_head(repo) == before:
-            raise
-        raise StageError(None, moved) from exc
 
 
 async def _untracked_in_the_way(repo: GitRepo, target: Target, tip: str) -> list[str]:

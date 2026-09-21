@@ -1,3 +1,6 @@
+---
+type: playbook
+---
 # Decisions
 
 Each ADR is one decision, why it was made, and the options it beat. Reading one saves you re-walking a road that was already walked.

@@ -72,6 +72,12 @@ addopts = [
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# Under xdist a test that outruns `--timeout` is ended with `os._exit`, which
+# reaches the log as "worker 'gwN' crashed" and nothing else — no traceback,
+# no stack, nothing saying which wait wedged (#105). This dumps every thread's
+# stack first. It is the one number here that must stay *below* the timeout
+# above, or the worker is gone before the dump runs.
+faulthandler_timeout = 45
 
 [tool.coverage.run]
 branch = true

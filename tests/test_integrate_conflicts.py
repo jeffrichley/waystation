@@ -106,14 +106,7 @@ async def test_a_conflict_leaves_the_host_as_it_was(
     )
 
     assert isinstance(result, RunConflicted)
-    after = host_state(host_repo)
-    preserved = f"refs/heads/{result.preserved} "
-    after["refs"] = "\n".join(
-        line
-        for line in str(after["refs"]).splitlines()
-        if not line.startswith(preserved)
-    )
-    assert after == before
+    assert host_state(host_repo, ignoring=result.preserved) == before
 
 
 # Claims shared.txt, then gives it back: patch by patch the first commit

@@ -395,25 +395,25 @@ def test_the_shipped_strategies_name_nothing_private_to_land_a_series() -> None:
 
 
 @dataclass(frozen=True)
-class FastForwardOnly:
-    """A user's rule: land the series as it is, or not at all.
+class LastWordOnly:
+    """A user's rule: land only the series' last commit, cherry-picked.
 
-    Policy over the public landing steps: it lands only when the target has
-    not moved past the series' base, so what arrives is exactly what the
-    agent committed. Nothing in it is plumbing.
+    Policy over all five public landing steps, and nothing in it is
+    plumbing: which base to merge from, and which parent to commit on.
     """
 
     target: str
 
     async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
         target = await repo.read_target(self.target, base=series.base_sha)
-        if target.tip != series.base_sha:
-            conflict = Conflict(paths=())
-            return self._report(target.tip, None, (), conflict)
         commits = await repo.commit_series(series)
-        tip = commits[-1] if commits else target.tip
+        parent = commits[-2] if len(commits) > 1 else series.base_sha
+        tree = await repo.merge_tree(base=parent, ours=target.tip, theirs=commits[-1])
+        if isinstance(tree, Conflict):
+            return self._report(target.tip, None, (), tree)
+        tip = await repo.commit_tree(tree, target.tip, like=commits[-1])
         await repo.move_target(target, tip)
-        return self._report(target.tip, tip, commits, None)
+        return self._report(target.tip, tip, (tip,), None)
 
     def _report(
         self,
@@ -423,9 +423,9 @@ class FastForwardOnly:
         conflict: Conflict | None,
     ) -> IntegrationReport:
         return IntegrationReport(
-            strategy="FastForwardOnly",
+            strategy="LastWordOnly",
             target=self.target,
-            mechanism="fast-forward",
+            mechanism="cherry-pick",
             target_before=before,
             target_after=after,
             landed=landed,
@@ -442,12 +442,14 @@ async def test_a_strategy_of_a_users_own_lands_through_the_public_steps(
     commit_on(host_repo, "work", {"one.txt": "1\n"}, message="one")
     commit_on(host_repo, "work", {"two.txt": "2\n"}, message="two")
     series = await PatchSeries.from_range(host_repo, base, "work")
+    moved = commit_on(host_repo, TARGET, {"theirs.txt": "t\n"})
 
-    report = await integrate(host_repo, series, FastForwardOnly(TARGET))
+    report = await integrate(host_repo, series, LastWordOnly(TARGET))
 
-    assert len(report.landed) == 2
-    assert report.target_after == git(host_repo, "rev-parse", TARGET)
-    assert git(host_repo, "log", "--format=%s", f"{base}..{TARGET}") == "two\none"
-    commit_on(host_repo, TARGET, {"theirs.txt": "t\n"})
-    refused = await integrate(host_repo, series, FastForwardOnly(TARGET))
-    assert refused.conflict is not None, "a moved target is its rule's to refuse"
+    (landed,) = report.landed
+    assert report.target_after == landed == git(host_repo, "rev-parse", TARGET)
+    assert git(host_repo, "rev-parse", f"{TARGET}^") == moved
+    assert git(host_repo, "log", "-1", "--format=%s", TARGET) == "two"
+    files = git(host_repo, "ls-tree", "--name-only", TARGET).splitlines()
+    assert "two.txt" in files and "theirs.txt" in files
+    assert "one.txt" not in files, "only the last word landed"

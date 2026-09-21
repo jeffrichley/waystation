@@ -21,7 +21,7 @@ from waystation import (
     ScriptedCommit,
     Squash,
 )
-from waystation.integration import Conflict
+from waystation.integration import Conflict, IntegrationStrategy
 
 pytestmark = pytest.mark.git
 
@@ -58,13 +58,7 @@ async def test_a_squashed_series_lands_as_one_commit_holding_its_net_change(
     assert git(host_repo, "show", f"{TARGET}:notes.txt") == "fixed"
     assert git(host_repo, "show", f"{TARGET}:code.txt") == "c"
     assert result.preserved is None
-    after = host_state(host_repo)
-    target_line = f"refs/heads/{TARGET} "
-    after["refs"] = "\n".join(
-        line
-        for line in str(after["refs"]).splitlines()
-        if not line.startswith(target_line)
-    )
+    after = host_state(host_repo, ignoring=TARGET)
     assert after == before, "only the target moved: no checkout, index or file"
 
 
@@ -148,12 +142,7 @@ async def test_a_squash_that_conflicts_names_the_paths_and_keeps_the_series(
         "add code",
         "add notes",
     ], "the series is kept unsquashed"
-    after = host_state(host_repo)
-    kept = f"refs/heads/{result.preserved} "
-    after["refs"] = "\n".join(
-        line for line in str(after["refs"]).splitlines() if not line.startswith(kept)
-    )
-    assert after == before
+    assert host_state(host_repo, ignoring=result.preserved) == before
 
 
 async def test_a_squash_onto_a_checked_out_target_is_refused(host_repo: Path) -> None:
@@ -167,16 +156,18 @@ async def test_a_squash_onto_a_checked_out_target_is_refused(host_repo: Path) ->
     assert result.preserved == f"waystation/{result.run_id}"
 
 
+@pytest.mark.parametrize(
+    "strategy", [Squash("HEAD"), Integration("HEAD")], ids=["squash", "apply"]
+)
 async def test_a_squash_onto_head_is_refused_as_integration_refuses_it(
-    host_repo: Path,
+    host_repo: Path, strategy: IntegrationStrategy
 ) -> None:
-    for strategy in (Squash("HEAD"), Integration("HEAD")):
-        result = await a_run(host_repo).integrate(strategy)
+    result = await a_run(host_repo).integrate(strategy)
 
-        assert isinstance(result, RunFailed)
-        assert isinstance(result.failure, Refused)
-        assert result.failure.reason == "dirty_tree"
-        assert "HEAD target is not supported yet" in result.failure.detail
+    assert isinstance(result, RunFailed)
+    assert isinstance(result.failure, Refused)
+    assert result.failure.reason == "dirty_tree"
+    assert "HEAD target is not supported yet" in result.failure.detail
 
 
 async def test_an_empty_series_squashes_to_nothing(host_repo: Path) -> None:
@@ -187,6 +178,22 @@ async def test_an_empty_series_squashes_to_nothing(host_repo: Path) -> None:
     assert result.report.landed == ()
     assert result.report.target_after is None
     assert git(host_repo, "branch", "--list", TARGET) == ""
+
+
+async def test_a_series_whose_net_change_is_already_there_lands_nothing(
+    host_repo: Path,
+) -> None:
+    tip = commit_on(host_repo, TARGET, {"notes.txt": "n\n"})
+
+    result = await a_run(
+        host_repo, commits=(ScriptedCommit("add notes", {"notes.txt": "n\n"}),)
+    ).integrate(Squash(TARGET))
+
+    assert isinstance(result, RunSucceeded)
+    assert result.report is not None
+    assert result.report.landed == ()
+    assert result.report.target_after == tip
+    assert git(host_repo, "rev-parse", TARGET) == tip, "no empty commit"
 
 
 async def test_concurrent_squashes_onto_one_target_each_land_one_commit(

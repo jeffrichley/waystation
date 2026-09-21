@@ -32,7 +32,6 @@ from waystation.results import (
 )
 from waystation.sandbox import allowlisted_env
 from waystation.sandbox.protocol import ExecResult, Sandbox
-from waystation.tails import bound_tail
 
 __all__ = ["run_agent"]
 
@@ -57,8 +56,9 @@ class _AgentBound(Exception):
         super().__init__(bound)
 
 
-# POSIX shells and execvp alike: the command was not there to run. It is the
-# one exit code that says the sandbox is missing something, not the agent.
+# What a POSIX shell exits when it cannot find the command it was asked to
+# run. An agent is free to exit 127 meaning something else, so this reads as
+# a likely cause rather than a verdict.
 _NOT_FOUND = 127
 
 
@@ -293,15 +293,16 @@ async def run_agent[OutcomeT](
     assert result is not None
     agent_exit = _agent_exit(result.exit_code)
     if result.exit_code == _NOT_FOUND:
-        # The one exit code that means the sandbox, not the agent, was wrong.
-        # Preflight cannot catch it: what an image holds is only knowable
-        # inside it, and looking would cost a sandbox start per (agent,
-        # sandbox) pair, which ADR-0018 keeps preflight out of (ADR-0036).
+        # Preflight cannot rule this out: what a sandbox holds is only
+        # knowable inside it, and looking would cost a sandbox start per
+        # (agent, sandbox) pair, which ADR-0018 keeps preflight out of. So
+        # the run says it here instead (ADR-0036).
         AGENT.error(
-            "the agent's command was not found in this sandbox — waystation "
-            "never installs, builds or pulls one (ADR-0011), so the sandbox "
-            "has to bring it: %s",
-            bound_tail(result.stderr).strip() or "the agent said nothing about it",
+            "the agent exited 127, which is what a shell exits for a command "
+            "it could not find. If that is what happened, the sandbox has to "
+            "bring it: waystation never installs, builds or pulls anything "
+            "(ADR-0011). It said: %s",
+            result.stderr.strip() or "nothing",
         )
     if result.exit_code != 0:
         raise StageError(

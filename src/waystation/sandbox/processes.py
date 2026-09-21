@@ -7,11 +7,6 @@ runs through the host's own (ADR-0027). The host's own strategy is the
 default, and ``host_processes`` is the only place that chooses by platform;
 the guards inside each strategy only refuse the wrong one.
 
-Which shell the host has is the same kind of question, so ``host_shell``
-lives here too — though it is a function rather than a strategy method: it
-searches rather than branches, and a backend that is not the host answers for
-itself (ADR-0036).
-
 Signals (``handle_signals``) and the Docker transport default (ADR-0012) are
 OS-specific too, but they belong to their own consumers, not here.
 """
@@ -20,14 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
 import signal
 import subprocess
 import sys
 from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from waystation.observability import tagged_logger
@@ -38,7 +31,6 @@ __all__ = [
     "ProcessTree",
     "WindowsProcesses",
     "host_processes",
-    "host_shell",
 ]
 
 # Keys a process needs to start at all, per OS; a run's own env goes on top.
@@ -172,31 +164,6 @@ def host_processes() -> ProcessStrategy:
     if sys.platform == "win32":
         return WindowsProcesses()
     return PosixProcesses()
-
-
-def host_shell() -> Sequence[str]:
-    r"""This host's POSIX sh, as the argv prefix a command string follows.
-
-    What ``NoSandbox`` answers for ``Sandbox.shell``, and what any backend
-    running host processes wants. An absolute path, because a sandbox's own
-    ``PATH`` is not what Windows looks a program up on (ADR-0029).
-
-    Raises ``FileNotFoundError`` when the host has no sh. On Windows that is
-    the ordinary case for a machine without Git for Windows, whose installer
-    puts only ``Git\cmd`` on ``PATH`` while shipping an sh beside it — so it
-    is looked for there before giving up.
-    """
-    found = shutil.which("sh")
-    if found:
-        return (found, "-c")
-    git = shutil.which("git")
-    if git is not None:
-        root = Path(git).resolve().parent.parent
-        for candidate in (root / "bin" / "sh.exe", root / "usr" / "bin" / "sh.exe"):
-            if candidate.is_file():
-                return (str(candidate), "-c")
-    msg = "POSIX sh not found on this host (install Git Bash on Windows)"
-    raise FileNotFoundError(msg)
 
 
 def _kernel32() -> Any:

@@ -34,10 +34,12 @@ class AgentCommand:
     """
 
     argv: Sequence[str] = ()
-    script: str | None = None
     stdin: str | None = None
     env: Mapping[str, str] = field(default_factory=dict)
     pass_env: Sequence[str] = ()
+    # Last, so that every positional construction that worked before still
+    # binds the same way: this field is new, and `argv` is still first.
+    script: str | None = None
 
     def __post_init__(self) -> None:
         if bool(self.argv) == (self.script is not None):

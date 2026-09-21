@@ -25,7 +25,16 @@ class ExecResult:
 
 @runtime_checkable
 class Sandbox(Protocol):
-    """A started sandbox. ``workspace`` is the path its execs run in.
+    """A started sandbox.
+
+    ``workspace`` is the path its execs run in. ``shell`` is the argv a
+    command string follows here — ``("sh", "-c")``, or the host's own
+    absolute sh for a backend running host processes. A caller with a script
+    asks rather than guesses: a path naming a shell on this host means
+    nothing inside a container, and a bare ``sh`` is not on a Windows host's
+    ``PATH`` (ADR-0029, ADR-0036). It is a prefix, the shape Dockerfile's
+    ``SHELL`` takes, so a shell needing arguments of its own can say so;
+    ``host_shell()`` answers it for a host backend.
 
     Writing a backend? The whole of what follows is stated as tests in
     ``waystation.testing.SandboxConformance``, which is what a backend is
@@ -35,15 +44,6 @@ class Sandbox(Protocol):
 
     workspace: str
     shell: Sequence[str]
-    """Argv a shell command string follows here — ``("sh", "-c")``, or the
-    host's own absolute sh for a backend that runs host processes.
-
-    A caller with a script to run asks rather than guesses: a path that names
-    a shell on this host means nothing inside a container, and a bare ``sh``
-    is not on a Windows host's ``PATH`` (ADR-0029, ADR-0036). It is a prefix,
-    the shape Dockerfile's ``SHELL`` takes, so a shell needing arguments of
-    its own can say so. ``host_shell()`` answers it for a host backend.
-    """
 
     async def exec(
         self,

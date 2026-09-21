@@ -9,8 +9,13 @@ from dataclasses import dataclass, field
 
 from waystation.errors import PreflightError
 from waystation.results import Errored
-from waystation.sandbox.host import HostRunner, allowlisted_env, discard_workspace
-from waystation.sandbox.processes import ProcessStrategy, host_processes, host_shell
+from waystation.sandbox.host import (
+    HostRunner,
+    allowlisted_env,
+    discard_workspace,
+    host_shell,
+)
+from waystation.sandbox.processes import ProcessStrategy, host_processes
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.workspace import Workspace
 

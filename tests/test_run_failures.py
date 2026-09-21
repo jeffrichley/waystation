@@ -322,5 +322,8 @@ async def test_an_agent_the_sandbox_does_not_have_says_the_sandbox_is_missing_it
     assert isinstance(result.failure, AgentExited)
     assert result.failure.exit_code == 127
     said = [r.getMessage() for r in caplog.records if r.name == "waystation.agent"]
-    assert any("not found in this sandbox" in m for m in said), said
+    # What 127 usually means, and what the shell actually said — not a
+    # verdict, because an agent may exit 127 meaning something else.
+    assert any("exited 127" in m for m in said), said
+    assert any("could not find" in m for m in said), said
     assert any("waystation-no-such-binary" in m for m in said), said

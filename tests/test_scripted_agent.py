@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from waystation import ScriptedAgent
+from waystation import AgentCommand, ScriptedAgent
 
 
 @pytest.mark.unit
@@ -28,7 +30,7 @@ def test_a_scripted_agents_script_runs_under_whatever_shell_it_is_given() -> Non
 
 @pytest.mark.unit
 def test_a_scripted_agent_needs_nothing_of_the_host_at_preflight(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The shell it needs is the sandbox's, and the sandbox is what checks it.
 
@@ -42,8 +44,6 @@ def test_a_scripted_agent_needs_nothing_of_the_host_at_preflight(
 
 @pytest.mark.unit
 def test_a_command_runs_an_argv_or_a_script_and_says_so_when_it_names_neither() -> None:
-    from waystation.agents import AgentCommand
-
     with pytest.raises(ValueError, match="neither"):
         AgentCommand()
     with pytest.raises(ValueError, match="both"):

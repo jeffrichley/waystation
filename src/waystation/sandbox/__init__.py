@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from waystation.sandbox.docker import DockerSandbox
-from waystation.sandbox.host import HostRunner, allowlisted_env, discard_workspace
+from waystation.sandbox.host import (
+    HostRunner,
+    allowlisted_env,
+    discard_workspace,
+    host_shell,
+)
 from waystation.sandbox.no_sandbox import NoSandbox
 from waystation.sandbox.processes import (
     PosixProcesses,
@@ -11,7 +16,6 @@ from waystation.sandbox.processes import (
     ProcessTree,
     WindowsProcesses,
     host_processes,
-    host_shell,
 )
 from waystation.sandbox.protocol import (
     ExecResult,

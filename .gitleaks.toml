@@ -1,0 +1,13 @@
+# gitleaks' own rules, plus what they miss. Run by the pre-commit and pre-push
+# hooks (.pre-commit-config.yaml) and by CI.
+[extend]
+useDefault = true
+
+# The default rules know Anthropic API keys (sk-ant-api03-) but not the OAuth
+# token `claude setup-token` prints, which is the credential .env.example
+# suggests first.
+[[rules]]
+id = "anthropic-oauth-token"
+description = "Anthropic OAuth token, as printed by `claude setup-token`"
+regex = '''\b(sk-ant-oat01-[A-Za-z0-9_\-]{20,})'''
+keywords = ["sk-ant-oat01"]

@@ -36,6 +36,8 @@ Development happens on Windows, and CI runs there. It is not the exotic case:
 
 ## Commits
 
+**Secrets never reach a commit.** Credentials live in a gitignored `.env` (template: `.env.example`), loaded with `uv run --env-file .env`. Run `just hooks` once per clone: gitleaks then scans every commit and every push (`.pre-commit-config.yaml`, rules in `.gitleaks.toml`), CI scans again, and GitHub's push protection is the last line. Never `--no-verify` past a finding — rotate the secret instead.
+
 Conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`), one concern each — split unrelated work rather than bundling it. This repo's history carries **no** `Co-Authored-By` trailer; match it. Work on a branch; `main` lands through PRs.
 
 ## Agent skills

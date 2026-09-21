@@ -445,7 +445,9 @@ async def test_waiting_inside_a_batch_ends_when_a_run_does_rather_than_hanging(
 
     with pytest.raises(pytest.fail.Exception, match="ended"):
         # The bound is the regression's shape, not a behaviour under test: a
-        # wait that wedges hangs forever, and this says so instead.
-        async with asyncio.timeout(30):
+        # wait that wedges hangs forever, and this says so instead. Generous
+        # against the two runs it starts on a loaded runner — a bound that
+        # fires early here would be one more flake, which is the whole point.
+        async with asyncio.timeout(40):
             async with fan_out([works, dies]) as results:
                 await until_batch(lambda: len(working) == 2, results)

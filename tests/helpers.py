@@ -282,14 +282,22 @@ async def until_batch(
     a worker past its timeout, which pytest-timeout ends with ``os._exit``,
     leaving a crash with no traceback to read (#105).
     """
+
+    def ended_first() -> None:
+        # `done` is also true for a cancelled future, whose `result()` raises:
+        # that is this wait being cancelled, not a run ending.
+        if ended.done() and not ended.cancelled():
+            pytest.fail(f"a run ended before the batch was ready: {ended.result()!r}")
+
     ended = asyncio.ensure_future(anext(results))
     try:
         while not ready():
-            if ended.done():
-                pytest.fail(
-                    f"a run ended before the batch was ready: {ended.result()!r}"
-                )
+            ended_first()
             await asyncio.sleep(0.02)
+        # `ready()` and a result can land on the same turn. A run that ended is
+        # the same defect whichever won, and checking only inside the loop
+        # would drop that result in the `finally` without anyone reading it.
+        ended_first()
     finally:
         # The claim goes back when this is cancelled, so the batch is left as
         # it was found and a later reader still sees every result.

@@ -571,8 +571,23 @@ class Integration:
     be (ADR-0040). One attempt with the one mechanism: an apply that
     conflicts never falls back to merge (ADR-0015).
 
+    ``target="HEAD"`` lands on your own checkout: the branch it has out, or
+    the detached commit. The landing is built without touching your files,
+    then the checkout is fast-forwarded to it as ``git merge --ff-only``
+    would. It never clobbers uncommitted work, so it is refused with
+    ``Refused("dirty_tree")`` when a tracked file has staged or unstaged
+    changes, or when any file of yours, ignored ones included, sits where
+    the landing puts one. Untracked files anywhere else don't matter. A
+    conflict leaves the checkout exactly as it was (ADR-0041).
+
+    A flow may land on the HEAD of the repo it lives in. Its own logs don't
+    block it, but the landing rewrites whatever the series changed, the
+    flow script included: the running process carries on with the version
+    it loaded, and the next run reads the new one.
+
     Attributes:
-        target: The branch to land on, created at the series' base if missing.
+        target: The branch to land on, created at the series' base if missing,
+            or ``"HEAD"`` for the checkout.
         mechanism: ``"apply"`` replays the series commit by commit, skipping
             any whose change the target already has; ``"merge"`` lands it
             with one two-parent merge commit.
@@ -666,8 +681,12 @@ class Squash:
     landing, as ``apply`` does. It carries no run id: a strategy is handed
     a repo and a series, not a run.
 
+    ``target="HEAD"`` lands on your own checkout, with the same refusals
+    as ``Integration("HEAD")``: uncommitted work is never overwritten.
+
     Attributes:
-        target: The branch to land on, created at the series' base if missing.
+        target: The branch to land on, created at the series' base if missing,
+            or ``"HEAD"`` for the checkout.
         message: The squash commit's message. By default a one-commit
             series keeps its own; a longer one takes its first subject as
             the subject, then lists every subject, as a forge's squash-merge
@@ -780,6 +799,36 @@ async def _fast_forward(repo: GitRepo, target: Target, tip: str) -> None:
     # free to go on working while it ran.
     if await _read_head(repo) != before:
         raise StageError(None, moved)
+    await _refuse_the_users_work(repo, target, tip)
+    if target.exists and tip == target.tip:
+        return  # nothing landed: the checkout is already there
+    try:
+        # --no-autostash: a merge.autoStash in the user's config would put
+        # their work aside and back, which is the clobbering this refuses.
+        # --no-overwrite-ignore: git's own check, made as it writes the
+        # checkout, covers an ignored file that came after ours (ADR-0041).
+        await repo.git(
+            "merge",
+            "--ff-only",
+            "--no-autostash",
+            "--no-overwrite-ignore",
+            "--quiet",
+            tip,
+        )
+    except StageError as exc:
+        # As with update-ref: a refusal is only ours if we saw why. The
+        # checkout moved, or the user's work got in the way after all.
+        if await _read_head(repo) != before:
+            raise StageError(None, moved) from exc
+        try:
+            await _refuse_the_users_work(repo, target, tip)
+        except StageError as refused:
+            raise refused from exc
+        raise
+
+
+async def _refuse_the_users_work(repo: GitRepo, target: Target, tip: str) -> None:
+    """Refuse a landing onto HEAD that would overwrite uncommitted work."""
     await _refuse_tracked_changes(repo)
     in_the_way = await _untracked_in_the_way(repo, target, tip)
     if in_the_way:
@@ -793,17 +842,6 @@ async def _fast_forward(repo: GitRepo, target: Target, tip: str) -> None:
                 ),
             ),
         )
-    if target.exists and tip == target.tip:
-        return  # nothing landed: the checkout is already there
-    try:
-        # --no-autostash: a merge.autoStash in the user's config would put
-        # their work aside and back, which is the clobbering this refuses.
-        await repo.git("merge", "--ff-only", "--no-autostash", "--quiet", tip)
-    except StageError as exc:
-        # As with update-ref: a refusal is only ours if the checkout moved.
-        if await _read_head(repo) == before:
-            raise
-        raise StageError(None, moved) from exc
 
 
 async def _untracked_in_the_way(repo: GitRepo, target: Target, tip: str) -> list[str]:

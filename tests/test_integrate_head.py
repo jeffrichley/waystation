@@ -224,6 +224,11 @@ def drops_a_file_in_the_way(repo: Path) -> None:
     (repo / "a.txt").write_bytes(b"mine, made mid-landing\n")
 
 
+def drops_an_ignored_file_in_the_way(repo: Path) -> None:
+    (repo / ".git" / "info" / "exclude").write_bytes(b"a.txt\n")
+    drops_a_file_in_the_way(repo)
+
+
 @dataclass(frozen=True)
 class Interrupted(GitRepo):
     """A host whose user does ``does`` to the checkout just before ``at`` runs."""
@@ -303,6 +308,28 @@ async def test_work_the_user_did_while_it_landed_is_refused_not_clobbered(
     assert_refused(result, "dirty_tree", host_repo)
     assert git(host_repo, "rev-parse", "HEAD") == before
     assert b"mid-landing" in (host_repo / kept).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "does",
+    [drops_a_file_in_the_way, drops_an_ignored_file_in_the_way],
+    ids=["untracked", "ignored"],
+)
+async def test_a_file_dropped_in_the_way_as_the_checkout_moves_is_refused(
+    host_repo: Path, does: Callable[[Path], None]
+) -> None:
+    # Past every check waystation makes: only git, writing the checkout, can
+    # still refuse it (ADR-0041).
+    raced = Raced(Integration("HEAD"), at="merge", does=does)
+    before = git(host_repo, "rev-parse", "HEAD")
+
+    result = await a_run(host_repo).integrate(raced)
+
+    assert_refused(result, "dirty_tree", host_repo)
+    assert isinstance(result, RunFailed) and isinstance(result.failure, Refused)
+    assert "a.txt" in result.failure.detail
+    assert git(host_repo, "rev-parse", "HEAD") == before
+    assert (host_repo / "a.txt").read_bytes() == b"mine, made mid-landing\n"
 
 
 async def test_nothing_to_land_leaves_head_alone(host_repo: Path) -> None:

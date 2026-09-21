@@ -2,10 +2,17 @@
 #
 # An intermittent failure is a rate, not an event: a single green run says
 # nothing about a fault that shows up one time in twenty, and "I re-ran it and
-# it passed" is the reasoning this exists to replace. Ten jobs at three
-# repeats is thirty samples, which puts a one-in-twenty fault at roughly 79%
-# chance of showing at least once — enough to act on, and cheap enough to
-# leave to a button.
+# it passed" is the reasoning this exists to replace. Ten jobs at six repeats
+# is sixty samples: enough to see a one-in-twenty fault with ~95% probability,
+# and — by the rule of three — enough that a clean run puts the rate under
+# 3/60 at 95% confidence. Fewer samples cannot tell "fixed" from "did not
+# happen to fire".
+#
+# It runs what CI runs, with no arguments of its own. The first soak passed
+# thirty times while the fault was live, because it ran four files with
+# coverage off: fewer tests is less contention, and coverage tracing is most
+# of what slows a run down and widens the window a race needs. A soak easier
+# than the thing it imitates only ever proves itself.
 #
 # Run it from the Actions tab (`workflow_dispatch`); nothing triggers it
 # automatically, because it costs minutes and answers a question nobody is
@@ -17,10 +24,10 @@ on:
     inputs:
       repeats:
         description: "Runs of the suite per job (ten jobs run in parallel)"
-        default: "3"
+        default: "6"
       tests:
-        description: "What to run; empty means the whole suite"
-        default: "tests/test_fan_out.py tests/test_observers.py tests/test_cancellation.py tests/test_teardown.py"
+        description: "What to run; empty — the default — is the whole suite"
+        default: ""
       os:
         description: "Which runner to soak"
         default: "windows-latest"
@@ -47,15 +54,12 @@ jobs:
       - name: Sync dependencies
         run: uv sync --group dev
 
-      # The docker tier is skipped on Windows and needs no image; on Linux it
-      # would need one, so the soak leaves that tier out either way.
       - name: Soak
         shell: bash
         run: |
           for i in $(seq 1 ${{ inputs.repeats }}); do
             echo "::group::shard ${{ matrix.shard }} run $i"
-            uv run pytest ${{ inputs.tests }} \
-              -p no:cacheprovider --no-cov -m "not live and not docker" \
+            uv run pytest ${{ inputs.tests }} -p no:cacheprovider \
               || echo "SOAK_FAILURE shard=${{ matrix.shard }} run=$i" | tee -a failures.txt
             echo "::endgroup::"
           done

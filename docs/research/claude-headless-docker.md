@@ -1,3 +1,6 @@
+---
+type: reference
+---
 # Research: running Claude Code headless inside a Linux Docker container
 
 Ticket: [#8](https://github.com/jeffrichley/waystation/issues/8)

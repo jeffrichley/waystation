@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # A run spec's builder methods own the bare names; its stored values take the glossary's

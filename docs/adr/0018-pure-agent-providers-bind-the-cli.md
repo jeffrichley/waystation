@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # Agent providers are pure and bind the agent CLI, not its SDK

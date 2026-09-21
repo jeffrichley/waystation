@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # Captured exec output keeps every byte; what people read shows U+FFFD

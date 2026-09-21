@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # Nothing is bounded or trapped by default: timeouts and signal handling are opt-in

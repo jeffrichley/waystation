@@ -1,0 +1,11 @@
+# Waystation's docs bundle. Hand-authored; vaultwright never writes this file.
+
+[vocabulary]
+# principles:   standing design rules plus the directions tried and rejected
+# skill-config: read by the mattpocock skills at a fixed path (docs/agents/)
+extend = ["principles", "skill-config"]
+
+[exclude]
+# Harness machinery, not concepts (see skill-library#121). A bare name matches
+# only at the bundle root; */ reaches every subdirectory.
+patterns = ["CLAUDE.md", "*/CLAUDE.md"]

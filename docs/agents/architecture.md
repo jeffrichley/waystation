@@ -1,3 +1,6 @@
+---
+type: principles
+---
 # Architecture
 
 The lens to design through. An **ADR** records one decision and why it beat the alternatives; this file is the standing preference you apply to every decision, including the ones too small to get an ADR. If you find yourself writing a *decision* here, it wants `docs/adr/` instead — see [the index](../adr/README.md).

@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # A HEAD target fast-forwards the checkout, and refuses rather than overwrite anything of the user's

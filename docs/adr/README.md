@@ -1,8 +1,13 @@
+---
+type: playbook
+---
 # Decisions
 
 Each ADR is one decision, why it was made, and the options it beat. Reading one saves you re-walking a road that was already walked.
 
 You are not expected to read them all. Scan the **Read it when** column, open the two or three that touch what you're about to change, and move on. If your change contradicts one, say so out loud rather than quietly overriding it — a decision can be revisited, but not by accident.
+
+The rules for writing an ADR and changing one are [the law of ADRs](CLAUDE.md).
 
 ## The shape of the library
 

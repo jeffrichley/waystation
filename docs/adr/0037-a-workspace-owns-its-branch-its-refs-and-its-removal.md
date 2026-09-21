@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # A workspace owns its branch, the refs that travel with it, and its removal

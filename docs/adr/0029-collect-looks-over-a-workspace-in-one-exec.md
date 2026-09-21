@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # Collect looks a workspace over in one exec, through git's own shell

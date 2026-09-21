@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # A run is an immutable value, and nothing integrates unless asked

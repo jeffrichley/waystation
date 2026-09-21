@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # One allowlist, two owners: core resolves its tiers, a backend resolves its own

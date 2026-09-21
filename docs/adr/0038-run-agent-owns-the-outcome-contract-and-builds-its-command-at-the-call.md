@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # `run_agent` owns the Outcome contract, and builds its command at the call

@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # Sandboxes are ephemeral, torn down with `rm -f`, never auto-reaped

@@ -1,3 +1,7 @@
+---
+type: project
+status: deprecated
+---
 # PROTOTYPE — flow-authoring API shapes
 
 **Throwaway. Not runnable — waystation doesn't exist yet.** Reaction artifact

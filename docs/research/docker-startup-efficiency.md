@@ -1,3 +1,6 @@
+---
+type: reference
+---
 # Docker startup efficiency for ephemeral agent sandboxes
 
 Research for [waystation#10](https://github.com/jeffrichley/waystation/issues/10).

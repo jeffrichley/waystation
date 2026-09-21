@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # A stage runner carries a run's guarantees to a hand-composed loop

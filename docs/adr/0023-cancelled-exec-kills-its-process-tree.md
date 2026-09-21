@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # Cancelling an exec kills its process tree inside the sandbox

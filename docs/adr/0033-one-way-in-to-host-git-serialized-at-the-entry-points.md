@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # `GitRepo` is the one way in to host git, and landings serialize at the entry points

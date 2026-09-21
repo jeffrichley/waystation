@@ -22,7 +22,7 @@ TESTS_GUIDE = REPO / "tests" / "CLAUDE.md"
 def test_every_adr_is_listed_in_the_decision_index() -> None:
     """CLAUDE.md sends agents to the index; an ADR missing from it is invisible."""
     index = (ADR_DIR / "README.md").read_text(encoding="utf-8")
-    adrs = {path.name for path in ADR_DIR.glob("*.md")} - {"README.md"}
+    adrs = {path.name for path in ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md")}
 
     missing = sorted(name for name in adrs if name not in index)
     assert not missing, (

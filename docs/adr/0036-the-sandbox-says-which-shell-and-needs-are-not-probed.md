@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: stable
+type: adr
 ---
 
 # The sandbox says which shell it has, and what else it holds is not probed

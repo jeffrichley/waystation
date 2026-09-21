@@ -75,8 +75,11 @@ them and never runs them.
 5. [`control_room.py`](control_room.py): a hardcoded list of checkouts, one
    `Flow` per checkout, and one `fan_out` over them all, consuming results as
    they finish.
-6. `parallel_prompts`: the typer flagship, which fans prompts out onto a shared
-   batch branch with a dashboard and resolver runs. *Coming in #42.*
+6. [`parallel_prompts.py`](parallel_prompts.py): the typer flagship. It fans
+   prompts out onto a shared batch branch under a live `Dashboard`, with a
+   `RunLogFiles` file per run, and answers each `RunConflicted` with a
+   resolver run whose instructions live in
+   [`prompts/resolve.md`](prompts/resolve.md).
 7. [`bring_your_own_agent.py`](bring_your_own_agent.py): a provider of your
    own, for the Cursor agent CLI, reporting its Outcome through
    `outcome_instructions` and `find_outcome`. Needs the `waystation-cursor`

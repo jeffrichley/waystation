@@ -11,7 +11,7 @@
 #   - a writable /tmp: each exec records its process group there, so a
 #     cancelled exec is killed with everything it started (ADR-0023).
 #   - a non-root user that owns /workspace: the agent runs as that user, and
-#     a copied workspace is cloned into /workspace (ADR-0028). On unix the
+#     a copied workspace is cloned into /workspace (ADR-0028). On Linux the
 #     recipe gives it your uid and gid, so a bound workspace is its own.
 # ────────────────────────────────────────────────────────────────────────────
 

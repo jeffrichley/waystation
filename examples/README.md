@@ -71,8 +71,10 @@ them and never runs them.
    `fan_out`. *Coming in #41.*
 6. `parallel_prompts`: the typer flagship, which fans prompts out onto a shared
    batch branch with a dashboard and resolver runs. *Coming in #42.*
-7. `bring_your_own_agent`: a provider for the Cursor agent CLI. *Coming in
-   #43.*
+7. [`bring_your_own_agent.py`](bring_your_own_agent.py): a provider of your
+   own, for the Cursor agent CLI, reporting its Outcome through
+   `outcome_instructions` and `find_outcome`. Needs the `waystation-cursor`
+   image and `CURSOR_API_KEY`.
 
 ## Outside the ladder
 

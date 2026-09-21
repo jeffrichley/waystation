@@ -7,6 +7,11 @@ script that wants only the agent's chatter can say::
 
     configure_logging("INFO")
     logging.getLogger("waystation.agent.output").setLevel(logging.DEBUG)
+
+The records themselves are an interface, not just output: ``waystation.run``
+carries one per lifecycle event, including the two no hook delivers, and
+``run_logger`` puts an adapter's own lines on the same channel. The names,
+levels and extras are documented in ``docs/log-records.md``.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ import logging
 from collections.abc import Iterator, MutableMapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, Literal, get_args
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -24,7 +29,24 @@ from rich.logging import RichHandler
 # must not import this one; observability is its public home.
 from waystation._redaction import redact_argv
 
-__all__ = ["configure_logging", "log_argv", "redact_argv", "tagged_logger"]
+__all__ = ["configure_logging", "log_argv", "redact_argv", "run_logger"]
+
+RunEvent = Literal[
+    "run_start",
+    "workspace_ready",
+    "sandbox_ready",
+    # The two with no hook behind them: the agent stage opens between
+    # sandbox_ready and the first output line, and a cancelled run has no
+    # result for run_end (ADR-0017). The channel is how an observer sees them.
+    "agent_start",
+    "agent_end",
+    "integrated",
+    "run_end",
+    "cancelled",
+]
+"""What a record on the run channel says happened; ``docs/log-records.md``."""
+
+RUN_EVENTS: tuple[RunEvent, ...] = get_args(RunEvent)
 
 # One run reaches a record three ways, and each does a different job: ``tag``
 # binds it explicitly, so the record carries the run even when logged from a
@@ -59,34 +81,65 @@ _RUN_TAG = _RunTag()
 
 
 def tagged_logger(name: str) -> logging.Logger:
-    """A ``waystation`` logger that stamps the running run onto its records.
+    """A logger, by full name, that stamps the running run onto its records.
 
     Not a plain lookup: it installs the filter that does the stamping, which
-    ``logging`` applies only to the logger the call was made on.
+    ``logging`` applies only to the logger the call was made on. Takes a full
+    name because two loggers here are the package's own; ``run_logger`` is
+    what a caller naming a stream of its own wants.
     """
     logger = logging.getLogger(name)
     logger.addFilter(_RUN_TAG)
     return logger
 
 
+def run_logger(name: str) -> logging.Logger:
+    """A logger on the run channel: its lines carry the run and reach its observers.
+
+    For an adapter of your own — a ``SandboxBackend``, an ``AgentProvider`` —
+    whose lines should land in a run's ``RunLogFiles`` file beside the shipped
+    ones::
+
+        _log = run_logger("myco.docker")   # -> waystation.myco.docker
+        _log.info("reusing the warm container")
+
+    ``name`` lands **under** ``waystation``, and that is what puts it on the
+    channel: a run's observers attach to the package logger, and ``logging``
+    routes by dotted name alone, so a logger outside the hierarchy is never
+    reached however it is tagged. Celery's ``get_task_logger`` and Prefect's
+    ``get_run_logger`` parent a caller's logger the same way, for the same
+    reason. Your own loggers are untouched by this — keep ``myco.docker`` for
+    lines that are your library's business rather than a run's.
+
+    The records it makes carry ``run_id`` and ``run_name``, so an observer can
+    tell one run of a fan-out from another. They carry no ``event``: that is
+    the lifecycle channel's, and yours are lines, not events
+    (``docs/log-records.md``).
+    """
+    return tagged_logger(f"{PACKAGE}.{name}")
+
+
 logging.getLogger(PACKAGE).addHandler(logging.NullHandler())
 
-RUN = tagged_logger(f"{PACKAGE}.run")
-"""One INFO line per lifecycle event of a run."""
+# Built through the public function, because there is no privileged path: the
+# streams waystation ships join the channel exactly as a user's adapter does.
 
-AGENT = tagged_logger(f"{PACKAGE}.agent")
+RUN = run_logger("run")
+"""One INFO line per lifecycle event of a run, each tagged with its ``event``."""
+
+AGENT = run_logger("agent")
 """An agent provider's own lines — which credential its preflight found, at INFO."""
 
-AGENT_OUTPUT = tagged_logger(f"{PACKAGE}.agent.output")
+AGENT_OUTPUT = run_logger("agent.output")
 """Every line the agent emits, at DEBUG: an N-way fan-out is unreadable at INFO."""
 
-HOOK = tagged_logger(f"{PACKAGE}.hook")
+HOOK = run_logger("hook")
 """Where ``ctx.log`` writes, so a hook author's lines are separable from ours."""
 
-GIT = tagged_logger(f"{PACKAGE}.git")
+GIT = run_logger("git")
 """Host git command lines, at DEBUG."""
 
-SANDBOX = tagged_logger(f"{PACKAGE}.sandbox")
+SANDBOX = run_logger("sandbox")
 """Sandbox lifecycle and the command lines it execs, at DEBUG."""
 
 

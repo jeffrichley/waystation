@@ -10,13 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, TypeAdapter
 
-from waystation.agents.outcome import OUTCOME_MARKER
-from waystation.agents.protocol import (
-    AgentCommand,
-    AgentEvent,
-    AgentText,
-    OutcomeReported,
-)
+from waystation.agents.outcome import OUTCOME_MARKER, find_outcome
+from waystation.agents.protocol import AgentCommand, AgentEvent, AgentText
 
 __all__ = ["ScriptedAgent", "ScriptedCommit"]
 
@@ -116,17 +111,9 @@ class ScriptedAgent:
         )
 
     def parse(self, line: str) -> Sequence[AgentEvent]:
-        events: list[AgentEvent] = []
-        stripped = line.strip()
-        if stripped.startswith(OUTCOME_MARKER):
-            payload = stripped[len(OUTCOME_MARKER) :].strip()
-            if payload:
-                try:
-                    raw: Any = json.loads(payload)
-                except json.JSONDecodeError:
-                    raw = payload
-                events.append(OutcomeReported(raw=raw))
-                return events
-        if line:
-            events.append(AgentText(text=line))
-        return events
+        # The public helper, so playback reads a marker exactly as a
+        # provider author's agent would be read (#43).
+        reported = find_outcome(line)
+        if reported is not None:
+            return [reported]
+        return [AgentText(text=line)] if line else []

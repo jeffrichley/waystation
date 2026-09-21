@@ -61,10 +61,12 @@ them and never runs them.
    `DockerSandbox`, awaited and consumed with `match` over the three result
    types. It lands on the HEAD of the repo you run it from, so read its loud
    note first.
-2. `observability`: hooks, `configure_logging`, `on_agent_output`, `ctx.log`
-   and `EventLog`. *Coming in #40.*
-3. `primitives`: the run loop composed by hand, with a two-line `NoSandbox`
-   swap. *Coming in #40.*
+2. [`observability.py`](observability.py): hooks, `configure_logging`,
+   `on_agent_output` streaming the agent's narration, `ctx.log` and an
+   `EventLog` file. Lands on the branch `agents/observability`.
+3. [`primitives.py`](primitives.py): the run loop composed by hand from its
+   five primitives through the stage runner, with a two-line `NoSandbox`
+   swap. Lands on the branch `agents/primitives`.
 4. [`implement_then_review.py`](implement_then_review.py): an implement run
    lands on a branch, a review run reports a `Verdict` without integrating,
    and a rejection gets one bounded fix run and one re-review. The review
@@ -78,8 +80,10 @@ them and never runs them.
    `RunLogFiles` file per run, and answers each `RunConflicted` with a
    resolver run whose instructions live in
    [`prompts/resolve.md`](prompts/resolve.md).
-7. `bring_your_own_agent`: a provider for the Cursor agent CLI. *Coming in
-   #43.*
+7. [`bring_your_own_agent.py`](bring_your_own_agent.py): a provider of your
+   own, for the Cursor agent CLI, reporting its Outcome through
+   `outcome_instructions` and `find_outcome`. Needs the `waystation-cursor`
+   image and `CURSOR_API_KEY`.
 
 ## Outside the ladder
 

@@ -215,6 +215,18 @@ async def test_raw_invalid_outcome_string_returns_outcome_invalid(
 
 
 @pytest.mark.git
+async def test_a_marker_holding_null_is_an_invalid_outcome_not_a_missing_one(
+    host_repo: Path,
+) -> None:
+    """The agent did report; what it reported was ``null`` (#43, ADR-0019)."""
+    flow = Flow(host_repo, agent=ScriptedAgent(outcome="null"), sandbox=NoSandbox())
+    result = await flow.run("null", outcome=Answer)
+    assert isinstance(result, RunFailed)
+    assert isinstance(result.failure, OutcomeInvalid)
+    assert result.failure.raw is None
+
+
+@pytest.mark.git
 @pytest.mark.asyncio
 async def test_bad_base_ref_returns_command_failed(host_repo: Path) -> None:
     from waystation import CommandFailed

@@ -7,11 +7,12 @@ import contextlib
 import inspect
 import os
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from typing import Any, Literal
 
 from pydantic import TypeAdapter, ValidationError
 
+from waystation._outcome import outcome_schema
 from waystation.agents.protocol import (
     AgentCommand,
     AgentLine,
@@ -62,17 +63,24 @@ class _AgentBound(Exception):
 _NOT_FOUND = 127
 
 
-async def run_agent[OutcomeT](
+def run_agent[OutcomeT](
     sandbox: Sandbox,
     provider: AgentProvider,
-    command: AgentCommand,
+    prompt: str,
     outcome_type: type[OutcomeT],
     *,
     timeouts: Timeouts | None = None,
     on_output: Callable[[AgentLine], Awaitable[None] | None] | None = None,
     host_env: Mapping[str, str] | None = None,
-) -> tuple[AgentExit, OutcomeT]:
-    """Exec ``command``, parse stdout lines, validate the last valid Outcome report.
+) -> Coroutine[Any, Any, tuple[AgentExit, OutcomeT]]:
+    """Run ``prompt`` through ``provider`` and validate the Outcome it reports.
+
+    ``outcome_type`` is the whole Outcome contract: the schema the provider
+    is asked to deliver is derived from it, and every report is validated
+    against it, so the two cannot disagree (ADR-0019). The provider
+    builds its command here, when ``run_agent`` is called; awaiting the
+    result execs it, parses stdout lines and returns the last valid report
+    (ADR-0038).
 
     ``on_output`` receives every stdout and stderr line as an ``AgentLine``,
     awaited before the next line is read.
@@ -82,10 +90,38 @@ async def run_agent[OutcomeT](
     one environment however long it takes (ADR-0034). On its own it reads
     ``os.environ``, as running a command by hand would.
 
-    Raises ``StageError`` for agent-stage failures (non-zero exit, missing/invalid
-    Outcome, silence/wall timeout). An ``Exception`` from ``parse`` or
-    ``on_output`` cancels the exec, then propagates unchanged.
+    Raises ``TypeError`` at the call for an ``outcome_type`` that is not
+    object-shaped, before the provider is asked for anything, and an
+    ``Exception`` from ``provider.command`` propagates from the call
+    unchanged: nothing has started, so there is nothing to await.
+
+    Awaiting raises ``StageError`` for agent-stage failures (non-zero exit,
+    missing/invalid Outcome, silence/wall timeout). An ``Exception`` from
+    ``parse`` or ``on_output`` cancels the exec, then propagates unchanged.
     """
+    command = provider.command(prompt, outcome_schema(outcome_type))
+    return _run(
+        sandbox,
+        provider,
+        command,
+        outcome_type,
+        timeouts=timeouts,
+        on_output=on_output,
+        host_env=host_env,
+    )
+
+
+async def _run[OutcomeT](
+    sandbox: Sandbox,
+    provider: AgentProvider,
+    command: AgentCommand,
+    outcome_type: type[OutcomeT],
+    *,
+    timeouts: Timeouts | None,
+    on_output: Callable[[AgentLine], Awaitable[None] | None] | None,
+    host_env: Mapping[str, str] | None,
+) -> tuple[AgentExit, OutcomeT]:
+    """Exec ``command`` and validate what it reports; see ``run_agent``."""
     bounds = timeouts if timeouts is not None else Timeouts()
     adapter = TypeAdapter(outcome_type)
     last_valid: OutcomeT | None = None

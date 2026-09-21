@@ -11,9 +11,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import TypeAdapter
-from pydantic.json_schema import GenerateJsonSchema
-
+from waystation._outcome import outcome_schema
 from waystation.agents.protocol import AgentLine, AgentProvider
 from waystation.agents.run_agent import run_agent
 from waystation.collect import PatchSeries, collect
@@ -54,20 +52,6 @@ from waystation.workspace import Workspace, prepare_workspace
 __all__ = ["Flow", "RunSpec"]
 
 _logger = tagged_logger("waystation")
-
-
-def _assert_object_outcome(outcome_type: type[Any]) -> None:
-    adapter = TypeAdapter(outcome_type)
-    schema = adapter.json_schema(schema_generator=GenerateJsonSchema)
-    # Unwrap trivial refs if present; reject non-object roots.
-    while "$ref" in schema and "$defs" in schema:
-        ref = schema["$ref"]
-        name = ref.rsplit("/", 1)[-1]
-        schema = schema["$defs"][name]
-    schema_type = schema.get("type")
-    if schema_type != "object" and "properties" not in schema:
-        msg = f"outcome type must be an object-shaped type, got {outcome_type!r}"
-        raise TypeError(msg)
 
 
 def _log_unreported(run_id: str, err: StageError, why: str) -> None:
@@ -283,7 +267,7 @@ class Flow:
         *,
         outcome: type[OutcomeT] = Summary,  # type: ignore[assignment]
     ) -> RunSpec[OutcomeT]:
-        _assert_object_outcome(outcome)
+        outcome_schema(outcome)  # refused here as in run_agent (ADR-0038)
         return RunSpec(
             repo=Path(self.repo),
             provider=self.agent,
@@ -714,32 +698,35 @@ class RunSpec[OutcomeT]:
     ) -> OutcomeT | None:
         """Agent stage: exec the provider's command, then ``agent_end``."""
         record.stage = "agent"
-        prompt_text = ctx.prompt
-        schema = TypeAdapter(self.outcome_type).json_schema()
-        try:
-            command = self.provider.command(prompt_text, schema)
-        except Exception as exc:
-            raise StageError("agent", Errored(exception=exc)) from exc
-
-        record.log.agent_start(prompt_text)
 
         async def _on_output(line: AgentLine) -> None:
             record.log.on_agent_output(ctx, line)
             await self.hook_registry.fire("agent_output", "agent", ctx, line)
 
+        prompt_text = ctx.prompt
+        # Built before agent_start: a provider that cannot build its command
+        # never started an agent, so no agent_end fires for it either
+        # (ADR-0038).
+        try:
+            agent_run = run_agent(
+                sandbox,
+                self.provider,
+                prompt_text,
+                self.outcome_type,
+                timeouts=self.bounds,
+                on_output=_on_output,
+                host_env=host_env,
+            )
+        except Exception as exc:
+            raise StageError("agent", Errored(exception=exc)) from exc
+
+        record.log.agent_start(prompt_text)
+
         outcome: OutcomeT | None = None
         try:
             record.agent, outcome = await run.stage(
                 "agent",
-                run_agent(
-                    sandbox,
-                    self.provider,
-                    command,
-                    self.outcome_type,
-                    timeouts=self.bounds,
-                    on_output=_on_output,
-                    host_env=host_env,
-                ),
+                agent_run,
                 # run_agent owns silence, wall and completion grace, and a
                 # cancellation is meant to stop an agent, not wait for one.
                 bound=None,

@@ -362,7 +362,7 @@ def stages(bounds: Timeouts = _NO_BOUNDS) -> _StageRunner:
                 try:
                     exit, outcome = await run.stage(
                         "agent",
-                        run_agent(box, agent, cmd, Answer),
+                        run_agent(box, agent, prompt, Answer),
                         bound=None,
                         interruptible=True,
                     )

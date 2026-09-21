@@ -11,8 +11,9 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from helpers import ShellAgent
+from helpers import ShellAgent, lifecycle
 from waystation import (
+    AgentExit,
     AgentExited,
     Errored,
     Flow,
@@ -131,7 +132,7 @@ async def test_last_valid_outcome_wins_over_later_invalid(
 @pytest.mark.git
 @pytest.mark.asyncio
 async def test_provider_command_exception_returns_errored(
-    host_repo: Path,
+    host_repo: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     class BoomAgent:
         def preflight(self) -> None:
@@ -144,13 +145,20 @@ async def test_provider_command_exception_returns_errored(
             return []
 
     flow = Flow(host_repo, agent=BoomAgent(), sandbox=NoSandbox())
-    result = await flow.run("boom", outcome=Answer)
+    ended: list[AgentExit] = []
+    flow.on_agent_end(lambda ctx, agent: ended.append(agent))
+    with caplog.at_level(logging.INFO, logger="waystation"):
+        result = await flow.run("boom", outcome=Answer)
 
     assert isinstance(result, RunFailed)
     assert result.stage == "agent"
     assert isinstance(result.failure, Errored)
     assert isinstance(result.failure.exception, RuntimeError)
     assert "command blew up" in str(result.failure.exception)
+    # No command, so no agent ever started: nothing announces or ends one
+    # (ADR-0038).
+    assert ended == []
+    assert not any(r.getMessage().startswith("agent start") for r in lifecycle(caplog))
 
 
 @pytest.mark.git
@@ -181,9 +189,8 @@ async def test_run_agent_primitive_raises_stage_error(host_repo: Path) -> None:
         backend = NoSandbox()
         agent = ScriptedAgent(outcome=None)
         async with backend.start(ws, env={}) as sandbox:
-            cmd = agent.command("p", {"type": "object"})
             with pytest.raises(StageError) as caught:
-                await run_agent(sandbox, agent, cmd, Answer)
+                await run_agent(sandbox, agent, "p", Answer)
             assert isinstance(caught.value, WaystationError)
             assert caught.value.stage == "agent"
             assert isinstance(caught.value.failure, OutcomeMissing)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import secrets
 import shutil
@@ -12,7 +11,6 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import get_args
 
-from waystation._cancellation import run_to_end
 from waystation.errors import PreflightError, StageError
 from waystation.observability import SANDBOX
 from waystation.results import CommandFailed, Errored, Failure, Refused
@@ -30,8 +28,7 @@ from waystation.sandbox._docker_plans import (
     plan_ping,
     resolve_transport,
 )
-from waystation.sandbox._host import HostRunner, allowlisted_env, discard_workspace
-from waystation.sandbox.processes import host_processes
+from waystation.sandbox.host import HostRunner, allowlisted_env, discard_workspace
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.sandbox.transport import clone_in
 from waystation.tails import bound_tail
@@ -64,21 +61,16 @@ class _Container:
         planned = plan_exec(
             self.name, argv, env=env or {}, stdin=stdin is not None, group=group
         )
-        try:
-            return await self._runner.run(
-                planned,
-                stdin=stdin,
-                capture=capture,
-                on_stdout=on_stdout,
-                on_stderr=on_stderr,
-            )
-        except asyncio.CancelledError:
-            # The runner killed the client, which leaves what it started in
-            # the container running: that goes too, before the cancellation
-            # does (ADR-0023). One more cancellation meanwhile adds nothing
-            # to the one already on its way.
-            await run_to_end(self._kill(group), lambda _: None)
-            raise
+        return await self._runner.run(
+            planned,
+            stdin=stdin,
+            capture=capture,
+            on_stdout=on_stdout,
+            on_stderr=on_stderr,
+            # Killing the client leaves what it started in the container
+            # running: that goes too, before the cancellation does (ADR-0023).
+            on_cancel=lambda: self._kill(group),
+        )
 
     async def _kill(self, group: str) -> None:
         """Kill a cancelled exec's group; a failure is logged, never raised.
@@ -217,7 +209,7 @@ class DockerSandbox:
         # kills `docker run` before it says what it made. A create the daemon
         # finishes only after that `rm -f` is left running, found by its run
         # label (ADR-0014). The suffix keeps two starts of one run id apart.
-        runner = HostRunner(host_processes())
+        runner = HostRunner()
         container = _Container(
             name=f"waystation-{ws.run_id}-{secrets.token_hex(3)}", _runner=runner
         )
@@ -304,11 +296,8 @@ def _image_missing(image: str) -> Refused:
 
 async def _docker(argv: Sequence[str]) -> ExecResult:
     """One docker CLI call on the host, killed with its tree if cancelled."""
-    runner = HostRunner(host_processes())
-    try:
+    with HostRunner() as runner:
         return await runner.run(argv)
-    finally:
-        runner.release()
 
 
 async def _docker_or_raise(argv: Sequence[str]) -> ExecResult:

@@ -1,9 +1,11 @@
 """What every sandbox backend does on the host, whatever it isolates with.
 
 ``NoSandbox`` runs the agent here; ``DockerSandbox`` runs the ``docker`` client
-here. Either way one host process is spawned, its two streams are read a line
-at a time, and its tree is killed if the exec is cancelled (ADR-0023) — so
-there is one runner, not one per backend (ADR-0010).
+here; a bwrap backend would run ``bwrap`` here. Either way one host process is
+spawned, its two streams are read a line at a time, and its tree is killed if
+the exec is cancelled (ADR-0023) — so there is one runner, and it is public,
+because a backend that had to rewrite it would be rewriting most of what
+``Sandbox.exec`` promises (ADR-0035).
 """
 
 from __future__ import annotations
@@ -11,13 +13,16 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
+from types import TracebackType
+from typing import Self
 
+from waystation._cancellation import run_to_end
 from waystation._git import decode, encode
 from waystation.observability import SANDBOX, log_argv
-from waystation.sandbox.processes import ProcessStrategy, ProcessTree
+from waystation.sandbox.processes import ProcessStrategy, ProcessTree, host_processes
 from waystation.sandbox.protocol import ExecResult, LineCallback
 from waystation.tails import TailBuffer
 from waystation.workspace import remove_workspace
@@ -67,8 +72,11 @@ def allowlisted_env(
 def discard_workspace(path: str | os.PathLike[str], *, attempts: int = 5) -> None:
     """Remove a workspace dir; retry briefly on Windows file-lock races.
 
-    A teardown failure is logged, never raised: it must not change a result
-    that is already decided (ADR-0016).
+    What a backend owes the workspace it was handed, in one call: git writes
+    its objects read-only and Windows refuses to unlink those, an exec that
+    has only just exited can still hold a handle, and a teardown failure is
+    logged rather than raised, because it must not change a result that is
+    already decided (ADR-0016).
     """
     last: OSError | None = None
     for i in range(attempts):
@@ -103,10 +111,37 @@ async def _read_line(stream: asyncio.StreamReader) -> bytes:
 
 @dataclass(slots=True)
 class HostRunner:
-    """Runs one sandbox's host processes, and lets their trees go with it."""
+    """Runs one sandbox's host processes, and lets their trees go with it.
 
-    processes: ProcessStrategy
+    Most of what ``Sandbox.exec`` promises is here, so a backend that drives
+    host processes is a thin adapter rather than a rewrite: a line of any
+    length, output kept byte for byte while callbacks and tails stay
+    readable, bounded tails when nothing is captured, and a cancellation that
+    kills the whole tree before it completes (ADR-0035). What stays the
+    backend's own is the working directory, the environment it built with
+    ``allowlisted_env``, and — for a backend whose work outlives the host
+    process it spawned — the ``on_cancel`` that reaches it.
+
+    One runner belongs to one sandbox: ``release`` lets go of every tree its
+    execs started, and using it as a context manager does that for you::
+
+        with HostRunner() as runner:
+            result = await runner.run(["git", "status"], cwd=workspace)
+    """
+
+    processes: ProcessStrategy = field(default_factory=host_processes)
     _trees: list[ProcessTree] = field(default_factory=list)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.release()
 
     async def run(
         self,
@@ -118,6 +153,7 @@ class HostRunner:
         on_stderr: LineCallback | None = None,
         cwd: str | None = None,
         env: Mapping[str, str] | None = None,
+        on_cancel: Callable[[], Awaitable[None]] | None = None,
     ) -> ExecResult:
         """Run ``argv`` on the host: stdin in, both streams out a line at a time.
 
@@ -126,6 +162,13 @@ class HostRunner:
         keeps only the tails. ``env=None`` inherits the host's. Captured
         output keeps every byte; callbacks and tails read one that is not
         UTF-8 as U+FFFD, as ``Sandbox.exec`` promises (ADR-0030).
+
+        ``on_cancel`` is for a backend whose exec outlives the host process
+        it spawned — ``docker exec``, an ssh, a pod exec. Killing the client
+        leaves the work running over there, so the runner awaits
+        ``on_cancel`` to its end before the cancellation goes on, however
+        insistently the caller cancels meanwhile. It is cleanup, so a failure
+        in it is logged rather than raised (ADR-0017).
         """
         log_argv(SANDBOX, argv)
         popen_kwargs: dict[str, object] = {
@@ -203,6 +246,8 @@ class HostRunner:
             pump_err.cancel()
             with suppress(asyncio.CancelledError):
                 await asyncio.gather(pump_out, pump_err)
+            if on_cancel is not None:
+                await self._clean_up(on_cancel)
             raise
 
         if capture:
@@ -220,6 +265,20 @@ class HostRunner:
             stdout=stdout_tail.text(),
             stderr=stderr_tail.text(),
         )
+
+    @staticmethod
+    async def _clean_up(on_cancel: Callable[[], Awaitable[None]]) -> None:
+        """Reach what the killed process left running elsewhere, to the end.
+
+        One more cancellation meanwhile adds nothing to the one already on
+        its way, so it is held rather than spent; a failure is logged,
+        because raising would put an error where a cancellation belongs
+        (ADR-0017).
+        """
+        try:
+            await run_to_end(on_cancel(), lambda _: None)
+        except Exception:
+            SANDBOX.exception("failed to clean up after a cancelled exec")
 
     def release(self) -> None:
         """The sandbox is going away: let go of every tree its execs started."""

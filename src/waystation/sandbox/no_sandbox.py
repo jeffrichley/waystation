@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from waystation.sandbox._host import HostRunner, allowlisted_env, discard_workspace
+from waystation.sandbox.host import HostRunner, allowlisted_env, discard_workspace
 from waystation.sandbox.processes import ProcessStrategy, host_processes
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.workspace import Workspace

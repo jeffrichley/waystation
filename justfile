@@ -10,7 +10,7 @@ default:
 check:
     uv run ruff check src tests examples
     uv run ruff format --check src tests examples
-    uv run mypy
+    uv run --group examples mypy
     uv run pytest
 
 # Runnable demo: ScriptedAgent → Integration onto a named branch.
@@ -30,3 +30,15 @@ test-image:
 [windows]
 test-image:
     docker build -t waystation-test tests/sandbox
+
+# Build the examples' image (examples/image/Dockerfile): `waystation-dev`, or
+# `waystation-cursor` with `just example-image cursor`.
+[unix]
+example-image target="dev":
+    docker build --target {{target}} --build-arg UID="$(id -u)" --build-arg GID="$(id -g)" -t waystation-{{target}} examples/image
+
+# Build the examples' image (examples/image/Dockerfile): `waystation-dev`, or
+# `waystation-cursor` with `just example-image cursor`.
+[windows]
+example-image target="dev":
+    docker build --target {{target}} -t waystation-{{target}} examples/image

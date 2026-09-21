@@ -43,7 +43,12 @@ class Sandbox(Protocol):
     """
 
     workspace: str
-    shell: Sequence[str]
+
+    @property
+    def shell(self) -> Sequence[str]:
+        """Read only when something wants a shell, so a backend may resolve
+        it lazily — a plain attribute satisfies this just as well."""
+        ...
 
     async def exec(
         self,

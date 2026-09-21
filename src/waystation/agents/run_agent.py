@@ -226,8 +226,14 @@ async def run_agent[OutcomeT](
     _arm_silence()
 
     async def _exec() -> ExecResult:
+        # A script needs the sandbox's shell; an argv does not, so it is not
+        # asked for one. A sandbox may resolve its shell only when read, and
+        # a host that has none still runs a provider that binds a CLI (#101).
+        argv = (
+            command.argv if command.script is None else command.argv_in(sandbox.shell)
+        )
         return await sandbox.exec(
-            list(command.argv_in(sandbox.shell)),
+            list(argv),
             stdin=command.stdin,
             env=exec_env,
             capture=False,

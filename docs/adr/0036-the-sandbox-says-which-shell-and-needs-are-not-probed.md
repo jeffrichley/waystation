@@ -14,7 +14,17 @@ Why an argv prefix and not a path: a shell that needs arguments of its own can s
 
 Why finding the host's sh is a function and not a `ProcessStrategy` method: it searches rather than branches. `shutil.which("sh")`, then beside git, because Git for Windows puts only `Git\cmd` on `PATH` while shipping an sh in `Git\bin`. There is no platform `if` to turn into a strategy, and widening a protocol users implement to add one would be an interface tax (`architecture.md`). It lives in `sandbox/host.py`, already "what every sandbox backend does on the host", rather than in `processes.py`, which is about how a process is spawned and killed.
 
-Why `NoSandbox` preflights it: the backend that runs host processes is the one that needs a host sh, so it is the one that should say the host has none. That check used to live on `ScriptedAgent`, which is how a provider ended up caring which backend was about to run it. `preflight` now asks the host's git first — every run needs git whatever its agent and sandbox, so it is the answer worth giving when more than one is true, and a batch that cannot run at all no longer pays a docker daemon ping to find that out. On Windows the two coincide outright: the sh `host_shell` falls back to is the one Git for Windows ships. A test holds the order.
+Why `preflight` asks the host's git first — every run needs git whatever its agent and sandbox, so it is the answer worth giving when more than one is true, and a batch that cannot run at all no longer pays a docker daemon ping to find that out. On Windows the two coincide outright: the sh `host_shell` falls back to is the one Git for Windows ships. A test holds the order.
+
+## Amended by #101: found when asked, and nameable
+
+As first written this decision forced twice, and gave no way out. `NoSandbox.preflight()` refused a host without an sh, and `NoSandbox.start()` resolved one every time — so a `ClaudeCode` run, which names an argv and never wants a shell, could not start on such a host. That is the checking this same ADR turns down for an image, one paragraph earlier, applied to the host instead. And `host_shell()` picked whatever it found, with no way to ask for a different one, which is the number-without-a-knob CLAUDE.md rules out.
+
+So: `Sandbox.shell` is a read-only member, resolved when something reads it and not before; `NoSandbox` preflights nothing; and **`WAYSTATION_SH`** names a shell for a host whose own is somewhere unusual.
+
+The override is an environment variable and **not** an argument on `NoSandbox`, because a constructor argument puts a machine-specific path into the flow script, which is the portability the rest of this decision just bought. Every tool with this problem lands in the same place: Bazel's `BAZEL_SH` is an environment variable and never a `BUILD` file entry; Ansible's `ansible_shell_executable` is an *inventory* variable, so the playbook stays portable; npm's `script-shell` lives in `.npmrc`, and the standing request to allow it in `package.json` is still declined. waystation has no inventory layer — a sandbox spec lives in the flow script by design (ADR-0003) — so Bazel's shape is the one that fits.
+
+`DockerSandbox` gets no override: which shell an image has is the image's property, and Docker's own answer is the `SHELL` instruction. `sh` is already among the things the image must bring (ADR-0028).
 
 ## Considered options
 
@@ -40,6 +50,6 @@ Reopen it when any of these is true: a batch commonly mixes several (agent, sand
 - `ScriptedAgent` lost `shell=` and its host-sh lookup, and its `preflight` does nothing. `ShellAgent` and `a_run` in the tests lost theirs.
 - `clone_in` no longer names `sh`, which deleted `test_clone_in.py`'s `_HostSh` double entirely.
 - `preflight` checks the host's git before agents and sandboxes. A batch with a bad docker daemon *and* no git now reports git, and stops before pinging the daemon.
-- `NoSandbox` on a host without sh fails preflight where it used to fail per-provider, or not at all for a provider that never asked.
+- `NoSandbox` preflights nothing (#101). A host without an sh runs any provider that names an argv; one that names a script fails when the shell is read, saying to set `WAYSTATION_SH`.
 
 Decided in [#77](https://github.com/jeffrichley/waystation/issues/77).

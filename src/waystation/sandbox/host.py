@@ -31,6 +31,10 @@ from waystation.workspace import remove_workspace
 
 __all__ = ["HostRunner", "allowlisted_env", "discard_workspace", "host_shell"]
 
+# Names the host's sh, for a machine whose own is somewhere unusual. On the
+# machine, never in the flow script, so a script stays portable (ADR-0036).
+_SH_OVERRIDE = "WAYSTATION_SH"
+
 
 def allowlisted_env(
     *,
@@ -78,11 +82,24 @@ def host_shell() -> Sequence[str]:
     running host processes wants. An absolute path, because a sandbox's own
     ``PATH`` is not what Windows looks a program up on (ADR-0029).
 
-    Raises ``FileNotFoundError`` when the host has no sh. On Windows that is
+    ``WAYSTATION_SH`` names one instead, for a host whose sh is somewhere
+    nobody would look, or that has two and wants the other. It is an
+    environment variable rather than an argument on ``NoSandbox`` because
+    the answer belongs to the machine: a flow script naming a path stops
+    running on anyone else's, which is what Bazel's ``BAZEL_SH`` and
+    Ansible's inventory-level ``ansible_shell_executable`` both avoid, and
+    what npm's `script-shell` is still argued about for not avoiding
+    (ADR-0036).
+
+    Raises ``FileNotFoundError`` when the host has no sh — which nothing
+    asks it to answer unless something wants a shell. On Windows that is
     the ordinary case for a machine without Git for Windows, whose installer
     puts only ``Git\cmd`` on ``PATH`` while shipping an sh beside it — so it
     is looked for there before giving up.
     """
+    override = os.environ.get(_SH_OVERRIDE)
+    if override:
+        return (override, "-c")
     found = shutil.which("sh")
     if found:
         return (found, "-c")
@@ -92,7 +109,10 @@ def host_shell() -> Sequence[str]:
         for candidate in (root / "bin" / "sh.exe", root / "usr" / "bin" / "sh.exe"):
             if candidate.is_file():
                 return (str(candidate), "-c")
-    msg = "POSIX sh not found on this host (install Git Bash on Windows)"
+    msg = (
+        "POSIX sh not found on this host: install one (Git Bash on Windows), "
+        f"or set {_SH_OVERRIDE} to the one you want used"
+    )
     raise FileNotFoundError(msg)
 
 

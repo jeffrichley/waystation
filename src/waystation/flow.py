@@ -267,7 +267,7 @@ class Flow:
         *,
         outcome: type[OutcomeT] = Summary,  # type: ignore[assignment]
     ) -> RunSpec[OutcomeT]:
-        outcome_schema(outcome)  # refused here as well as in run_agent (#80)
+        outcome_schema(outcome)  # refused here as in run_agent (ADR-0038)
         return RunSpec(
             repo=Path(self.repo),
             provider=self.agent,

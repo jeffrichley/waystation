@@ -16,9 +16,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, TypeAdapter
 
-from waystation import AgentCommand, Flow, NoSandbox, run_agent
+from waystation import AgentCommand, Flow, NoSandbox, Sandbox, run_agent
 from waystation.agents import AgentEvent
-from waystation.sandbox.protocol import Sandbox
 
 
 class Answer(BaseModel):

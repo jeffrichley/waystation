@@ -21,6 +21,7 @@ from waystation import (
     RunFailed,
     RunSucceeded,
     ScriptedCommit,
+    Squash,
     Summary,
 )
 from waystation.integration import (
@@ -105,14 +106,7 @@ async def test_a_conflict_leaves_the_host_as_it_was(
     )
 
     assert isinstance(result, RunConflicted)
-    after = host_state(host_repo)
-    preserved = f"refs/heads/{result.preserved} "
-    after["refs"] = "\n".join(
-        line
-        for line in str(after["refs"]).splitlines()
-        if not line.startswith(preserved)
-    )
-    assert after == before
+    assert host_state(host_repo, ignoring=result.preserved) == before
 
 
 # Claims shared.txt, then gives it back: patch by patch the first commit
@@ -280,11 +274,16 @@ class Raced:
         return await self.inner.integrate(racing, series)
 
 
+@pytest.mark.parametrize(
+    "strategy",
+    [Integration(TARGET), Integration(TARGET, mechanism="merge"), Squash(TARGET)],
+    ids=["apply", "merge", "squash"],
+)
 async def test_a_target_moved_before_the_swap_is_refused_and_stays_moved(
-    host_repo: Path,
+    host_repo: Path, strategy: IntegrationStrategy
 ) -> None:
     git(host_repo, "branch", TARGET)
-    raced = Raced(Integration(TARGET))
+    raced = Raced(strategy)
 
     result = await a_run(host_repo).integrate(raced)
 

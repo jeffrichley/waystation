@@ -28,6 +28,7 @@ from waystation import (
     integrate,
     preserve_series,
 )
+from waystation.integration import Conflict
 
 TARGET = "agents/landed"
 
@@ -338,8 +339,9 @@ def test_the_shipped_strategy_takes_no_private_path_to_host_git() -> None:
     user's strategy could not do what it does. Only ``_repo_git``, which is
     what ``GitRepo`` runs, reaches the private runner now.
 
-    (``_committer`` still goes through ``_git.git_identity``: ADR-0033 puts
-    the identity check there, in one place, for the workspace path too.)
+    (``GitRepo``'s landing steps still go through ``_git.git_identity``:
+    ADR-0033 puts the identity check there, in one place, for the workspace
+    path too.)
     """
     from waystation import integration
 
@@ -355,3 +357,99 @@ def test_the_shipped_strategy_takes_no_private_path_to_host_git() -> None:
     }
 
     assert runs_git == {"_repo_git"}, runs_git
+
+
+@pytest.mark.unit
+def test_the_shipped_strategies_name_nothing_private_to_land_a_series() -> None:
+    """``Integration`` and ``Squash`` are policy over public steps (ADR-0040).
+
+    Every name either strategy's body reaches for is public: ``GitRepo``'s
+    landing steps and the result values. A private helper of the module is
+    a path a user's strategy could not take — the thing #81 removed.
+    """
+    from waystation import integration
+
+    tree = ast.parse(Path(integration.__file__).read_text(encoding="utf-8"))
+    # The module's own private names, and what it imports from private modules.
+    private = {
+        name
+        for name, value in vars(integration).items()
+        if (name.startswith("_") and not name.startswith("__"))
+        or str(getattr(value, "__module__", "")).startswith("waystation._")
+    }
+    strategies = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name in ("Integration", "Squash")
+    ]
+    reached = {
+        name.id
+        for strategy in strategies
+        for name in ast.walk(strategy)
+        if isinstance(name, ast.Name)
+    }
+
+    assert len(strategies) == 2
+    assert {"_read_ref", "run_git"} <= private, "the scan sees what it guards"
+    assert reached & private == set(), reached & private
+
+
+@dataclass(frozen=True)
+class LastWordOnly:
+    """A user's rule: land only the series' last commit, cherry-picked.
+
+    Policy over all five public landing steps, and nothing in it is
+    plumbing: which base to merge from, and which parent to commit on.
+    """
+
+    target: str
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        target = await repo.read_target(self.target, base=series.base_sha)
+        commits = await repo.commit_series(series)
+        parent = commits[-2] if len(commits) > 1 else series.base_sha
+        tree = await repo.merge_tree(base=parent, ours=target.tip, theirs=commits[-1])
+        if isinstance(tree, Conflict):
+            return self._report(target.tip, None, (), tree)
+        tip = await repo.commit_tree(tree, target.tip, like=commits[-1])
+        await repo.move_target(target, tip)
+        return self._report(target.tip, tip, (tip,), None)
+
+    def _report(
+        self,
+        before: str,
+        after: str | None,
+        landed: tuple[str, ...],
+        conflict: Conflict | None,
+    ) -> IntegrationReport:
+        return IntegrationReport(
+            strategy="LastWordOnly",
+            target=self.target,
+            mechanism="cherry-pick",
+            target_before=before,
+            target_after=after,
+            landed=landed,
+            conflict=conflict,
+        )
+
+
+@pytest.mark.git
+async def test_a_strategy_of_a_users_own_lands_through_the_public_steps(
+    host_repo: Path,
+) -> None:
+    """#18 story 113, with the plumbing in reach: a rule is its policy alone."""
+    base = git(host_repo, "rev-parse", "HEAD")
+    commit_on(host_repo, "work", {"one.txt": "1\n"}, message="one")
+    commit_on(host_repo, "work", {"two.txt": "2\n"}, message="two")
+    series = await PatchSeries.from_range(host_repo, base, "work")
+    moved = commit_on(host_repo, TARGET, {"theirs.txt": "t\n"})
+
+    report = await integrate(host_repo, series, LastWordOnly(TARGET))
+
+    (landed,) = report.landed
+    assert report.target_after == landed == git(host_repo, "rev-parse", TARGET)
+    assert git(host_repo, "rev-parse", f"{TARGET}^") == moved
+    assert git(host_repo, "log", "-1", "--format=%s", TARGET) == "two"
+    files = git(host_repo, "ls-tree", "--name-only", TARGET).splitlines()
+    assert "two.txt" in files and "theirs.txt" in files
+    assert "one.txt" not in files, "only the last word landed"

@@ -189,10 +189,21 @@ def subjects(repo: Path, revisions: str) -> list[str]:
     return git(repo, "log", "--format=%s", revisions).splitlines()
 
 
-def host_state(repo: Path) -> dict[str, object]:
-    """What a landing must never touch: refs, HEAD, the index and the tree."""
+def host_state(repo: Path, *, ignoring: str | None = None) -> dict[str, object]:
+    """What a landing must never touch: refs, HEAD, the index and the tree.
+
+    ``ignoring`` leaves one branch out of the refs — the target a landing was
+    meant to move, or the preservation branch a run kept — so the rest can
+    still be compared whole.
+    """
+    listed = git(repo, "for-each-ref", "--format=%(refname) %(objectname)")
+    skipped = f"refs/heads/{ignoring} "
     return {
-        "refs": git(repo, "for-each-ref", "--format=%(refname) %(objectname)"),
+        "refs": "\n".join(
+            line
+            for line in listed.splitlines()
+            if ignoring is None or not line.startswith(skipped)
+        ),
         "head": git(repo, "symbolic-ref", "HEAD"),
         "index": (repo / ".git" / "index").read_bytes(),
         "tree": {

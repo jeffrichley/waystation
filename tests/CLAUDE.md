@@ -36,7 +36,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `git(repo, *args)` | run git in `repo`, stdout stripped, raises on non-zero |
 | `git_bytes(repo, *args)` | the same, but stdout exactly as git wrote it — for a test about bytes, where decoding would hide the bug |
 | `commit_on(repo, branch, files)` | a commit on `branch` (made at HEAD if missing) with the checkout put back — a target that moved, or a range for `PatchSeries.from_range`; returns the tip |
-| `host_state(repo)` | the host's refs, HEAD, index and tree in one value — compare before and after to prove something left the host untouched |
+| `host_state(repo, ignoring=None)` | the host's refs, HEAD, index and tree in one value — compare before and after to prove something left the host untouched; `ignoring=` leaves one branch out, the target that moved or the branch a run kept |
 | `init_host_repo(root)` | what `host_repo` is built from — call it directly only for a *second* repo, or one outside `tmp_path` |
 | `TEST_IMAGE` | the name of the docker tier's image — for a test that must name it outside the `image` fixture, as a preflight test does |
 | `branches(repo, pattern)` | the short names of the branches matching `pattern` — `"waystation/*"` for the preservation branches a run kept |

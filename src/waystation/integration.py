@@ -1,4 +1,9 @@
-"""Integration: land a PatchSeries on the host repo without a worktree."""
+"""Integration: land a PatchSeries on the host repo without a worktree.
+
+Two strategies ship, ``Integration`` (apply or merge) and ``Squash`` (one
+commit), and both are built from ``GitRepo``'s public landing steps alone, as
+a user's strategy would be (ADR-0040).
+"""
 
 from __future__ import annotations
 
@@ -36,6 +41,8 @@ __all__ = [
     "IntegrationReport",
     "IntegrationStrategy",
     "PatchSeries",
+    "Squash",
+    "Target",
     "integrate",
     "preserve_series",
 ]
@@ -116,12 +123,42 @@ def _subcommand(args: tuple[str, ...]) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
-class GitRepo:
-    """Host repo handle: path, common dir, and a git runner.
+class Target:
+    """A branch a landing is about to move, as it stood when it was read.
 
-    This is the only way into host git, for the shipped strategy and a user's
-    alike: ``git`` for the calls that want a sha and raise, ``run`` for the
-    calls that read an exit code or feed something in (ADR-0033).
+    Attributes:
+        branch: The branch's short name, as a flow script wrote it.
+        tip: What a landing builds on: the branch's commit, or the series'
+            base when the branch does not exist yet, since landing creates
+            it there.
+        exists: Whether the branch existed. The swap checks it, so a branch
+            someone else created meanwhile is a moved target too.
+    """
+
+    branch: str
+    tip: str
+    exists: bool
+
+    @property
+    def ref(self) -> str:
+        """The full ref: a bare name would let a tag of the same name win."""
+        return f"refs/heads/{self.branch}"
+
+
+@dataclass(frozen=True, slots=True)
+class GitRepo:
+    """Host repo handle: path, common dir, a git runner, and the landing steps.
+
+    This is the only way into host git, for the shipped strategies and a
+    user's alike: ``git`` for the calls that want a sha and raise, ``run``
+    for the calls that read an exit code or feed something in (ADR-0033).
+
+    The landing steps — ``read_target``, ``commit_series``, ``merge_tree``,
+    ``commit_tree`` and ``move_target`` — are what ``Integration`` and
+    ``Squash`` are built from, and nothing else is: a user's strategy is
+    policy over the same steps, never a rewrite of the plumbing (ADR-0040).
+    None of them touches a working tree (ADR-0020), and each raises with no
+    stage, because ``integrate`` names it (ADR-0032).
     """
 
     path: Path
@@ -167,6 +204,212 @@ class GitRepo:
         if _subcommand(args) in _COMMIT_POINTS:
             return await committed(running)
         return await running
+
+    async def read_target(self, branch: str, *, base: str) -> Target:
+        """Read the branch a landing will move, refusing one it must not.
+
+        Args:
+            branch: The target branch's short name.
+            base: Where the branch lands from if it does not exist yet —
+                the series' base.
+
+        Returns:
+            The target as it stands now; ``move_target`` swaps it.
+
+        Raises:
+            StageError: ``Refused("target_checked_out")`` when a worktree is
+                using the branch, since ``update-ref`` would move it out from
+                under that checkout (ADR-0020); ``Refused("dirty_tree")`` for
+                ``HEAD``, which no strategy can land on yet (#25).
+        """
+        if branch in ("HEAD", "head"):
+            # Here, not in each strategy: when #25 lands HEAD, every strategy
+            # built on these steps gets it at once.
+            raise StageError(
+                None,
+                Refused(
+                    reason="dirty_tree",
+                    detail="HEAD target is not supported yet; use a named branch",
+                ),
+            )
+        ref = f"refs/heads/{branch}"
+        holder = await _worktree_holding(self, ref)
+        if holder is not None:
+            # Refused even when nothing would land, as `git branch -f` refuses
+            # a no-op: the target is wrong whatever this series holds.
+            raise StageError(
+                None,
+                Refused(
+                    reason="target_checked_out",
+                    detail=f"{branch} is checked out in {holder}",
+                ),
+            )
+        current = await _read_ref(self, ref)
+        return Target(branch=branch, tip=current or base, exists=current is not None)
+
+    async def commit_series(self, series: PatchSeries) -> tuple[str, ...]:
+        """Rebuild each patch as a commit atop the series' base, in order.
+
+        In a temporary index, never a checkout: ``mailinfo``, ``apply
+        --cached``, ``write-tree``, ``commit-tree``. It cannot conflict,
+        because the patches were cut against that base. Each commit keeps
+        its patch's author, author date and message; the committer is the
+        host user. Nothing points at them until a ref is moved (ADR-0020).
+
+        Args:
+            series: The patches to rebuild.
+
+        Returns:
+            The rebuilt commits' shas, oldest first; empty for an empty series.
+        """
+        name, email = await git_identity(self.path)
+        fd, index_path = tempfile.mkstemp(prefix="waystation-idx-")
+        os.close(fd)
+        index = Path(index_path)
+        try:
+            env = {**os.environ, "GIT_INDEX_FILE": str(index)}
+            await self.git("read-tree", series.base_sha, env=env)
+            parent = series.base_sha
+            commits: list[str] = []
+            for patch_text in series.patches:
+                parent = await _commit_patch(
+                    self,
+                    patch_text=patch_text,
+                    parent=parent,
+                    committer_name=name,
+                    committer_email=email,
+                    env=env,
+                )
+                commits.append(parent)
+            return tuple(commits)
+        finally:
+            index.unlink(missing_ok=True)
+
+    async def merge_tree(self, *, base: str, ours: str, theirs: str) -> str | Conflict:
+        """Merge ``theirs`` into ``ours`` as trees, from ``base``.
+
+        One ``merge-tree --write-tree``: no ref, index or file is written,
+        so a conflict leaves nothing behind but unreferenced objects.
+
+        Args:
+            base: The merge base — a commit's parent to replay that commit,
+                the series' base to replay its whole net change.
+            ours: The commit to build on, usually the target's tip.
+            theirs: The commit whose change comes in.
+
+        Returns:
+            The merged tree's sha, or a ``Conflict`` naming the paths that
+            conflicted exactly as git stored them. It names no patch: which
+            one stopped a replay is the caller's to say.
+
+        Raises:
+            StageError: ``CommandFailed`` when git could not merge at all,
+                as opposed to finding a conflict.
+        """
+        args = (
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            "-z",
+            f"--merge-base={base}",
+            ours,
+            theirs,
+        )
+        # `run`, not `git`: the exit code is the answer, and stripping stdout
+        # would eat the NULs `-z` splits on.
+        merged = await self.run(*args)
+        tree, *paths = merged.stdout.split("\0")
+        if merged.exit_code == 0:
+            return tree
+        # Exit 1 means conflicts only when a tree came with it; git also exits 1,
+        # with nothing on stdout, when it cannot read its inputs.
+        if merged.exit_code == 1 and tree:
+            return Conflict(paths=tuple(path for path in paths if path))
+        raise StageError(
+            None,
+            CommandFailed(
+                argv=("git", "-C", str(self.path), *args),
+                exit_code=merged.exit_code,
+                stderr_tail=bound_tail(merged.stderr),
+            ),
+        )
+
+    async def commit_tree(
+        self, tree: str, *parents: str, like: str, message: str | None = None
+    ) -> str:
+        """Commit ``tree`` atop ``parents``, authored as ``like`` was.
+
+        The author and author date are ``like``'s, and so is the message
+        unless ``message`` replaces it; the committer is the host user, now
+        (ADR-0006, ADR-0020). The message reaches git through a file, as
+        bytes, so a Windows host adds no carriage return to it.
+
+        Args:
+            tree: The tree to commit — what ``merge_tree`` returned.
+            *parents: The new commit's parents, first parent first.
+            like: The commit whose authorship, and message, this one carries.
+            message: The message to use instead of ``like``'s.
+
+        Returns:
+            The new commit's sha. No ref points at it yet.
+        """
+        name, email = await git_identity(self.path)
+        author, author_email, author_date, own = await _commit_meta(self, like)
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": author or name,
+            "GIT_AUTHOR_EMAIL": author_email or email,
+            "GIT_COMMITTER_NAME": name,
+            "GIT_COMMITTER_EMAIL": email,
+        }
+        if author_date:
+            env["GIT_AUTHOR_DATE"] = author_date
+        msg_path = _message_file(own if message is None else message)
+        try:
+            return await self.git(
+                "commit-tree",
+                tree,
+                *(arg for parent in parents for arg in ("-p", parent)),
+                "-F",
+                msg_path,
+                env=env,
+            )
+        finally:
+            Path(msg_path).unlink(missing_ok=True)
+
+    async def move_target(self, target: Target, tip: str) -> None:
+        """Move ``target`` to ``tip``, only if it stands where it was read.
+
+        A compare-and-swap ``update-ref``: the per-repo lock is in-process
+        only, so something outside the process may have moved the branch
+        since ``read_target``. Once started, the swap finishes, even when
+        cancelled (ADR-0027).
+
+        Args:
+            target: The target as ``read_target`` returned it.
+            tip: The commit to move it to.
+
+        Raises:
+            StageError: ``Refused("target_moved")`` when a re-read shows the
+                branch moved. Any other failed swap is git's own
+                ``CommandFailed``, as it came, so a retry keyed on
+                ``target_moved`` never spins on a lock (ADR-0016, ADR-0020).
+        """
+        before = target.tip if target.exists else None
+        try:
+            await self.git("update-ref", target.ref, tip, before or _ZERO)
+        except StageError as exc:
+            # A refusal is only ours to give if we saw the target move.
+            if await _read_ref(self, target.ref) == before:
+                raise
+            raise StageError(
+                None,
+                Refused(
+                    reason="target_moved",
+                    detail=f"{target.branch} moved while the series was landing",
+                ),
+            ) from exc
 
 
 async def _repo_git(
@@ -284,85 +527,82 @@ async def preserve_series(
         with attributing("integrate"):
             git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
             async with _serialized(git_repo.common_dir):
-                commits = await _materialize_at_base(git_repo, series)
+                commits = await git_repo.commit_series(series)
                 await git_repo.git("update-ref", f"refs/heads/{branch}", commits[-1])
     return branch
 
 
 @dataclass(frozen=True, slots=True)
 class Integration:
-    """Shipped strategy: land onto a named branch with apply or merge."""
+    """Shipped strategy: land a series on a named branch, by apply or merge.
+
+    Built from ``GitRepo``'s landing steps alone, as a user's strategy would
+    be (ADR-0040). One attempt with the one mechanism: an apply that
+    conflicts never falls back to merge (ADR-0015).
+
+    Attributes:
+        target: The branch to land on, created at the series' base if missing.
+        mechanism: ``"apply"`` replays the series commit by commit, skipping
+            any whose change the target already has; ``"merge"`` lands it
+            with one two-parent merge commit.
+    """
 
     target: str
     mechanism: Mechanism = "apply"
 
     async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
-        if self.target in ("HEAD", "head"):
-            raise StageError(
-                "integrate",
-                Refused(
-                    reason="dirty_tree",
-                    detail="HEAD target is not supported yet; use a named branch",
-                ),
-            )
-        return await self._land(repo, series)
-
-    async def _land(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
-        ref = f"refs/heads/{self.target}"
-        base = series.base_sha
-        current = await _read_ref(repo, ref)
-        target_before = current if current is not None else base
-
-        holder = await _worktree_holding(repo, ref)
-        if holder is not None:
-            # update-ref would move the branch out from under that checkout,
-            # leaving its index and files describing the old tip (ADR-0020).
-            # Refused even when nothing would land, as `git branch -f` refuses
-            # a no-op: the target is wrong whatever this series holds.
-            raise StageError(
-                "integrate",
-                Refused(
-                    reason="target_checked_out",
-                    detail=f"{self.target} is checked out in {holder}",
-                ),
-            )
+        target = await repo.read_target(self.target, base=series.base_sha)
         if not series.patches:
-            return self._report(target_before, current)
-
-        commits = await _materialize_at_base(repo, series)
-        # One attempt with the configured mechanism: an apply that conflicts
-        # never falls back to merge (ADR-0015).
+            return self._report(target, target.tip if target.exists else None)
+        commits = await repo.commit_series(series)
         if self.mechanism == "apply":
-            landing = await _apply_onto(repo, tip=target_before, commits=commits)
+            landing = await self._apply(repo, target.tip, series.base_sha, commits)
         else:
-            landing = await _merge_onto(
-                repo, tip=target_before, base=base, series_tip=commits[-1]
-            )
+            landing = await self._merge(repo, target.tip, series.base_sha, commits[-1])
         if isinstance(landing, Conflict):
             # Nothing but unreferenced objects was written (ADR-0020).
-            return self._report(target_before, None, conflict=landing)
+            return self._report(target, None, conflict=landing)
         tip, landed = landing
+        await repo.move_target(target, tip)
+        return self._report(target, tip, landed)
 
-        try:
-            # Compare-and-swap: only moves the target if it is still `current`.
-            await repo.git("update-ref", ref, tip, current or _ZERO)
-        except StageError as exc:
-            # A refusal is only ours to give if we saw the target move; any
-            # other failed swap is git's, reported as it came (ADR-0016).
-            if await _read_ref(repo, ref) == current:
-                raise
-            raise StageError(
-                "integrate",
-                Refused(
-                    reason="target_moved",
-                    detail=f"{self.target} moved while the series was landing",
-                ),
-            ) from exc
-        return self._report(target_before, tip, landed)
+    @staticmethod
+    async def _apply(
+        repo: GitRepo, tip: str, base: str, commits: tuple[str, ...]
+    ) -> tuple[str, tuple[str, ...]] | Conflict:
+        """Replay each commit onto ``tip``; the new tip and what landed."""
+        landed: list[str] = []
+        for index, commit in enumerate(commits):
+            parent = commits[index - 1] if index else base
+            tree = await repo.merge_tree(base=parent, ours=tip, theirs=commit)
+            if isinstance(tree, Conflict):
+                subject = await repo.git("log", "-1", "--format=%s", commit)
+                return replace(tree, failed_patch=FailedPatch(index, subject))
+            if tree == await repo.git("rev-parse", f"{tip}^{{tree}}"):
+                continue  # already on the target, as `git am` skips it
+            tip = await repo.commit_tree(tree, tip, like=commit)
+            landed.append(tip)
+        return tip, tuple(landed)
+
+    @staticmethod
+    async def _merge(
+        repo: GitRepo, tip: str, base: str, series_tip: str
+    ) -> tuple[str, tuple[str, ...]] | Conflict:
+        """Merge the series onto ``tip`` in one commit; the new tip and it."""
+        tree = await repo.merge_tree(base=base, ours=tip, theirs=series_tip)
+        if isinstance(tree, Conflict):
+            return tree
+        if tree == await repo.git("rev-parse", f"{tip}^{{tree}}"):
+            return tip, ()
+        message = f"Merge {series_tip[:8]} into branch"
+        merged = await repo.commit_tree(
+            tree, tip, series_tip, like=series_tip, message=message
+        )
+        return merged, (merged,)
 
     def _report(
         self,
-        before: str,
+        target: Target,
         after: str | None,
         landed: tuple[str, ...] = (),
         *,
@@ -372,7 +612,86 @@ class Integration:
             strategy="Integration",
             target=self.target,
             mechanism=self.mechanism,
-            target_before=before,
+            target_before=target.tip,
+            target_after=after,
+            landed=landed,
+            conflict=conflict,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Squash:
+    """Shipped strategy: land a run's whole series on a named branch as one commit.
+
+    One ``merge-tree`` of the series' net change against the target, so it
+    can land where ``apply`` would conflict partway: a change the series
+    made and then undid is never replayed. On a conflict the target stays
+    where it was and the run keeps the series, unsquashed, on its
+    preservation branch (ADR-0005). Built from ``GitRepo``'s landing steps
+    alone, as a user's strategy would be (ADR-0040).
+
+    The commit is authored as the series' last commit was — the agent, who
+    is the host identity (ADR-0006) — and committed by the host user at
+    landing, as ``apply`` does. It carries no run id: a strategy is handed
+    a repo and a series, not a run.
+
+    Attributes:
+        target: The branch to land on, created at the series' base if missing.
+        message: The squash commit's message. By default a one-commit
+            series keeps its own; a longer one takes its first subject as
+            the subject, then lists every subject, as a forge's squash-merge
+            lists them.
+    """
+
+    target: str
+    message: str | None = None
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        target = await repo.read_target(self.target, base=series.base_sha)
+        if not series.patches:
+            return self._report(target, target.tip if target.exists else None)
+        commits = await repo.commit_series(series)
+        tree = await repo.merge_tree(
+            base=series.base_sha, ours=target.tip, theirs=commits[-1]
+        )
+        if isinstance(tree, Conflict):
+            # Nothing but unreferenced objects was written (ADR-0020).
+            return self._report(target, None, conflict=tree)
+        tip = target.tip
+        landed: tuple[str, ...] = ()
+        if tree != await repo.git("rev-parse", f"{target.tip}^{{tree}}"):
+            message = self.message
+            if message is None and len(commits) > 1:
+                message = await self._summary(repo, series.base_sha, commits[-1])
+            tip = await repo.commit_tree(
+                tree, target.tip, like=commits[-1], message=message
+            )
+            landed = (tip,)
+        await repo.move_target(target, tip)
+        return self._report(target, tip, landed)
+
+    @staticmethod
+    async def _summary(repo: GitRepo, base: str, series_tip: str) -> str:
+        """The first subject, then every subject as a list, oldest first."""
+        listed = await repo.git(
+            "log", "--reverse", "--format=%s", f"{base}..{series_tip}"
+        )
+        subjects = listed.splitlines()
+        return "\n".join([subjects[0], "", *(f"* {subject}" for subject in subjects)])
+
+    def _report(
+        self,
+        target: Target,
+        after: str | None,
+        landed: tuple[str, ...] = (),
+        *,
+        conflict: Conflict | None = None,
+    ) -> IntegrationReport:
+        return IntegrationReport(
+            strategy="Squash",
+            target=self.target,
+            mechanism="squash",
+            target_before=target.tip,
             target_after=after,
             landed=landed,
             conflict=conflict,
@@ -443,36 +762,6 @@ def _read_state(path: Path) -> str | None:
         return decode(path.read_bytes()).strip() or None
     except OSError:
         return None
-
-
-async def _committer(repo: GitRepo) -> tuple[str, str]:
-    return await git_identity(repo.path)
-
-
-async def _materialize_at_base(repo: GitRepo, series: PatchSeries) -> list[str]:
-    """Rebuild each patch as a commit atop ``series.base_sha``; return shas."""
-    name, email = await _committer(repo)
-    fd, index_path = tempfile.mkstemp(prefix="waystation-idx-")
-    os.close(fd)
-    index = Path(index_path)
-    try:
-        env = {**os.environ, "GIT_INDEX_FILE": str(index)}
-        await repo.git("read-tree", series.base_sha, env=env)
-        parent = series.base_sha
-        commits: list[str] = []
-        for patch_text in series.patches:
-            parent = await _commit_patch(
-                repo,
-                patch_text=patch_text,
-                parent=parent,
-                committer_name=name,
-                committer_email=email,
-                env=env,
-            )
-            commits.append(parent)
-        return commits
-    finally:
-        index.unlink(missing_ok=True)
 
 
 _SUBJECT_PATCH_PREFIX = re.compile(r"^\[PATCH(?:\s+\d+/\d+)?\]\s*")
@@ -562,124 +851,3 @@ async def _commit_meta(repo: GitRepo, sha: str) -> tuple[str, str, str, str]:
     if message.endswith("\n"):
         message = message[:-1]
     return author, email, date, message
-
-
-type _Landing = tuple[str, tuple[str, ...]] | Conflict
-"""The new tip and the commits that landed on it, or where the replay stopped."""
-
-
-async def _apply_onto(repo: GitRepo, *, tip: str, commits: list[str]) -> _Landing:
-    name, email = await _committer(repo)
-    landed: list[str] = []
-    for index, commit in enumerate(commits):
-        parent = await repo.git("rev-parse", f"{commit}^")
-        tree = await _merge_tree(repo, merge_base=parent, tip=tip, other=commit)
-        if isinstance(tree, Conflict):
-            subject = await repo.git("log", "-1", "--format=%s", commit)
-            return replace(tree, failed_patch=FailedPatch(index, subject))
-        tip_tree = await repo.git("rev-parse", f"{tip}^{{tree}}")
-        if tree == tip_tree:
-            continue
-        author, author_email, author_date, message = await _commit_meta(repo, commit)
-        env = {
-            **os.environ,
-            "GIT_AUTHOR_NAME": author or name,
-            "GIT_AUTHOR_EMAIL": author_email or email,
-            "GIT_COMMITTER_NAME": name,
-            "GIT_COMMITTER_EMAIL": email,
-        }
-        if author_date:
-            env["GIT_AUTHOR_DATE"] = author_date
-        msg_path = _message_file(message)
-        try:
-            new = await repo.git(
-                "commit-tree",
-                tree,
-                "-p",
-                tip,
-                "-F",
-                msg_path,
-                env=env,
-            )
-        finally:
-            Path(msg_path).unlink(missing_ok=True)
-        tip = new
-        landed.append(new)
-    return tip, tuple(landed)
-
-
-async def _merge_onto(
-    repo: GitRepo, *, tip: str, base: str, series_tip: str
-) -> _Landing:
-    name, email = await _committer(repo)
-    tree = await _merge_tree(repo, merge_base=base, tip=tip, other=series_tip)
-    if isinstance(tree, Conflict):
-        return tree
-    tip_tree = await repo.git("rev-parse", f"{tip}^{{tree}}")
-    if tree == tip_tree:
-        return tip, ()
-
-    author, author_email, author_date, _msg = await _commit_meta(repo, series_tip)
-    message = f"Merge {series_tip[:8]} into branch"
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": author or name,
-        "GIT_AUTHOR_EMAIL": author_email or email,
-        "GIT_COMMITTER_NAME": name,
-        "GIT_COMMITTER_EMAIL": email,
-    }
-    if author_date:
-        env["GIT_AUTHOR_DATE"] = author_date
-    msg_path = _message_file(message)
-    try:
-        new = await repo.git(
-            "commit-tree",
-            tree,
-            "-p",
-            tip,
-            "-p",
-            series_tip,
-            "-F",
-            msg_path,
-            env=env,
-        )
-    finally:
-        Path(msg_path).unlink(missing_ok=True)
-    return new, (new,)
-
-
-async def _merge_tree(
-    repo: GitRepo, *, merge_base: str, tip: str, other: str
-) -> str | Conflict:
-    """The merged tree's sha, or the paths that conflict; writes no ref, index or file.
-
-    ``-z`` keeps a path with a space or a quote exactly as git stored it.
-    """
-    args = (
-        "merge-tree",
-        "--write-tree",
-        "--name-only",
-        "--no-messages",
-        "-z",
-        f"--merge-base={merge_base}",
-        tip,
-        other,
-    )
-    # `run`, not `git`: the exit code is the answer, and stripping stdout
-    # would eat the NULs `-z` splits on.
-    merged = await repo.run(*args)
-    tree, *paths = merged.stdout.split("\0")
-    if merged.exit_code == 0:
-        return tree
-    # Exit 1 means conflicts only when a tree came with it; git also exits 1,
-    # with nothing on stdout, when it cannot read its inputs.
-    if merged.exit_code == 1 and tree:
-        return Conflict(paths=tuple(path for path in paths if path))
-    raise StageError(
-        "integrate",
-        CommandFailed(
-            argv=("git", "-C", str(repo.path), *args),
-            exit_code=merged.exit_code,
-            stderr_tail=bound_tail(merged.stderr),
-        ),
-    )

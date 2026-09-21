@@ -81,8 +81,12 @@ The instructions a run hands its agent. Belongs to the run, not the agent provid
 _Avoid_: task, message, query
 
 **Integration strategy**:
-The pluggable rule for how a run's patch series reaches the host repo. The shipped strategy is parameterized by target (head, or a named branch) and mechanism (apply linearly, or merge).
+The pluggable rule for how a run's patch series reaches the host repo. Two ship: `Integration`, parameterized by target (head, or a named branch) and mechanism (apply linearly, or merge), and `Squash`, which lands the whole series as one commit. Both are policy over the landing steps, as a user's strategy is (ADR-0040).
 _Avoid_: branch strategy, merge-back
+
+**Landing step**:
+One of the public pieces of plumbing on `GitRepo` a strategy is built from: read the target, rebuild the series at its base, merge trees, commit a tree, move the target. A landing rule is the choice between them, never a rewrite of them.
+_Avoid_: helper, primitive (that is a stage of a run)
 
 **Integration report**:
 What integration did for a run — the target, where commits landed, conflict state. Returned alongside the Outcome when the run integrates.

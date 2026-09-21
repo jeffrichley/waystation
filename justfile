@@ -13,6 +13,10 @@ check:
     uv run mypy
     uv run pytest
 
+# Install the secret-scanning hooks (.pre-commit-config.yaml), once per clone.
+hooks:
+    uv run pre-commit install
+
 # Runnable demo: ScriptedAgent → Integration onto a named branch.
 smoke:
     uv run python examples/smoke_collect.py

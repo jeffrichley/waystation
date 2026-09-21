@@ -1,0 +1,28 @@
+# Secret scanning before a credential leaves your machine. Install the hooks
+# once per clone with `just hooks`; CI runs the same scan for commits made
+# without them, and GitHub's push protection is the last line.
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  # Commit: scan what is staged.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        stages: [pre-commit]
+
+  # Push: scan every commit being pushed that no remote has yet, which covers
+  # a new branch as well as one that moved, and a commit made with the hooks
+  # skipped.
+  - repo: local
+    hooks:
+      - id: gitleaks-push
+        name: Detect secrets in the commits being pushed
+        language: golang
+        additional_dependencies: [github.com/zricethezav/gitleaks/v8@v8.30.1]
+        entry: >-
+          sh -c 'gitleaks git --redact --verbose
+          --log-opts="$PRE_COMMIT_TO_REF --not --remotes"'
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

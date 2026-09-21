@@ -89,7 +89,7 @@ def test_a_spec_stores_its_values_under_the_glossary_s_words() -> None:
     assert spec.environment == {}
     assert spec.pass_through == ()
     assert spec.label is None
-    assert spec.visible_refs == ()
+    assert spec.travelling_refs == ()
 
 
 _OTHER_AGENT = ScriptedAgent(outcome={"summary": "different"})
@@ -111,7 +111,7 @@ _OTHER_SANDBOX = NoSandbox(env={"WAYSTATION": "1"})
         (lambda s: s.name("fix-the-flake"), "label", "fix-the-flake"),
         (
             lambda s: s.extra_refs("waystation/0a1b"),
-            "visible_refs",
+            "travelling_refs",
             ("waystation/0a1b",),
         ),
     ],
@@ -170,8 +170,8 @@ def test_extra_refs_replaces_rather_than_merges() -> None:
     """Like ``.pass_env()``: the refs named last are the refs that travel."""
     spec = a_run(_ANY_REPO).extra_refs("one", "two")
 
-    assert spec.extra_refs("three").visible_refs == ("three",)
-    assert spec.extra_refs().visible_refs == ()
+    assert spec.extra_refs("three").travelling_refs == ("three",)
+    assert spec.extra_refs().travelling_refs == ()
 
 
 @pytest.mark.unit

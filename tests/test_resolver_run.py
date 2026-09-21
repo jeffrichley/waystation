@@ -1,7 +1,7 @@
 """Resolving a conflict: a resolver run, or a preservation branch fixed by hand (#32).
 
 Resolution is a run, not a seam (ADR-0015): the resolver starts at the target,
-sees the preservation branch through ``.extra_refs()``, and replays it by
+has the preservation branch travel in through ``.extra_refs()``, and replays it by
 cherry-pick; a hand-resolved branch lands through the same ``integrate``.
 """
 
@@ -42,7 +42,7 @@ def _reports(expression: str) -> str:
     return f'printf \'%s{{"summary": "%s"}}\\n\' \'{OUTCOME}\' "$({expression})"'
 
 
-async def test_an_extra_ref_is_visible_in_the_workspace_under_its_own_name(
+async def test_an_extra_ref_travels_into_the_workspace_under_its_own_name(
     host_repo: Path,
 ) -> None:
     tip = commit_on(host_repo, "side/work", {"side.txt": "side\n"})

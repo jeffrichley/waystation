@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, get_args
+from typing import TYPE_CHECKING, Any, get_args
 
 from waystation.agents.protocol import AgentLine
 from waystation.errors import StageError
-from waystation.observability import HOOK, RunLoggerAdapter, package_logger, tag
+from waystation.observability import package_logger
 from waystation.results import (
     AgentExit,
     HookName,
@@ -22,6 +22,9 @@ from waystation.results import (
 )
 from waystation.sandbox.protocol import Sandbox
 
+if TYPE_CHECKING:
+    from waystation._run_record import RunRecord
+
 _logger = package_logger()
 
 HOOK_NAMES: tuple[HookName, ...] = get_args(HookName)
@@ -29,64 +32,73 @@ HOOK_NAMES: tuple[HookName, ...] = get_args(HookName)
 __all__ = ["HookBundle", "HookName", "RunContext"]
 
 
-@dataclass(slots=True)
-class RunState:
-    """The mutable facts behind a ``RunContext``; only the orchestrator writes."""
-
-    run_id: str
-    name: str | None
-    repo: Path
-    prompt: str = ""
-    base_sha: str | None = None
-    sandbox: Sandbox | None = None
-    log: RunLoggerAdapter = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.log = tag(HOOK, self.run_id, self.name)
-
-
 class RunContext:
     """Read-only view of a run, handed to every hook.
+
+    One record sits behind it, and a run's result is assembled from the same
+    one, so what a hook reads here is what the result will say (ADR-0039). It is
+    live: read again later, it answers for the run as it stands then.
 
     ``base_sha`` is ``None`` until ``workspace_ready``. ``sandbox`` is usable
     from ``sandbox_ready`` until teardown and raises ``RuntimeError`` outside
     that window.
     """
 
-    __slots__ = ("_state",)
+    __slots__ = ("_record",)
 
-    def __init__(self, state: RunState) -> None:
-        self._state = state
+    def __init__(self, record: RunRecord) -> None:
+        self._record = record
 
     @property
     def run_id(self) -> str:
         """The run's id, minted before ``run_start``."""
-        return self._state.run_id
+        return self._record.run_id
 
     @property
     def name(self) -> str | None:
         """The run's display name, or ``None`` when unnamed."""
-        return self._state.name
+        return self._record.name
 
     @property
     def repo(self) -> Path:
         """The host repo the run targets."""
-        return self._state.repo
+        return self._record.repo
 
     @property
     def prompt(self) -> str:
         """The prompt handed to the agent, read from disk if it was a path."""
-        return self._state.prompt
+        return self._record.prompt
 
     @property
     def base_sha(self) -> str | None:
         """The resolved base ref; ``None`` until ``workspace_ready``."""
-        return self._state.base_sha
+        return self._record.base_sha
+
+    @property
+    def stage(self) -> Stage:
+        """The stage the run is in; a hook raising now fails the run here.
+
+        It moves as each stage begins — to ``integrate`` as the landing
+        starts, though no hook fires there. At ``run_end`` it is where the
+        run ended: the stage a failed run failed in, even when work it still
+        owed, such as collecting, went on after.
+        """
+        return self._record.stage
+
+    @property
+    def elapsed(self) -> Mapping[Stage, float]:
+        """Seconds per stage so far, for each stage whose work has ended.
+
+        Read-only and live, measured on the clock seam: a stage appears once
+        its work has ended, and a stage run twice — a sandbox entered and
+        then left — adds up. The result's ``elapsed`` is this, at the end.
+        """
+        return self._record.elapsed
 
     @property
     def sandbox(self) -> Sandbox:
         """The live sandbox, from ``sandbox_ready`` until teardown."""
-        sandbox = self._state.sandbox
+        sandbox = self._record.sandbox
         if sandbox is None:
             msg = "ctx.sandbox is available from sandbox_ready until teardown"
             raise RuntimeError(msg)
@@ -95,7 +107,7 @@ class RunContext:
     @property
     def log(self) -> logging.LoggerAdapter[logging.Logger]:
         """A logger already tagged with this run, for a hook's own lines."""
-        return self._state.log
+        return self._record.hook_log
 
     def __repr__(self) -> str:
         return f"RunContext(run_id={self.run_id!r}, name={self.name!r})"
@@ -193,15 +205,14 @@ class HookRegistry:
     async def fire(
         self,
         hook: HookName,
-        stage: Stage,
         ctx: RunContext,
         *args: object,
         stop_on_raise: bool = True,
     ) -> None:
         """Call each function at ``hook`` in order, awaiting async ones.
 
-        A raising function raises ``StageError(stage, HookRaised(...))`` at
-        once, or with ``stop_on_raise=False`` for the first one raised after
+        A raising function raises ``StageError(ctx.stage, HookRaised(...))``
+        at once, or with ``stop_on_raise=False`` for the first one raised after
         every other function at ``hook`` has run; later ones are logged
         (ADR-0024).
         """
@@ -215,7 +226,7 @@ class HookRegistry:
                     await returned
             except Exception as exc:
                 error = StageError(
-                    stage,
+                    ctx.stage,
                     HookRaised(
                         hook=hook,
                         function=_describe(entry.function),

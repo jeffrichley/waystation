@@ -25,9 +25,9 @@ never your uncommitted changes, and it is removed when the run ends.
 
 **Your credential goes in by name, never by value.** ``ClaudeCode`` passes
 ``ANTHROPIC_API_KEY`` or ``CLAUDE_CODE_OAUTH_TOKEN`` through from your shell.
-The container's environment is otherwise cleared, so nothing else of yours
-reaches it. Name more with ``pass_env=`` if the agent needs them. Logs and
-command lines elide what a credential holds.
+Nothing else from your shell reaches the container: its environment is the
+image's own plus what you name. Name more with ``pass_env=`` if the agent
+needs them. Logs and command lines elide what a credential holds.
 
 **Loud note: this run lands on the HEAD of the repo you run it from.**
 ``.integrate("HEAD")`` fast-forwards your own checkout onto the agent's
@@ -62,7 +62,8 @@ sandbox, agent, collect, integrate. The agent stage takes a minute or two.
 When it ends, stdout says which of the three results came back. On success,
 ``git log -1`` shows the agent's commit on your branch and ``AGENT_NOTES.md``
 is in your checkout. Press Ctrl-C at any point: the run tears its container
-down and keeps whatever the agent had committed on a preservation branch.
+down, keeps whatever the agent had committed on a preservation branch, and
+the script exits with 130. A second Ctrl-C ends it at once.
 """
 
 from __future__ import annotations
@@ -156,4 +157,9 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    try:
+        sys.exit(asyncio.run(main()))
+    except asyncio.CancelledError:
+        # handle_signals() cancelled the run, which has already cleaned up.
+        # 130 is what a shell reports for a script ended by Ctrl-C.
+        sys.exit(130)

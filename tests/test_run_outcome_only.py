@@ -82,6 +82,7 @@ async def test_outcome_accepts_dataclass_and_typeddict(host_repo: Path) -> None:
         sandbox=NoSandbox(),
     )
     dc_result = await flow.run("dc", outcome=DcAnswer)
+    assert isinstance(dc_result, RunSucceeded)
     assert dc_result.outcome == DcAnswer(summary="dc")
 
     flow_td = Flow(
@@ -90,6 +91,7 @@ async def test_outcome_accepts_dataclass_and_typeddict(host_repo: Path) -> None:
         sandbox=NoSandbox(),
     )
     td_result = await flow_td.run("td", outcome=TdAnswer)
+    assert isinstance(td_result, RunSucceeded)
     assert td_result.outcome == {"summary": "td"}
 
 
@@ -113,6 +115,7 @@ async def test_default_outcome_is_summary(host_repo: Path) -> None:
         sandbox=NoSandbox(),
     )
     result = await flow.run("use default")
+    assert isinstance(result, RunSucceeded)
     assert isinstance(result.outcome, Summary)
     assert result.outcome.summary == "default"
 

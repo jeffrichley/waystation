@@ -8,7 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from waystation import Flow, NoSandbox, ScriptedAgent, Summary, prepare_workspace
+from waystation import (
+    Flow,
+    NoSandbox,
+    RunSucceeded,
+    ScriptedAgent,
+    Summary,
+    prepare_workspace,
+)
 from waystation.agents.outcome import OUTCOME_MARKER, find_outcome
 
 
@@ -145,6 +152,7 @@ async def test_pass_env_reaches_agent_command(tmp_path: Path) -> None:
             sandbox=NoSandbox(),
         )
         result = await flow.run("pass", outcome=Summary)
+        assert isinstance(result, RunSucceeded)
         assert result.outcome.summary == "ok"
     finally:
         os.environ.pop("WAYSTATION_TEST_PASS", None)

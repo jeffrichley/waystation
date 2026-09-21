@@ -7,8 +7,6 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from waystation.errors import PreflightError
-from waystation.results import Errored
 from waystation.sandbox.host import (
     HostRunner,
     allowlisted_env,
@@ -25,9 +23,21 @@ __all__ = ["NoSandbox"]
 @dataclass(slots=True)
 class _HostSandbox:
     workspace: str
-    shell: Sequence[str]
     _env: dict[str, str]
     _runner: HostRunner
+    _shell: Sequence[str] | None = None
+
+    @property
+    def shell(self) -> Sequence[str]:
+        """The host's sh, found the first time something asks for one.
+
+        Not at start: a provider that names an argv — every provider that
+        binds a CLI — never wants a shell, and a host that has none can run
+        those perfectly well (#101).
+        """
+        if self._shell is None:
+            self._shell = host_shell()
+        return self._shell
 
     async def exec(
         self,
@@ -62,17 +72,14 @@ class NoSandbox:
     processes: ProcessStrategy = field(default_factory=host_processes)
 
     async def preflight(self) -> None:
-        """The host has an sh, which is what a script the agent runs needs.
+        """Nothing: this backend isolates nothing, so it has nothing to prove.
 
-        Every other host check is already someone's: git is the run's
-        (``require_host_git``), and this backend isolates nothing, so there
-        is nothing of its own to prove. A missing sh would otherwise surface
-        as a sandbox that cannot answer ``shell`` (ADR-0036).
+        It briefly checked the host for an sh, which made a run that never
+        wanted one — every provider that binds a CLI — refuse to start on a
+        host without it. That is the checking ADR-0036 turned down one
+        paragraph earlier, applied to the host instead of the image (#101).
         """
-        try:
-            host_shell()
-        except FileNotFoundError as exc:
-            raise PreflightError(str(exc), failure=Errored(exception=exc)) from exc
+        return None
 
     @asynccontextmanager
     async def start(
@@ -92,12 +99,7 @@ class NoSandbox:
         )
         runner = HostRunner(self.processes)
         try:
-            yield _HostSandbox(
-                workspace=str(ws.path),
-                shell=host_shell(),
-                _env=built,
-                _runner=runner,
-            )
+            yield _HostSandbox(workspace=str(ws.path), _env=built, _runner=runner)
         finally:
             runner.release()
             discard_workspace(ws.path)

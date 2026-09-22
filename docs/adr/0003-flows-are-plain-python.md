@@ -1,6 +1,7 @@
 ---
-status: stable
+status: deprecated
 type: adr
+superseded_by: adr/0047-flows-are-plain-python-and-a-queue-is-fan-outs-open-ended-peer
 ---
 
 # Flows are plain imperative Python with one parallel spelling

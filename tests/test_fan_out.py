@@ -11,7 +11,7 @@ their work and tear down (ADR-0017), and never starts the queued ones.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,13 +25,14 @@ from helpers import (
     Gate,
     GatedSandbox,
     ShellAgent,
+    Stuck,
     a_run,
     branches,
     host_state,
     init_host_repo,
-    subjects,
     until,
     until_batch,
+    why,
     workspaces,
 )
 from waystation import (
@@ -44,21 +45,11 @@ from waystation import (
     RunResult,
     RunSpec,
     RunSucceeded,
-    SandboxBackend,
     Summary,
     fan_out,
 )
 from waystation.agents import AgentLine
 from waystation.testing import ScriptedAgent
-
-
-def _why(results: Sequence[RunResult[Any]]) -> list[str]:
-    """Each failed run's stage and failure, so an assertion says what broke."""
-    return [
-        f"{result.stage}: {result.failure!r}"
-        for result in results
-        if isinstance(result, RunFailed)
-    ]
 
 
 @dataclass(frozen=True)
@@ -83,44 +74,6 @@ class CheckedSandbox(NoSandbox):
         self.checked.append(f"sandbox {self.label}")
 
 
-@dataclass
-class Stuck:
-    """Runs that work until stopped; ``all_ready`` once ``count`` are working."""
-
-    repo: Path
-    count: int
-    sandbox: SandboxBackend = field(default_factory=NoSandbox)
-    started: list[str] = field(default_factory=list)
-    working: set[str] = field(default_factory=set)
-    all_ready: asyncio.Event = field(default_factory=asyncio.Event)
-
-    def runs(self) -> list[RunSpec[Summary]]:
-        spec: RunSpec[Summary] = (
-            Flow(self.repo, agent=ShellAgent(WORKS_UNTIL_STOPPED), sandbox=self.sandbox)
-            .run("work until stopped")
-            .on_run_start(lambda ctx: self.started.append(ctx.run_id))
-            .on_agent_output(self._watch)
-        )
-        return [spec] * self.count
-
-    def _watch(self, ctx: RunContext, line: AgentLine) -> None:
-        if line.raw == "ready":
-            self.working.add(ctx.run_id)
-            if len(self.working) == self.count:
-                self.all_ready.set()
-
-    def assert_work_kept(self, temp: Path) -> None:
-        """Each run was stopped, its work kept on its branch, its sandbox gone."""
-        kept = [f"waystation/{run_id}" for run_id in self.started]
-        assert sorted(branches(self.repo, "waystation/*")) == sorted(kept)
-        for branch in kept:
-            assert subjects(self.repo, f"HEAD..{branch}") == [
-                "WIP: salvaged uncommitted work",
-                "first",
-            ]
-        assert workspaces(temp) == []
-
-
 @pytest.mark.git
 async def test_a_batch_across_host_repos_yields_every_run_result(
     host_repo: Path, tmp_path: Path
@@ -131,7 +84,7 @@ async def test_a_batch_across_host_repos_yields_every_run_result(
 
     results: list[RunResult[Any]] = [result async for result in fan_out(batch)]
 
-    assert [type(result) for result in results] == [RunSucceeded] * 2, _why(results)
+    assert [type(result) for result in results] == [RunSucceeded] * 2, why(results)
     here, there = (branches(repo, "waystation/*") for repo in (host_repo, other_repo))
     assert len(here) == len(there) == 1, "each run kept its work in its own repo"
     assert sorted(here + there) == sorted(str(result.preserved) for result in results)
@@ -168,7 +121,7 @@ async def test_every_run_is_in_flight_at_once_by_default(host_repo: Path) -> Non
 
     results = [result async for result in fan_out(batch)]
 
-    assert [type(result) for result in results] == [RunSucceeded] * 3, _why(results)
+    assert [type(result) for result in results] == [RunSucceeded] * 3, why(results)
 
 
 @pytest.mark.git
@@ -190,7 +143,7 @@ async def test_max_concurrency_caps_the_runs_in_flight(host_repo: Path) -> None:
 
     results = [result async for result in fan_out(batch, max_concurrency=2)]
 
-    assert [type(result) for result in results] == [RunSucceeded] * 4, _why(results)
+    assert [type(result) for result in results] == [RunSucceeded] * 4, why(results)
     assert peak == 2
 
 
@@ -372,7 +325,7 @@ async def test_each_distinct_agent_and_sandbox_spec_is_preflighted_once(
 
     results = [result async for result in fan_out(batch)]
 
-    assert [type(result) for result in results] == [RunSucceeded] * 4, _why(results)
+    assert [type(result) for result in results] == [RunSucceeded] * 4, why(results)
     assert sorted(checked) == ["agent a", "agent b", "sandbox x", "sandbox y"]
 
 

@@ -8,46 +8,36 @@ is one more result, never a reason to cancel the rest (ADR-0007).
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import Iterable
-from typing import Any, Self
+from typing import Self
 
-from waystation._cancellation import run_to_end
 from waystation.flow import RunSpec
 from waystation.preflight import preflight
+from waystation.queue import RunQueue, queue
 from waystation.results import RunResult
 
 __all__ = ["fan_out"]
 
 
-# The event loop holds tasks weakly, so a run whose fan-out was dropped
-# mid-batch would be collected mid-run; each run is held here until it ends
-# (the asyncio.create_task docs).
-_UNFINISHED: set[asyncio.Task[Any]] = set()
-
-
 class _FanOut[OutcomeT]:
     """The runs of one batch, yielded as they complete.
+
+    A batch is a queue whose runs were all submitted at once, after one
+    preflight of the whole, and which was closed at once: what a user's own
+    scheduler would write on ``queue()``, so fan-out is written the same way.
 
     Private, as ``asyncio.as_completed``'s iterator is: a flow script names
     what it iterates, ``RunResult``, never the iterator itself.
     """
 
     def __init__(
-        self, specs: tuple[RunSpec[OutcomeT], ...], max_concurrency: int | None
+        self, specs: tuple[RunSpec[OutcomeT], ...], runs: RunQueue[OutcomeT]
     ) -> None:
         self._specs = specs
-        # FIFO, so queued runs start in batch order as slots free.
-        self._slots = (
-            asyncio.Semaphore(max_concurrency) if max_concurrency is not None else None
-        )
+        self._runs = runs
         # Consumers that ask at once start the batch once.
         self._starting = asyncio.Lock()
-        self._tasks: list[asyncio.Task[RunResult[OutcomeT]]] | None = None
-        self._finished: asyncio.Queue[asyncio.Task[RunResult[OutcomeT]]] = (
-            asyncio.Queue()
-        )
-        self._claimed = 0
+        self._started = False
 
     async def __aenter__(self) -> Self:
         await self._start()
@@ -61,59 +51,27 @@ class _FanOut[OutcomeT]:
         begins. Cancelling the consumer meanwhile waits for that too and is
         raised afterwards, the way ``asyncio.TaskGroup`` leaves.
         """
-        tasks = self._tasks or []
-        for task in tasks:
-            task.cancel()
-        if not tasks:
-            return
-        waited: list[asyncio.CancelledError] = []
-        await run_to_end(asyncio.wait(tasks), waited.append)
-        if waited:
-            raise waited[0]
+        await self._runs.__aexit__(*exc)
 
     def __aiter__(self) -> Self:
         return self
 
     async def __anext__(self) -> RunResult[OutcomeT]:
-        tasks = await self._start()
-        # Claimed before the wait, as asyncio.as_completed counts, so
-        # consumers sharing the batch never wait on more results than it has.
-        while self._claimed < len(tasks):
-            self._claimed += 1
-            try:
-                task = await self._finished.get()
-            except asyncio.CancelledError:
-                self._claimed -= 1  # the claim goes back; the result stays queued
-                raise
-            # A run stopped by the block's exit reports nothing (ADR-0017).
-            if not task.cancelled():
-                return task.result()
-        raise StopAsyncIteration
+        await self._start()
+        return await anext(self._runs)
 
-    async def _start(self) -> list[asyncio.Task[RunResult[OutcomeT]]]:
-        """Preflight the batch whole, then start its runs; once."""
+    async def _start(self) -> None:
+        """Preflight the batch whole, then submit its runs and close; once."""
         async with self._starting:
-            if self._tasks is None:
+            if not self._started:
                 await preflight(self._specs)
-                self._tasks = [
-                    asyncio.create_task(self._run(spec)) for spec in self._specs
-                ]
-                for task in self._tasks:
-                    _UNFINISHED.add(task)
-                    task.add_done_callback(_UNFINISHED.discard)
-                    task.add_done_callback(self._finished.put_nowait)
-        return self._tasks
-
-    async def _run(self, spec: RunSpec[OutcomeT]) -> RunResult[OutcomeT]:
-        """One run, begun once a slot is free.
-
-        Until then it has no workspace, so its base ref resolves when it
-        starts, not when the batch did.
-        """
-        async with self._slots or contextlib.nullcontext():
-            # The batch was preflighted whole, once per distinct spec: the one
-            # thing fan-out does that a script awaiting each spec cannot.
-            return await spec.perform(preflighted=True)
+                for spec in self._specs:
+                    # The batch was preflighted whole, once per distinct spec:
+                    # the one thing fan-out does that a queue of the same
+                    # specs does not.
+                    self._runs.submit(spec, preflighted=True)
+                self._runs.close()
+                self._started = True
 
 
 def fan_out[OutcomeT](
@@ -164,7 +122,5 @@ def fan_out[OutcomeT](
             run has started.
         ValueError: At the call, when ``max_concurrency`` is below 1.
     """
-    if max_concurrency is not None and max_concurrency < 1:
-        msg = f"max_concurrency must be at least 1, or None, got {max_concurrency}"
-        raise ValueError(msg)
-    return _FanOut(tuple(runs), max_concurrency)
+    # Made now, so a cap that would start nothing is refused at the call.
+    return _FanOut(tuple(runs), queue(max_concurrency=max_concurrency))

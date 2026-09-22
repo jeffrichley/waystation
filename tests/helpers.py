@@ -24,6 +24,7 @@ from waystation import (
     Flow,
     NoSandbox,
     Refused,
+    RunContext,
     RunFailed,
     RunResult,
     RunSpec,
@@ -34,6 +35,7 @@ from waystation import (
 from waystation.agents import (
     AgentCommand,
     AgentEvent,
+    AgentLine,
     AgentText,
     AgentUsage,
     OutcomeReported,
@@ -57,6 +59,7 @@ __all__ = [
     "Gate",
     "GatedSandbox",
     "ShellAgent",
+    "Stuck",
     "Total",
     "a_run",
     "awaited",
@@ -73,6 +76,7 @@ __all__ = [
     "subjects",
     "until",
     "until_batch",
+    "why",
     "workspaces",
 ]
 
@@ -543,3 +547,50 @@ class ShellAgent:
         if line.startswith(USAGE):
             return (AgentUsage(**json.loads(line.removeprefix(USAGE))),)
         return (AgentText(line),) if line else ()
+
+
+def why(results: Sequence[RunResult[Any]]) -> list[str]:
+    """Each failed run's stage and failure, so an assertion says what broke."""
+    return [
+        f"{result.stage}: {result.failure!r}"
+        for result in results
+        if isinstance(result, RunFailed)
+    ]
+
+
+@dataclass
+class Stuck:
+    """Runs that work until stopped; ``all_ready`` once ``count`` are working."""
+
+    repo: Path
+    count: int
+    sandbox: SandboxBackend = field(default_factory=NoSandbox)
+    started: list[str] = field(default_factory=list)
+    working: set[str] = field(default_factory=set)
+    all_ready: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def runs(self) -> list[RunSpec[Summary]]:
+        spec: RunSpec[Summary] = (
+            Flow(self.repo, agent=ShellAgent(WORKS_UNTIL_STOPPED), sandbox=self.sandbox)
+            .run("work until stopped")
+            .on_run_start(lambda ctx: self.started.append(ctx.run_id))
+            .on_agent_output(self._watch)
+        )
+        return [spec] * self.count
+
+    def _watch(self, ctx: RunContext, line: AgentLine) -> None:
+        if line.raw == "ready":
+            self.working.add(ctx.run_id)
+            if len(self.working) == self.count:
+                self.all_ready.set()
+
+    def assert_work_kept(self, temp: Path) -> None:
+        """Each run was stopped, its work kept on its branch, its sandbox gone."""
+        kept = [f"waystation/{run_id}" for run_id in self.started]
+        assert sorted(branches(self.repo, "waystation/*")) == sorted(kept)
+        for branch in kept:
+            assert subjects(self.repo, f"HEAD..{branch}") == [
+                "WIP: salvaged uncommitted work",
+                "first",
+            ]
+        assert workspaces(temp) == []

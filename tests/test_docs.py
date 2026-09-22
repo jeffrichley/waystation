@@ -285,6 +285,7 @@ _FLOW_SCRIPT_SURFACE = {
     "Flow",
     "RunSpec",
     "fan_out",
+    "queue",  # fan-out's open-ended peer (#113, ADR-0047)
     # the primitives, for a loop composed by hand, and what they hand back
     "prepare_workspace",
     "run_agent",

@@ -20,14 +20,12 @@ import pytest
 from pydantic import BaseModel
 
 from waystation import (
-    ExecResult,
     Flow,
     NoSandbox,
     Refused,
     RunFailed,
     RunResult,
     RunSpec,
-    Sandbox,
     SandboxBackend,
     Summary,
     Workspace,
@@ -39,6 +37,7 @@ from waystation.agents import (
     AgentUsage,
     OutcomeReported,
 )
+from waystation.sandbox import ExecResult, Sandbox
 from waystation.sandbox.protocol import LineCallback
 from waystation.testing import ScriptedAgent, ScriptedCommit
 

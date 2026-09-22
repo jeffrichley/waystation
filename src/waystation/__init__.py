@@ -1,13 +1,33 @@
-"""waystation — orchestrate sandboxed AI coding agents against git repos."""
+"""waystation — orchestrate sandboxed AI coding agents against git repos.
+
+What a flow script writes and reads is here: build a ``Flow``, describe runs,
+await them, match on results, register hooks, compose the primitives by hand,
+turn on observability. The three seam protocols come with it, because
+``Flow(agent=..., sandbox=...)`` and ``.integrate(...)`` are typed with them.
+
+What you need only in order to *implement* a seam lives in that seam's
+module, and there alone:
+
+- ``waystation.agents`` — ``AgentCommand``, the event types a provider emits,
+  and the marker-line helpers for an agent with no schema output of its own;
+- ``waystation.sandbox`` — ``Sandbox``, ``ExecResult``, ``clone_in``,
+  ``allowlisted_env``, and the host process runner and its strategies;
+- ``waystation.integration`` — ``GitRepo``, ``GitResult``, ``Target`` and the
+  landing values a strategy builds a report from;
+- ``waystation.testing`` — ``ScriptedAgent`` and the conformance suite
+  (ADR-0044).
+
+A seam module also re-exports what a flow script hands it — ``DockerSandbox``
+is in both, because a script writes it and a backend author reads it as the
+worked example. What a flow script never writes does not come up here,
+however public it is: a second spelling of a seam's own name leaves every
+reader deciding which one is real (#174).
+"""
 
 from __future__ import annotations
 
 from waystation.agents import (
-    AgentCommand,
     AgentProvider,
-    OutcomeReported,
-    find_outcome,
-    outcome_instructions,
     run_agent,
 )
 from waystation.agents.claude_code import ClaudeCode
@@ -17,8 +37,6 @@ from waystation.fan_out import fan_out
 from waystation.flow import Flow, RunSpec
 from waystation.hooks import HookBundle, RunContext
 from waystation.integration import (
-    GitRepo,
-    GitResult,
     Integration,
     IntegrationStrategy,
     Squash,
@@ -53,9 +71,7 @@ from waystation.results import (
 )
 from waystation.sandbox import (
     DockerSandbox,
-    ExecResult,
     NoSandbox,
-    Sandbox,
     SandboxBackend,
 )
 from waystation.signals import handle_signals
@@ -63,7 +79,6 @@ from waystation.stages import stages
 from waystation.workspace import Workspace, prepare_workspace, remove_workspace
 
 __all__ = [
-    "AgentCommand",
     "AgentExit",
     "AgentExited",
     "AgentProvider",
@@ -74,11 +89,8 @@ __all__ = [
     "DockerSandbox",
     "Errored",
     "EventLog",
-    "ExecResult",
     "Failure",
     "Flow",
-    "GitRepo",
-    "GitResult",
     "HookBundle",
     "HookName",
     "HookRaised",
@@ -88,7 +100,6 @@ __all__ = [
     "NoSandbox",
     "OutcomeInvalid",
     "OutcomeMissing",
-    "OutcomeReported",
     "PatchSeries",
     "PreflightError",
     "Refused",
@@ -99,7 +110,6 @@ __all__ = [
     "RunResult",
     "RunSpec",
     "RunSucceeded",
-    "Sandbox",
     "SandboxBackend",
     "Series",
     "Squash",
@@ -113,10 +123,8 @@ __all__ = [
     "collect",
     "configure_logging",
     "fan_out",
-    "find_outcome",
     "handle_signals",
     "integrate",
-    "outcome_instructions",
     "preserve_series",
     "preflight",
     "prepare_workspace",

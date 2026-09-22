@@ -43,7 +43,6 @@ from waystation import (
     RunContext,
     RunFailed,
     RunSucceeded,
-    Sandbox,
     Summary,
     TimedOut,
     Timeouts,
@@ -51,7 +50,7 @@ from waystation import (
 )
 from waystation.agents import AgentLine
 from waystation.clock import ManualClock, use_clock
-from waystation.sandbox import clone_in
+from waystation.sandbox import Sandbox, clone_in
 from waystation.sandbox._docker_plans import plan_exec, plan_kill
 from waystation.testing import ScriptedAgent, ScriptedCommit
 

@@ -21,13 +21,13 @@ from waystation import (
     RunContext,
     RunFailed,
     RunSucceeded,
-    Sandbox,
     StageError,
     TimedOut,
     Timeouts,
     Workspace,
 )
 from waystation.clock import ManualClock, use_clock
+from waystation.sandbox import Sandbox
 from waystation.testing import ScriptedAgent, ScriptedCommit
 from waystation.workspace import remove_workspace
 

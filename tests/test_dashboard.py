@@ -17,7 +17,6 @@ from waystation import (
     AgentUsage,
     Dashboard,
     Flow,
-    GitRepo,
     Integration,
     IntegrationReport,
     NoSandbox,
@@ -31,6 +30,7 @@ from waystation import (
 from waystation._run_record import RunRecord
 from waystation.agents import AgentLine
 from waystation.clock import ManualClock, use_clock
+from waystation.integration import GitRepo
 
 
 def recording_console() -> Console:

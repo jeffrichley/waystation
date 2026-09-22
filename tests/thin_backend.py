@@ -15,11 +15,13 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from waystation import ExecResult, Sandbox, Workspace
+from waystation import Workspace
 from waystation.sandbox import (
+    ExecResult,
     HostRunner,
     LineCallback,
     ProcessStrategy,
+    Sandbox,
     allowlisted_env,
     host_processes,
     host_shell,

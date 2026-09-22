@@ -19,11 +19,11 @@ from waystation import (
     RunContext,
     RunFailed,
     RunSucceeded,
-    Sandbox,
     Workspace,
     prepare_workspace,
 )
 from waystation import workspace as _workspace
+from waystation.sandbox import Sandbox
 from waystation.testing import ScriptedAgent, ScriptedCommit
 
 

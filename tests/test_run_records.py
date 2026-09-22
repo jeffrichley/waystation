@@ -39,7 +39,6 @@ from waystation import (
     RunContext,
     RunLogFiles,
     RunSpec,
-    Sandbox,
     Summary,
     Workspace,
     fan_out,
@@ -47,6 +46,7 @@ from waystation import (
 )
 from waystation.agents import AgentLine
 from waystation.observability import RunEvent
+from waystation.sandbox import Sandbox
 
 REPO = Path(__file__).resolve().parent.parent
 RECORDS_DOC = REPO / "docs" / "log-records.md"

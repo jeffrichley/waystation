@@ -28,6 +28,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0023](0023-cancelled-exec-kills-its-process-tree.md) A cancelled exec kills its process tree | touching cancellation, signals, or how a process is killed |
 | [0027](0027-host-git-is-killable-and-a-ref-swap-finishes.md) Host git is killable, and a ref swap, once started, finishes | running git on the host, or deciding what a bound may kill |
 | [0042](0042-nothing-escapes-the-job-and-a-kill-is-not-waited-on-for-ever.md) Nothing escapes the job, and a kill is not waited on for ever | spawning, adopting or killing a host process, or changing what happens after a tree is killed |
+| [0046](0046-a-group-is-frozen-then-swept-twice.md) A process group is frozen before it is swept, and swept again before its leader is reaped | changing how a POSIX tree is killed, or adding a process strategy |
 
 ## Workspace, commits and integration
 

@@ -62,7 +62,12 @@ class ProcessTree(Protocol):
     """One spawned process and every descendant it starts."""
 
     def kill(self) -> None:
-        """Kill the whole tree now; harmless once it has already exited."""
+        """Kill the whole tree now; harmless once it has already exited.
+
+        Called more than once per tree, and each call must be safe: the
+        runner sweeps again a beat after the first, for a child that was
+        being forked as the first sweep went past it (ADR-0046).
+        """
         ...
 
     def release(self) -> None:
@@ -143,8 +148,25 @@ class _ProcessGroup:
     process: asyncio.subprocess.Process
 
     def kill(self) -> None:
+        """Freeze the group, then sweep it; safe to call again (#110).
+
+        ``kill(-pgid)`` walks the process table, and the walk is not atomic
+        against a fork: a child born as it passes inherits the group with
+        the signal already spent, then outlives its killed parent as an
+        orphan of init. Freezing first is what makes a second sweep enough
+        rather than merely likely — a stopped member cannot *start* another
+        fork, so all that can still arrive is what was already in flight.
+        ``SIGSTOP``, like ``SIGKILL``, is the kernel's to deliver and not a
+        process's to catch, and a stopped process takes a ``SIGKILL`` as it
+        is (jmmv, "How to kill a tree of processes").
+
+        The runner sweeps again a beat later, while the leader is still
+        unreaped so the group id is still this group's (ADR-0046).
+        """
         if sys.platform == "win32":
             raise RuntimeError("PosixProcesses needs a POSIX host")
+        with suppress(OSError):
+            os.killpg(self.process.pid, signal.SIGSTOP)
         with suppress(OSError):
             os.killpg(self.process.pid, signal.SIGKILL)
         with suppress(OSError):

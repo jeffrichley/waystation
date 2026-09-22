@@ -14,6 +14,8 @@ __all__ = [
     "AgentLine",
     "AgentProvider",
     "AgentText",
+    "AgentToolKind",
+    "AgentToolResult",
     "AgentToolUse",
     "OutcomeReported",
 ]
@@ -94,6 +96,15 @@ class AgentText:
     text: str
 
 
+AgentToolKind = Literal["read", "search", "edit", "shell", "other"]
+"""What a tool *does*, across providers — never whether it matters.
+
+It is classification, not policy: a consumer that supports several agents
+reads the kind and never has to learn each one's tool names. A provider maps
+its own names onto it; anything it cannot place is ``"other"``.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class AgentToolUse:
     """A tool the agent called, as its provider parsed it from a line.
@@ -101,14 +112,36 @@ class AgentToolUse:
     Attributes:
         name: The tool's name.
         input: The arguments it was called with.
+        id: The provider's own call id, which pairs this call with its
+            ``AgentToolResult``; empty when the provider reports none.
+        kind: What the tool does, provider-neutral.
     """
 
     name: str
     input: Mapping[str, Any]
+    # Both keep their defaults and come last, so every construction that
+    # bound positionally before this field existed still binds the same way.
+    id: str = ""
+    kind: AgentToolKind = "other"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentToolResult:
+    """What a tool the agent called returned, as its provider parsed it.
+
+    Attributes:
+        id: The call id it answers, matching an ``AgentToolUse.id``.
+        is_error: Whether the tool failed — a non-zero exit, say.
+        text: What it returned, as text; empty when it returned none.
+    """
+
+    id: str
+    is_error: bool = False
+    text: str = ""
 
 
 # AgentUsage is also the value AgentExit carries: the last one reported wins.
-AgentEvent = OutcomeReported | AgentText | AgentToolUse | AgentUsage
+AgentEvent = OutcomeReported | AgentText | AgentToolUse | AgentToolResult | AgentUsage
 
 
 @dataclass(frozen=True, slots=True)

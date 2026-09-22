@@ -12,6 +12,8 @@ from waystation.agents.protocol import (
     AgentCommand,
     AgentEvent,
     AgentText,
+    AgentToolKind,
+    AgentToolResult,
     AgentToolUse,
     OutcomeReported,
 )
@@ -25,6 +27,22 @@ __all__ = ["ClaudeCode"]
 # With both set, the CLI's own precedence picks the API key in print mode:
 # https://code.claude.com/docs/en/authentication#authentication-precedence
 _CREDENTIALS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
+
+# What each of the CLI's built-in tools *does* (#126). Only the tools whose
+# kind is not "other" are listed: the default covers every other name, which
+# includes every MCP and plugin tool, whose behaviour this cannot know.
+_TOOL_KINDS: Mapping[str, AgentToolKind] = {
+    "Read": "read",
+    "NotebookRead": "read",
+    "Grep": "search",
+    "Glob": "search",
+    "Edit": "edit",
+    "Write": "edit",
+    "NotebookEdit": "edit",
+    "Bash": "shell",
+    "BashOutput": "shell",
+    "PowerShell": "shell",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,8 +139,9 @@ class ClaudeCode:
     def parse(self, line: str) -> Sequence[AgentEvent]:
         """One stream-json line as events; a line it can't read yields none.
 
-        Assistant messages yield their text and tool calls, and the final
-        ``result`` event yields the Outcome and the run's usage. A raising
+        Assistant messages yield their text and tool calls, user messages
+        yield those calls' results, and the final ``result`` event yields the
+        Outcome and the run's usage. A raising
         parse would fail the run, so an unexpected shape is skipped, not
         trusted.
 
@@ -131,8 +150,8 @@ class ClaudeCode:
 
         Returns:
             ``AgentText`` and ``AgentToolUse`` for an assistant message;
-            ``OutcomeReported`` and ``AgentUsage`` for the final result;
-            nothing for anything else.
+            ``AgentToolResult`` for a user message; ``OutcomeReported`` and
+            ``AgentUsage`` for the final result; nothing for anything else.
         """
         try:
             event = json.loads(line)
@@ -142,6 +161,8 @@ class ClaudeCode:
             return ()
         if event.get("type") == "assistant":
             return _assistant_events(event)
+        if event.get("type") == "user":
+            return _user_events(event)
         if event.get("type") == "result":
             return _result_events(event)
         return ()
@@ -161,10 +182,53 @@ def _assistant_events(event: dict[str, Any]) -> list[AgentEvent]:
             events.append(AgentText(text))
         elif kind == "tool_use" and isinstance(name, str):
             tool_input = block.get("input")
+            call_id = block.get("id")
             events.append(
-                AgentToolUse(name, tool_input if isinstance(tool_input, dict) else {})
+                AgentToolUse(
+                    name,
+                    tool_input if isinstance(tool_input, dict) else {},
+                    id=call_id if isinstance(call_id, str) else "",
+                    kind=_TOOL_KINDS.get(name, "other"),
+                )
             )
     return events
+
+
+def _user_events(event: dict[str, Any]) -> list[AgentEvent]:
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return []
+    events: list[AgentEvent] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        call_id = block.get("tool_use_id")
+        # A result with no call id cannot be paired with its call (#126), and
+        # an event nothing can use is noise: skip it, as an unreadable line is.
+        if not isinstance(call_id, str):
+            continue
+        events.append(
+            AgentToolResult(
+                call_id,
+                is_error=block.get("is_error") is True,
+                text=_result_text(block.get("content")),
+            )
+        )
+    return events
+
+
+def _result_text(content: object) -> str:
+    """A tool result's content as text: the CLI gives a string or text blocks."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        block["text"]
+        for block in content
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    )
 
 
 def _result_events(event: dict[str, Any]) -> list[AgentEvent]:

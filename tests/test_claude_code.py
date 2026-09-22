@@ -28,6 +28,8 @@ from waystation.agents import (
     AgentCommand,
     AgentEvent,
     AgentText,
+    AgentToolKind,
+    AgentToolResult,
     AgentToolUse,
     AgentUsage,
     OutcomeReported,
@@ -269,8 +271,99 @@ def test_a_run_reports_its_usage_with_cache_tokens_counted_as_input(
 @pytest.mark.unit
 def test_each_tool_call_is_reported_by_name_with_its_input() -> None:
     assert _of(AgentToolUse, _events("success")) == [
-        AgentToolUse("Read", {"file_path": "/workspace\\numbers.txt"}),
-        AgentToolUse("StructuredOutput", {"total": 7}),
+        AgentToolUse(
+            "Read",
+            {"file_path": "/workspace\\numbers.txt"},
+            id="toolu_01GTkxwaGpV4apEAdnKhNvbu",
+            kind="read",
+        ),
+        AgentToolUse(
+            "StructuredOutput",
+            {"total": 7},
+            id="toolu_01WJU3vTtA2K8fRYCdknx7gu",
+            kind="other",
+        ),
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [
+        ("Read", "read"),
+        ("NotebookRead", "read"),
+        ("Grep", "search"),
+        ("Glob", "search"),
+        ("Edit", "edit"),
+        ("Write", "edit"),
+        ("NotebookEdit", "edit"),
+        ("Bash", "shell"),
+        ("BashOutput", "shell"),
+        ("WebSearch", "other"),
+        ("StructuredOutput", "other"),
+        ("mcp__whatever__do_a_thing", "other"),
+    ],
+)
+def test_a_tool_call_says_what_the_tool_does_not_whether_it_matters(
+    name: str, kind: AgentToolKind
+) -> None:
+    """The kind is classification: a consumer of several agents never learns names."""
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "tool_use", "id": "t1", "name": name}]},
+        }
+    )
+    assert list(ClaudeCode().parse(line)) == [
+        AgentToolUse(name, {}, id="t1", kind=kind)
+    ]
+
+
+@pytest.mark.unit
+def test_each_tool_result_is_paired_with_its_call_by_id() -> None:
+    calls = _of(AgentToolUse, _events("success"))
+    results = _of(AgentToolResult, _events("success"))
+
+    assert [result.id for result in results] == [call.id for call in calls]
+    assert results[0] == AgentToolResult(
+        "toolu_01GTkxwaGpV4apEAdnKhNvbu", is_error=False, text="1\t3\n2\t4\n3\t"
+    )
+
+
+@pytest.mark.unit
+def test_a_failed_tool_result_says_so_and_carries_what_it_said() -> None:
+    assert _of(AgentToolResult, _events("no_structured_output")) == [
+        AgentToolResult(
+            "toolu_01QCmL8URxkuy5hsaHbxWd6P",
+            is_error=True,
+            text="Output does not match required schema: /n: must be <= 0",
+        )
+    ]
+
+
+@pytest.mark.unit
+def test_a_tool_results_text_blocks_are_joined_into_its_text() -> None:
+    """The CLI reports content as a string or as text blocks; both read the same."""
+    line = json.dumps(
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [
+                            {"type": "text", "text": "first"},
+                            {"type": "image", "source": {}},
+                            {"type": "text", "text": "second"},
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+    assert list(ClaudeCode().parse(line)) == [
+        AgentToolResult("t1", is_error=False, text="first\nsecond")
     ]
 
 
@@ -289,7 +382,6 @@ def test_the_agents_text_is_reported_and_its_thinking_is_not() -> None:
         _first("success", '"subtype":"init"'),
         _first("success", '"type":"rate_limit_event"'),
         _first("success", '"subtype":"thinking_tokens"'),
-        _first("success", '"type":"tool_result"'),
         "",
         "not json at all",
         '{"type": "result", "subtype": "succ',
@@ -299,6 +391,10 @@ def test_the_agents_text_is_reported_and_its_thinking_is_not() -> None:
         '{"type": "assistant", "message": {"content": "not a list"}}',
         '{"type": "assistant", "message": {"content": [7, {"type": "tool_use"}]}}',
         '{"type": "result", "subtype": "success", "usage": "none"}',
+        '{"type": "user", "message": null}',
+        '{"type": "user", "message": {"content": "not a list"}}',
+        '{"type": "user", "message": {"content": [7, {"type": "tool_result"}]}}',
+        '{"type": "user", "message": {"content": [{"type": "text", "text": "hi"}]}}',
     ],
 )
 def test_a_line_it_does_not_recognise_yields_no_events(line: str) -> None:

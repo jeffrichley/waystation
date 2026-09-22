@@ -9,6 +9,8 @@ from waystation.agents.protocol import (
     AgentLine,
     AgentProvider,
     AgentText,
+    AgentToolKind,
+    AgentToolResult,
     AgentToolUse,
     OutcomeReported,
 )
@@ -21,6 +23,8 @@ __all__ = [
     "AgentLine",
     "AgentProvider",
     "AgentText",
+    "AgentToolKind",
+    "AgentToolResult",
     "AgentToolUse",
     "AgentUsage",
     "OutcomeReported",

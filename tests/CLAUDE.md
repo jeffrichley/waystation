@@ -79,18 +79,22 @@ does that three times, for `NoSandbox`, `DockerSandbox` and `ThinHost` — the
 third being a backend built from the public surface alone, alone in
 `thin_backend.py` so a guard test can read its imports.
 
-**`DockerSandbox` runs the whole suite once per transport** (#106), bind on
-Linux and copy everywhere. Left to `auto`, CI ran bind alone and copy nowhere,
-and #76's copy-only bug was caught by reading instead. Most promises are about
-`docker exec` and cannot tell the transports apart — streams, stdin, bytes,
-long lines, the tail, the kill, the environment. Three are about how the
-workspace *arrived*, and those are the transport-sensitive ones: the exec's
-working directory is the workspace root, the refs that travel are all the
-sandbox sees, and teardown leaves `ws.path` alone. A new promise that depends on
-the arrival — what the repository holds, where it sits, who owns it — is
-transport-sensitive too; it goes in the suite like any other, and both legs
-run it. If the suite ever grows too slow to run twice, those are the ones to
-keep on both.
+**`DockerSandbox` runs the whole suite once per transport** (#106): both on
+Linux, copy alone on macOS and Windows hosts (bind is skipped there, saying
+why), neither on Windows CI, which has no Linux daemon. Left to `auto`, the
+suite ran bind on CI and copy nowhere, and #76's copy-only bug was caught by
+reading instead.
+
+Most promises are about `docker exec` and cannot tell the transports apart:
+the shell, streams, stdin, bytes, long lines, the tail, the kill, the
+environment. Four are about how the workspace *arrived*, and those are the
+**transport-sensitive** ones: the exec's working directory is the workspace
+root, the refs that travel are all the sandbox sees, a commit is authored as
+the host's identity, and teardown leaves `ws.path` alone. A new promise about
+the arrival — what the repository holds, where it sits, whose it is — is
+transport-sensitive too. It goes in the suite like any other, and both legs
+run it; if the suite ever grows too slow to run twice, these four are the
+ones to keep on both.
 
 **A contract every backend keeps goes in the suite, not in one backend's
 module.** A test in `test_docker_sandbox.py` should be about docker: the image's

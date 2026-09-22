@@ -91,7 +91,13 @@ for `RunLogFiles`:
 - **Attach once, not per run.** A handler added in `on_run_start` misses the
   `run_start` record itself: the orchestrator logs it *before* it fires that
   hook. It also lands you with per-run attach and detach, which is machinery
-  only something writing a per-run file actually needs.
+  only something holding the *whole hierarchy* actually needs. The two shipped
+  readers do hold it — `RunLogFiles` for each run's file, and `EventLog` for the
+  `agent_start` and `cancelled` lines its JSONL would otherwise lack — because a
+  built-in may not change what a host's own handlers collect, and turning up
+  `waystation.run` alone would feed them (ADR-0026). So each gives the level
+  back as its run ends, rather than holding it for the life of a process that
+  never closed them.
 - **Have a way out.** A cancelled run fires no `run_end`, so nothing
   hook-shaped tells you to stop. A bundle holding a level wants a `close()`,
   the way `RunLogFiles`, `EventLog` and `logging.Handler` all do. If you do

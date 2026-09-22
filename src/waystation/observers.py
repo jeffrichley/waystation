@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Concatenate, NamedTuple, cast, override
+from typing import Any, Concatenate, cast, get_args, override
 
 from pydantic_core import to_jsonable_python
 from rich import box
@@ -217,25 +217,33 @@ class _FlushingFile:
             self._handle.close()
 
 
-class _OpenRunFile(NamedTuple):
-    """A run's file, the handler feeding it, and the watch on the task running it.
-
-    They open and close together. ``task`` is ``None`` for a hook called by
-    hand, with no run around it.
-    """
-
-    file: _FlushingFile
-    handler: _RunFileHandler
-    task: asyncio.Task[Any] | None
-    on_task_done: Callable[[asyncio.Task[Any]], None]
-
-
 def _running_task() -> asyncio.Task[Any] | None:
     """The task a hook is running in, or ``None`` outside an event loop."""
     try:
         return asyncio.current_task()
     except RuntimeError:  # no running loop: a hook called by hand
         return None
+
+
+# The lifecycle events no hook delivers, which ``EventLog`` reads off the
+# channel instead — ``agent_start`` and ``cancelled`` today. Derived, so an
+# event added to the vocabulary without a hook is written without being listed.
+_CHANNEL_ONLY = frozenset(get_args(RunEvent)) - frozenset(get_args(HookName))
+
+
+class _ChannelHandler(logging.Handler):
+    """Hands one run's hook-less lifecycle records to an ``EventLog``."""
+
+    def __init__(self, run_id: str, take: Callable[[logging.LogRecord], None]) -> None:
+        super().__init__(logging.NOTSET)
+        self._run_id = run_id
+        self._take = take
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if getattr(record, "run_id", None) != self._run_id:
+            return
+        if getattr(record, "event", None) in _CHANNEL_ONLY:
+            self._take(record)
 
 
 class _RunFileHandler(logging.Handler):
@@ -398,6 +406,80 @@ def _safely[**P](
     return cast("Callable[Concatenate[Any, P], None]", guarded)
 
 
+@dataclass(slots=True)
+class _Watch[T]:
+    """One run being read off the channel: what its observer keeps for it, the
+    handler taking its records, and the watch on the task running it.
+
+    ``task`` is ``None`` for a hook called by hand, with no run around it.
+    """
+
+    kept: T
+    handler: logging.Handler
+    task: asyncio.Task[Any] | None
+    on_task_done: Callable[[asyncio.Task[Any]], None]
+
+
+class _Watches[T]:
+    """The runs a built-in observer is reading off the channel, each until it ends.
+
+    Reading the channel means holding the level, because a record the logger
+    never created can't be handled (ADR-0026). It is held from ``run_start``
+    until the first of three: ``run_end``; the task that ran the run ending,
+    which is all a cancelled run leaves to say it is over (ADR-0017); or the
+    observer's ``close()``, for a run cancelled inside a task that goes on.
+    Whichever comes first ends the watch, and the others find nothing.
+    """
+
+    def __init__(self, logger: str, on_orphaned: Callable[[str], None]) -> None:
+        self._logger = logger
+        self._on_orphaned = on_orphaned
+        self._open: dict[str, _Watch[T]] = {}
+
+    def start(self, run_id: str, kept: T, handler: logging.Handler) -> None:
+        """Attach ``handler`` and hold the level until ``run_id`` ends."""
+        task = _running_task()
+
+        def on_task_done(done: asyncio.Task[Any]) -> None:
+            # Still open once the task that ran it has ended, so run_end
+            # never came: a cancelled run's last word is its task ending.
+            self._on_orphaned(run_id)
+
+        # Recorded before the level is held, so whatever ends the watch always
+        # finds the entry and always gives the level back.
+        self._open[run_id] = _Watch(kept, handler, task, on_task_done)
+        if task is not None:
+            task.add_done_callback(on_task_done)
+        _DEBUG_WHILE_WATCHED.acquire()
+        logging.getLogger(self._logger).addHandler(handler)
+
+    def kept(self, run_id: str) -> T | None:
+        watch = self._open.get(run_id)
+        return None if watch is None else watch.kept
+
+    def running(self) -> list[str]:
+        return list(self._open)
+
+    def end_all(self) -> None:
+        """End every run still watched: an observer's ``close()``."""
+        for run_id in self.running():
+            self.end(run_id)
+
+    def end(self, run_id: str) -> _Watch[T] | None:
+        """Detach the run's handler and give the level back, if still watched."""
+        # Popped first, so whichever end comes first finds the entry.
+        watch = self._open.pop(run_id, None)
+        if watch is None:
+            return None
+        try:
+            if watch.task is not None:
+                watch.task.remove_done_callback(watch.on_task_done)
+        finally:
+            logging.getLogger(self._logger).removeHandler(watch.handler)
+            _DEBUG_WHILE_WATCHED.release()
+        return watch
+
+
 # The last line of a file whose run never fired run_end: cancelled, most
 # likely, whose log line just above says where its series went.
 _NO_RESULT_FOOTER = "--- no result ---"
@@ -422,7 +504,9 @@ class RunLogFiles(HookBundle):
 
     def __init__(self, directory: Path | str) -> None:
         self.directory = Path(directory)
-        self._open: dict[str, _OpenRunFile] = {}
+        self._runs: _Watches[_FlushingFile] = _Watches(
+            PACKAGE, lambda run_id: self._finish(run_id, _NO_RESULT_FOOTER)
+        )
 
     @override
     @_safely
@@ -433,22 +517,8 @@ class RunLogFiles(HookBundle):
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)-7s %(message)s")
         )
-        run_id = ctx.run_id
-        task = _running_task()
-
-        def on_task_done(done: asyncio.Task[Any]) -> None:
-            # Still open once the task that ran it has ended, so run_end
-            # never came: a cancelled run's last word is its task ending.
-            self._finish(run_id, _NO_RESULT_FOOTER)
-
-        # Recorded before the level is held, so whatever ends the file always
-        # finds the entry and always gives the level back.
-        self._open[run_id] = _OpenRunFile(file, handler, task, on_task_done)
-        if task is not None:
-            task.add_done_callback(on_task_done)
-        _DEBUG_WHILE_WATCHED.acquire()
-        logging.getLogger(PACKAGE).addHandler(handler)
-        file.write(f"=== run {run_id} on {ctx.repo} ===")
+        self._runs.start(ctx.run_id, file, handler)
+        file.write(f"=== run {ctx.run_id} on {ctx.repo} ===")
         file.write(f"--- prompt ({len(ctx.prompt)} chars) ---")
         file.write(ctx.prompt)
         file.write("--- output ---")
@@ -457,11 +527,11 @@ class RunLogFiles(HookBundle):
     @override
     @_safely
     def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
-        open_file = self._open.get(ctx.run_id)
-        if open_file is None:
+        file = self._runs.kept(ctx.run_id)
+        if file is None:
             return
         prefix = "[stderr] " if line.stream == "stderr" else ""
-        open_file.file.write(f"{prefix}{line.raw}")
+        file.write(f"{prefix}{line.raw}")
 
     @override
     @_safely
@@ -480,7 +550,7 @@ class RunLogFiles(HookBundle):
         under ``asyncio.timeout``, say — or one still going. A run that starts
         afterwards opens its own file as usual.
         """
-        for run_id in list(self._open):
+        for run_id in self._runs.running():
             self._finish(run_id, _NO_RESULT_FOOTER)
 
     def __enter__(self) -> RunLogFiles:
@@ -493,21 +563,14 @@ class RunLogFiles(HookBundle):
     # the exception a block is already raising (ADR-0026).
     @_safely
     def _finish(self, run_id: str, footer: str) -> None:
-        """Write ``footer``, detach the run's handler, give the level back."""
-        # Popped first, so whichever of run_end, the task ending and close
-        # comes first finishes the file, and the others find nothing.
-        open_file = self._open.pop(run_id, None)
-        if open_file is None:
+        """Stop taking the run's records, then end its file with ``footer``."""
+        watch = self._runs.end(run_id)
+        if watch is None:
             return
-        file, handler, task, on_task_done = open_file
         try:
-            if task is not None:
-                task.remove_done_callback(on_task_done)
-            file.write(footer)
+            watch.kept.write(footer)
         finally:
-            logging.getLogger(PACKAGE).removeHandler(handler)
-            _DEBUG_WHILE_WATCHED.release()
-            file.close()
+            watch.kept.close()
 
 
 def _footer(result: RunResult[Any]) -> str:
@@ -533,6 +596,14 @@ class EventLog(HookBundle):
     landed. One file for every run in the flow, so a fan-out reads back in the
     order things actually happened.
 
+    Every event in the vocabulary lands, not only the hooks. ``agent_start``
+    and ``cancelled`` have no hook behind them, so they are read off the
+    ``waystation.run`` channel, the way any bundle reads them
+    (``docs/log-records.md``) — and a cancelled run's last line is
+    ``cancelled``, since no ``run_end`` follows it (ADR-0017). Reading the
+    channel holds the level while a run is going, exactly as a run file does
+    (ADR-0026), and gives it back when the run ends.
+
     The agent's output is left out unless ``include_output=True``: it is the
     bulk of a run, and a log meant for analysis is usually not the place for it.
     """
@@ -542,40 +613,46 @@ class EventLog(HookBundle):
         self.include_output = include_output
         self._lock = threading.Lock()
         self._file: _FlushingFile | None = None
+        self._runs: _Watches[None] = _Watches(RUN.name, self._stop_reading)
 
     @override
     @_safely
     def on_run_start(self, ctx: RunContext) -> None:
-        self._write(
+        # Before the line, so a file that can't be written still gives the
+        # level back when the run ends, rather than never having taken it.
+        self._runs.start(
+            ctx.run_id, None, _ChannelHandler(ctx.run_id, self._from_channel)
+        )
+        self._line(
             "run_start", ctx, {"repo": str(ctx.repo), "prompt_chars": len(ctx.prompt)}
         )
 
     @override
     @_safely
     def on_workspace_ready(self, ctx: RunContext) -> None:
-        self._write("workspace_ready", ctx, {"base_sha": ctx.base_sha})
+        self._line("workspace_ready", ctx, {"base_sha": ctx.base_sha})
 
     @override
     @_safely
     def on_sandbox_ready(self, ctx: RunContext) -> None:
-        self._write("sandbox_ready", ctx)
+        self._line("sandbox_ready", ctx)
 
     @override
     @_safely
     def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
         if not self.include_output:
             return
-        self._write("agent_output", ctx, {"stream": line.stream, "raw": line.raw})
+        self._line("agent_output", ctx, {"stream": line.stream, "raw": line.raw})
 
     @override
     @_safely
     def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> None:
-        self._write("agent_end", ctx, _fields(exit))
+        self._line("agent_end", ctx, _fields(exit))
 
     @override
     @_safely
     def on_integrated(self, ctx: RunContext, report: IntegrationReport) -> None:
-        self._write("integrated", ctx, _fields(report))
+        self._line("integrated", ctx, _fields(report))
 
     @override
     @_safely
@@ -589,19 +666,49 @@ class EventLog(HookBundle):
             # The union's tag, which flattening the fields would otherwise lose:
             # without it a timeout and a refusal read alike.
             fields["failure_kind"] = type(result.failure).__name__
-        self._write("run_end", ctx, fields)
+        try:
+            self._line("run_end", ctx, fields)
+        finally:
+            self._runs.end(ctx.run_id)
 
-    def _write(
+    @_safely
+    def _from_channel(self, record: logging.LogRecord) -> None:
+        """Write an event no hook delivers, stamped when it was logged."""
+        # The extras the channel documents on every record; stdlib has no
+        # type for a record's extras, so they are read out of its dict.
+        extras = vars(record)
+        self._write(
+            datetime.fromtimestamp(record.created, UTC),
+            cast("RunEvent", extras["event"]),
+            extras["run_id"],
+            extras["run_name"],
+        )
+
+    @_safely
+    def _stop_reading(self, run_id: str) -> None:
+        self._runs.end(run_id)
+
+    def _line(
         self,
         event: HookName,
         ctx: RunContext,
         fields: Mapping[str, Any] | None = None,
     ) -> None:
+        self._write(datetime.now(UTC), event, ctx.run_id, ctx.name, fields)
+
+    def _write(
+        self,
+        ts: datetime,
+        event: RunEvent | HookName,
+        run_id: str,
+        name: str | None,
+        fields: Mapping[str, Any] | None = None,
+    ) -> None:
         line: dict[str, Any] = {
-            "ts": datetime.now(UTC).isoformat(),
+            "ts": ts.isoformat(),
             "event": event,
-            "run_id": ctx.run_id,
-            "name": ctx.name,
+            "run_id": run_id,
+            "name": name,
         }
         for key, value in (fields or {}).items():
             # The envelope is the authority on which run this is.
@@ -615,10 +722,15 @@ class EventLog(HookBundle):
             self._file.write(json.dumps(line, default=repr))
 
     def close(self) -> None:
-        """Release the file. A flow has no end event, so a script that wants
-        the handle back scopes the log itself: ``with EventLog(path) as log:``.
-        Every line is already flushed, so nothing is lost without this.
+        """Release the file, and stop reading the channel for any run still
+        watched — one cancelled inside a task that went on (ADR-0026).
+
+        A flow has no end event, so a script that wants the handle back scopes
+        the log itself: ``with EventLog(path) as log:``. Every line is already
+        flushed, and a run's hold on the level ends with the run, so nothing is
+        lost or left held without this.
         """
+        self._runs.end_all()
         with self._lock:
             if self._file is not None:
                 self._file.close()

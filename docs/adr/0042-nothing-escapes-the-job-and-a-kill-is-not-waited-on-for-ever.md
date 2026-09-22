@@ -1,5 +1,5 @@
 ---
-status: draft
+status: stable
 type: adr
 ---
 
@@ -19,7 +19,26 @@ Those children survived `TerminateJobObject`, which did exactly what it was aske
 
 One escapee therefore wedged `await process.wait()` in the cancellation handler, for ever. Everything waiting on that run waited with it: the stage, the run, the fan-out's `__aexit__`. On CI the test hung past its timeout and pytest-timeout ended the worker with `os._exit`, which reads in the log as `worker 'gwN' crashed` and nothing else (#105).
 
-Measured, spawning suspended against not: **0 hangs in 48** against **14 in 16**, with the job holding the descendants rather than just the shell.
+## How it was measured, since the obvious way does not work
+
+Soaking found nothing. Two runs of 30 and 60 whole-suite jobs passed **while the fault was live**, and so did eight quiet rounds and six deliberately loaded ones with the fix taken back out. The reason is in the numbers: spawn latency is about 5 ms on an idle host and reached only 80 ms under a forty-worker process storm, against the 150 ms–3.2 s that the failures actually happened in. A soak that cannot fail cannot confirm anything, and buying more samples does not help.
+
+What settled it was making the window a parameter instead of waiting for one. A strategy wrapper that sleeps before `adopt` reproduces the fault to order:
+
+| window before `adopt` | without the fix | with it |
+| --- | --- | --- |
+| 0 ms | 0/12 | 0/12 |
+| 10 ms | 0/12 | 0/12 |
+| 50 ms | **12/12** | 0/12 |
+| 150 ms | **12/12** | 0/12 |
+| 500 ms | **12/12** | 0/12 |
+| 1000 ms | **12/12** | 0/12 |
+| 2000 ms | — | 0/10 |
+| 3200 ms | — | 0/10 |
+
+48 hangs out of 48 above the threshold, and none out of 68 after — including 3.2 s, the worst window ever seen in the wild. The threshold itself is the tell: below about 50 ms the shell has not yet forked, so there is nothing outside the job to survive the kill.
+
+Two things that curve makes clear, and neither is obvious. **The escapee has to outlive the kill by enough to matter** — `while true; do sleep 0.05; done` on its own reproduces roughly one time in seventy, because a 50 ms sleep is gone before anyone waits on it, while a backgrounded `sleep 300` reproduces every time. And **contention was never the cause**, only the thing that widened the window; treating it as the cause is what made the fault look unreproducible for two sightings.
 
 ## Two changes, because one is not enough
 

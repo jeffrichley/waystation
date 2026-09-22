@@ -304,7 +304,11 @@ async def test_a_cancelled_run_ends_its_event_log_with_cancelled(
         await task
 
     events = events_in(path)
-    assert [event["event"] for event in events][-2:] == ["agent_start", "cancelled"]
+    assert [event["event"] for event in events][-3:] == [
+        "agent_start",
+        "agent_end",
+        "cancelled",
+    ]
     (run_id,) = {event["run_id"] for event in events}
     assert events[-1]["name"] is None
     assert events[-1]["run_id"] == run_id, "the same envelope as a hook's line"

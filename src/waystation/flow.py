@@ -649,15 +649,9 @@ class RunSpec[OutcomeT]:
             record.sandbox = sandbox
             record.log.on_sandbox_ready(ctx)
             await self.hook_registry.fire("sandbox_ready", ctx)
-            try:
-                outcome = await self._run_agent(
-                    run, ctx, record, sandbox, host_env, per_run
-                )
-            except asyncio.CancelledError:
-                # The exec killed the agent's tree before this was raised
-                # (ADR-0023), and the runner is holding the cancellation, so
-                # what the agent left is collected like any stopped agent's.
-                outcome = None
+            outcome = await self._run_agent(
+                run, ctx, record, sandbox, host_env, per_run
+            )
             await self._collect(run, record, sandbox, workspace)
             return outcome
         finally:
@@ -711,6 +705,18 @@ class RunSpec[OutcomeT]:
                 # cancellation is meant to stop an agent, not wait for one.
                 bound=None,
                 interruptible=True,
+            )
+        except asyncio.CancelledError:
+            # The exec killed the agent's tree before this was raised
+            # (ADR-0023), and the runner is holding the cancellation. agent_end
+            # still fires, with the sandbox up: it is the one point a cancelled
+            # run can carry a file out before teardown (#154). What the agent
+            # left is then collected like any stopped agent's.
+            record.agent = AgentExit(
+                exit_code=-1,
+                elapsed=record.elapsed["agent"],
+                hanging=False,
+                cancelled=True,
             )
         except Exception as exc:
             record.fail(_as_stage_error("agent", exc))

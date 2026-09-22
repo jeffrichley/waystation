@@ -8,9 +8,13 @@ fails here rather than being discovered by someone who trusted the table.
 from __future__ import annotations
 
 import ast
+import importlib
+import inspect
 import re
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -136,3 +140,97 @@ def test_the_coverage_floor_is_one_number_everywhere_it_is_written() -> None:
             floors[str(guide.relative_to(REPO))] = int("".join(match))
 
     assert len(set(floors.values())) == 1, f"coverage floors disagree: {floors}"
+
+
+@pytest.mark.unit
+def test_every_public_callable_documents_its_args_and_what_it_returns() -> None:
+    """#147: the public API's docstrings are Google-style, sections and all.
+
+    ruff's ``D`` rules hold that a docstring exists and is well-formed, and
+    D417 that an ``Args:`` section names every parameter — but only once there
+    is one. This holds the rest: a public callable that takes arguments says
+    what they are, and one that gives something back says what. ``Raises:``
+    stays with review; which exceptions escape is not something a signature
+    tells.
+    """
+    missing = [
+        f"{where}: {section}"
+        for where, fn in _public_callables()
+        for section in _sections_owed(fn)
+        if f"{section}:" not in (inspect.getdoc(fn) or "")
+    ]
+
+    assert not missing, (
+        f"missing Google-style sections: {missing}. "
+        "Document them in the docstring (#147)."
+    )
+
+
+# The method wrappers whose function sits one attribute further in.
+_BOUND_DESCRIPTORS = (classmethod, staticmethod)
+
+
+def _public_callables() -> list[tuple[str, Callable[..., object]]]:
+    """Every function and method a public module's ``__all__`` hands a user.
+
+    A method counts where its class defines it: properties read as attributes,
+    dunders mean what their protocol says (``__init__`` excepted, which takes
+    the arguments), and the conformance suite's ``test_`` methods are tests,
+    whose parameters are fixtures.
+    """
+    found: dict[int, tuple[str, Callable[..., object]]] = {}
+    for module in _public_modules():
+        for name in module.__all__:
+            obj = getattr(module, name)
+            if not getattr(obj, "__module__", "").startswith("waystation"):
+                continue
+            if inspect.isfunction(obj):
+                found[id(obj)] = (f"{obj.__module__}.{name}", obj)
+            elif inspect.isclass(obj):
+                for attr, member in vars(obj).items():
+                    fn = (
+                        member.__func__
+                        if isinstance(member, _BOUND_DESCRIPTORS)
+                        else member
+                    )
+                    if (
+                        inspect.isfunction(fn)
+                        and fn.__module__.startswith("waystation")
+                        and (attr == "__init__" or not attr.startswith("_"))
+                        and not attr.startswith("test_")
+                        # A dataclass writes its own __init__; its fields are
+                        # the class's to document, not a docstring nobody wrote.
+                        and fn.__code__.co_filename != "<string>"
+                    ):
+                        found[id(fn)] = (f"{obj.__module__}.{fn.__qualname__}", fn)
+    return sorted(found.values(), key=lambda pair: pair[0])
+
+
+def _public_modules() -> list[ModuleType]:
+    """Every module under ``src/waystation`` with no underscore-private part."""
+    root = REPO / "src"
+    modules = []
+    for path in sorted((root / "waystation").rglob("*.py")):
+        parts = path.relative_to(root).with_suffix("").parts
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        if not any(part.startswith("_") for part in parts):
+            modules.append(importlib.import_module(".".join(parts)))
+    return modules
+
+
+def _sections_owed(fn: Callable[..., object]) -> list[str]:
+    """The sections ``fn``'s signature says its docstring owes a reader."""
+    params = list(inspect.signature(fn).parameters)
+    if params and params[0] in ("self", "cls"):
+        params = params[1:]
+    owed = ["Args"] if params else []
+    returns = str(fn.__annotations__.get("return"))
+    body = inspect.unwrap(fn)
+    if inspect.isgeneratorfunction(body) or inspect.isasyncgenfunction(body):
+        # A context manager that yields nothing has nothing to say it yields.
+        if not returns.endswith("[None]"):
+            owed.append("Yields")
+    elif returns not in ("None", "NoReturn", "Never"):
+        owed.append("Returns")
+    return owed

@@ -171,6 +171,7 @@ class SandboxConformance:
     async def test_an_exec_reports_its_exit_code_and_both_its_streams(
         self, sandbox: Sandbox
     ) -> None:
+        """A non-zero exit is a result, carrying each stream apart."""
         result = await sandbox.exec([*sandbox.shell, "echo out; echo err >&2; exit 7"])
 
         assert result.exit_code == 7
@@ -178,6 +179,7 @@ class SandboxConformance:
         assert result.stderr == "err\n"
 
     async def test_an_execs_stdin_reaches_the_process(self, sandbox: Sandbox) -> None:
+        """What ``stdin`` carries is what the process reads."""
         result = await sandbox.exec([*sandbox.shell, "cat"], stdin="one\ntwo\n")
 
         assert result.stdout == "one\ntwo\n"

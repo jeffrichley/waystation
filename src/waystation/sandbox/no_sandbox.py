@@ -87,6 +87,19 @@ class NoSandbox:
         *,
         env: Mapping[str, str],
     ) -> AsyncIterator[Sandbox]:
+        """A sandbox running host processes in ``ws.path``.
+
+        The environment is cleared: only the OS's base keys, this backend's
+        ``env`` and ``pass_env``, and core's ``env`` reach a process.
+
+        Args:
+            ws: The workspace the execs run in, where it lies on the host.
+            env: Core's literal values, laid over this backend's ``env``.
+
+        Yields:
+            The started sandbox. Leaving the context kills what its execs
+            left running; the workspace itself is core's to remove (#76).
+        """
         # This backend runs host processes, so they need the base keys a
         # process needs to start on this OS; core's literals go on top of
         # this backend's own tier (ADR-0034).

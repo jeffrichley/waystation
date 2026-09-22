@@ -64,7 +64,15 @@ def _writable_and_retry(
 
 
 def remove_workspace(path: str | os.PathLike[str]) -> None:
-    """Delete a workspace dir, read-only git objects included."""
+    """Delete a workspace dir, read-only git objects included.
+
+    Args:
+        path: The workspace dir to delete, and everything under it.
+
+    Raises:
+        OSError: When a file cannot be deleted even made writable — on
+            Windows, one a process still holds open.
+    """
     shutil.rmtree(path, onexc=_writable_and_retry)
 
 
@@ -113,8 +121,22 @@ async def prepare_workspace(
     Cancelling it — a workspace bound firing, say — kills the clone's git and
     all it started, and removes the half-made workspace (ADR-0023, #57).
 
-    Raises ``StageError("workspace", ...)``: this is the workspace stage, so
-    this is the edge that attributes what host git failed at (ADR-0032).
+    Args:
+        repo: The host repo; only its committed state is cloned.
+        base: The revision the workspace is checked out at.
+        run_id: The run id the workspace is named for; one is minted if
+            ``None``.
+        extra_refs: Host branches or tags that travel into the workspace
+            under their own names.
+
+    Returns:
+        The workspace, checked out on ``waystation/<run-id>`` at ``base``.
+
+    Raises:
+        FileNotFoundError: When ``repo`` does not exist.
+        StageError: Attributed to ``"workspace"``: this is the workspace
+            stage, so this is the edge that attributes what host git failed
+            at (ADR-0032). ``Refused("missing_extra_ref")`` among them.
     """
     host = Path(repo).resolve()
     if not host.exists():

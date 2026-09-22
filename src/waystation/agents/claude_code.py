@@ -60,7 +60,12 @@ class ClaudeCode:
     args: Sequence[str] = ()
 
     def preflight(self) -> None:
-        """Fail unless a credential will reach the agent; log its name, never it."""
+        """Fail unless a credential will reach the agent; log its name, never it.
+
+        Raises:
+            PreflightError: When neither ``ANTHROPIC_API_KEY`` nor
+                ``CLAUDE_CODE_OAUTH_TOKEN`` is in ``env`` or on the host.
+        """
         found = [
             name for name in _CREDENTIALS if self.env.get(name) or os.environ.get(name)
         ]
@@ -74,6 +79,17 @@ class ClaudeCode:
         AGENT.info("Claude Code will authenticate with %s", found[0])
 
     def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
+        """``claude -p`` in stream-json, with the Outcome schema as ``--json-schema``.
+
+        Args:
+            prompt: The run's prompt, fed on stdin.
+            outcome_schema: The Outcome's JSON schema, which the CLI
+                re-prompts until the agent's output matches.
+
+        Returns:
+            The CLI's argv, every setting as its flag and ``args`` last, with
+            both credentials passed through beside ``pass_env``.
+        """
         # stream-json, not json: the silence timer resets per line, and a
         # one-shot json run prints nothing until it ends (ADR-0018).
         argv = [
@@ -109,6 +125,14 @@ class ClaudeCode:
         ``result`` event yields the Outcome and the run's usage. A raising
         parse would fail the run, so an unexpected shape is skipped, not
         trusted.
+
+        Args:
+            line: One line of the CLI's stream-json stdout.
+
+        Returns:
+            ``AgentText`` and ``AgentToolUse`` for an assistant message;
+            ``OutcomeReported`` and ``AgentUsage`` for the final result;
+            nothing for anything else.
         """
         try:
             event = json.loads(line)

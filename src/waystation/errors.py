@@ -27,6 +27,12 @@ class PreflightError(WaystationError):
     """Host or batch preflight failed before any run started."""
 
     def __init__(self, message: str, *, failure: Failure | None = None) -> None:
+        """Say why preflight failed.
+
+        Args:
+            message: What failed, for a person to read.
+            failure: The failure behind it, when a check has one to hand on.
+        """
         super().__init__(message)
         self.failure = failure
 
@@ -52,6 +58,14 @@ class StageError(WaystationError):
         agent: AgentExit | None = None,
         series: PatchSeries | None = None,
     ) -> None:
+        """Carry ``failure``, and whatever the stage made before it failed.
+
+        Args:
+            stage: The stage that failed, or ``None`` while unattributed.
+            failure: What went wrong, as a ``RunFailed`` would report it.
+            agent: The agent's exit, when the agent had run.
+            series: The patches collect cut before it refused them.
+        """
         self.stage = stage
         self.failure = failure
         self.agent = agent
@@ -90,6 +104,12 @@ def attributing(stage: Stage) -> Iterator[None]:
     sandbox transport — and reaching across modules for a private name is
     what the house rule forbids. It stays out of top-level ``waystation``:
     a flow script attributes with ``StageError.at`` or a stage runner.
+
+    Args:
+        stage: The stage to attribute a failure to.
+
+    Raises:
+        StageError: The one that left the block, attributed.
     """
     try:
         yield

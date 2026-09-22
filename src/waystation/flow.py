@@ -82,35 +82,66 @@ class Flow:
     def on_run_start[F: Callable[[RunContext], object]](self, fn: F) -> F:
         """Fire ``fn(ctx)`` as a run starts.
 
-        Returns ``fn``; runs built afterwards get it.
+        Args:
+            fn: The hook, called with the run's ``RunContext``.
+
+        Returns:
+            ``fn`` unchanged, so this works as a decorator. Runs built
+            afterwards get it; a spec that already exists does not
+            (ADR-0008).
         """
         return self._register("run_start", fn)
 
     def on_workspace_ready[F: Callable[[RunContext], object]](self, fn: F) -> F:
         """Fire ``fn(ctx)`` once the workspace is prepared.
 
-        Returns ``fn``; runs built afterwards get it.
+        Args:
+            fn: The hook, called with the run's ``RunContext``.
+
+        Returns:
+            ``fn`` unchanged, so this works as a decorator. Runs built
+            afterwards get it; a spec that already exists does not
+            (ADR-0008).
         """
         return self._register("workspace_ready", fn)
 
     def on_sandbox_ready[F: Callable[[RunContext], object]](self, fn: F) -> F:
         """Fire ``fn(ctx)`` once the sandbox is up, before the agent.
 
-        Returns ``fn``; runs built afterwards get it.
+        Args:
+            fn: The hook, called with the run's ``RunContext``.
+
+        Returns:
+            ``fn`` unchanged, so this works as a decorator. Runs built
+            afterwards get it; a spec that already exists does not
+            (ADR-0008).
         """
         return self._register("sandbox_ready", fn)
 
     def on_agent_output[F: Callable[[RunContext, AgentLine], object]](self, fn: F) -> F:
         """Fire ``fn(ctx, line)`` for each line the agent emits.
 
-        Returns ``fn``; runs built afterwards get it.
+        Args:
+            fn: The hook, called with the run's ``RunContext`` and the line.
+
+        Returns:
+            ``fn`` unchanged, so this works as a decorator. Runs built
+            afterwards get it; a spec that already exists does not
+            (ADR-0008).
         """
         return self._register("agent_output", fn)
 
     def on_agent_end[F: Callable[[RunContext, AgentExit], object]](self, fn: F) -> F:
         """Fire ``fn(ctx, exit)`` when the agent exec ends.
 
-        Returns ``fn``; runs built afterwards get it.
+        Args:
+            fn: The hook, called with the run's ``RunContext`` and the
+                agent's ``AgentExit``.
+
+        Returns:
+            ``fn`` unchanged, so this works as a decorator. Runs built
+            afterwards get it; a spec that already exists does not
+            (ADR-0008).
         """
         return self._register("agent_end", fn)
 
@@ -119,14 +150,28 @@ class Flow:
     ) -> F:
         """Fire ``fn(ctx, report)`` when integration lands.
 
-        Returns ``fn``; runs built afterwards get it.
+        Args:
+            fn: The hook, called with the run's ``RunContext`` and the
+                ``IntegrationReport``.
+
+        Returns:
+            ``fn`` unchanged, so this works as a decorator. Runs built
+            afterwards get it; a spec that already exists does not
+            (ADR-0008).
         """
         return self._register("integrated", fn)
 
     def on_run_end[F: Callable[[RunContext, RunResult[Any]], object]](self, fn: F) -> F:
         """Fire ``fn(ctx, result)`` for every result a run returns.
 
-        Returns ``fn``; runs built afterwards get it.
+        Args:
+            fn: The hook, called with the run's ``RunContext`` and its
+                ``RunResult``.
+
+        Returns:
+            ``fn`` unchanged, so this works as a decorator. Runs built
+            afterwards get it; a spec that already exists does not
+            (ADR-0008).
         """
         return self._register("run_end", fn)
 
@@ -145,6 +190,27 @@ class Flow:
     ) -> RunSpec[OutcomeT]: ...
 
     def run(self, prompt: str | Path, *, outcome: type[Any] = Summary) -> RunSpec[Any]:
+        """Describe a run of this flow's agent; awaiting the spec performs it.
+
+        Nothing runs here. The spec carries the flow's defaults and a snapshot
+        of its hooks, and its builders change them for this run alone
+        (ADR-0008, ADR-0022).
+
+        Args:
+            prompt: The instructions handed to the agent, or a path to a file
+                holding them, read once as each run starts (ADR-0045).
+            outcome: The object-shaped type the agent reports back — a
+                ``BaseModel``, dataclass or ``TypedDict``. ``Summary`` when
+                none is named.
+
+        Returns:
+            A ``RunSpec`` for the run.
+
+        Raises:
+            TypeError: When ``outcome`` has no JSON schema or is not
+                object-shaped; refused here, before anything runs
+                (ADR-0038).
+        """
         outcome_schema(outcome)  # refused here as in run_agent (ADR-0038)
         return RunSpec(
             repo=Path(self.repo),
@@ -380,13 +446,29 @@ class RunSpec[OutcomeT]:
     # flow's. Bundles are any objects with a subset of the ``on_<hook>`` methods.
 
     def hooks(self, *bundles: object) -> RunSpec[OutcomeT]:
-        """Add each bundle's ``on_<hook>`` methods; returns a new spec."""
+        """Add each bundle's ``on_<hook>`` methods to this run's hooks.
+
+        Args:
+            *bundles: Any objects with a subset of the ``on_<hook>`` methods,
+                a ``HookBundle`` or not. Their hooks fire after the flow's.
+
+        Returns:
+            A new spec; this one is unchanged.
+
+        Raises:
+            TypeError: When a bundle defines none of the ``on_<hook>`` methods.
+        """
         return replace(self, hook_registry=self.hook_registry.with_bundles(*bundles))
 
     def on_run_start(self, fn: Callable[[RunContext], object]) -> RunSpec[OutcomeT]:
         """Fire ``fn(ctx)`` as a run starts.
 
-        Returns a new spec.
+        Args:
+            fn: The hook, called with the run's ``RunContext``. It fires
+                after the flow's hooks for the same event.
+
+        Returns:
+            A new spec; this one is unchanged.
         """
         return self._with_hook("run_start", fn)
 
@@ -395,14 +477,24 @@ class RunSpec[OutcomeT]:
     ) -> RunSpec[OutcomeT]:
         """Fire ``fn(ctx)`` once the workspace is prepared.
 
-        Returns a new spec.
+        Args:
+            fn: The hook, called with the run's ``RunContext``. It fires
+                after the flow's hooks for the same event.
+
+        Returns:
+            A new spec; this one is unchanged.
         """
         return self._with_hook("workspace_ready", fn)
 
     def on_sandbox_ready(self, fn: Callable[[RunContext], object]) -> RunSpec[OutcomeT]:
         """Fire ``fn(ctx)`` once the sandbox is up, before the agent.
 
-        Returns a new spec.
+        Args:
+            fn: The hook, called with the run's ``RunContext``. It fires
+                after the flow's hooks for the same event.
+
+        Returns:
+            A new spec; this one is unchanged.
         """
         return self._with_hook("sandbox_ready", fn)
 
@@ -411,7 +503,12 @@ class RunSpec[OutcomeT]:
     ) -> RunSpec[OutcomeT]:
         """Fire ``fn(ctx, line)`` for each line the agent emits.
 
-        Returns a new spec.
+        Args:
+            fn: The hook, called with the run's ``RunContext`` and the line.
+                It fires after the flow's hooks for the same event.
+
+        Returns:
+            A new spec; this one is unchanged.
         """
         return self._with_hook("agent_output", fn)
 
@@ -420,7 +517,13 @@ class RunSpec[OutcomeT]:
     ) -> RunSpec[OutcomeT]:
         """Fire ``fn(ctx, exit)`` when the agent exec ends.
 
-        Returns a new spec.
+        Args:
+            fn: The hook, called with the run's ``RunContext`` and the
+                agent's ``AgentExit``. It fires after the flow's hooks for
+                the same event.
+
+        Returns:
+            A new spec; this one is unchanged.
         """
         return self._with_hook("agent_end", fn)
 
@@ -429,7 +532,13 @@ class RunSpec[OutcomeT]:
     ) -> RunSpec[OutcomeT]:
         """Fire ``fn(ctx, report)`` when integration lands.
 
-        Returns a new spec.
+        Args:
+            fn: The hook, called with the run's ``RunContext`` and the
+                ``IntegrationReport``. It fires after the flow's hooks for
+                the same event.
+
+        Returns:
+            A new spec; this one is unchanged.
         """
         return self._with_hook("integrated", fn)
 
@@ -442,7 +551,13 @@ class RunSpec[OutcomeT]:
     ) -> RunSpec[OutcomeT]:
         """Fire ``fn(ctx, result)`` for every result a run returns.
 
-        Returns a new spec.
+        Args:
+            fn: The hook, called with the run's ``RunContext`` and its
+                ``RunResult``. It fires after the flow's hooks for the same
+                event.
+
+        Returns:
+            A new spec; this one is unchanged.
         """
         return self._with_hook("run_end", fn)
 

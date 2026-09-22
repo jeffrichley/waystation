@@ -58,6 +58,18 @@ def allowlisted_env(
     ``host_env`` is passed in rather than read, so the caller decides when
     ``os.environ`` is read and how far one reading stretches: core reads once
     for the tiers it owns, and a backend once for its own (ADR-0034).
+
+    Args:
+        literal: Values set as given, over anything a name brought in.
+        pass_env: Names whose host values pass through, where the host has
+            them.
+        host_env: The host environment the names are looked up in —
+            ``os.environ``, read when the caller chooses.
+        base: Names a process needs to start on this OS, looked up like
+            ``pass_env``; ``ProcessStrategy.base_env_keys`` answers them.
+
+    Returns:
+        A new environment holding only what was named.
     """
     env: dict[str, str] = {}
     skipped: list[str] = []
@@ -89,11 +101,17 @@ def host_shell() -> Sequence[str]:
     what npm's `script-shell` is still argued about for not avoiding
     (ADR-0036).
 
-    Raises ``FileNotFoundError`` when the host has no sh — which nothing
-    asks it to answer unless something wants a shell. On Windows that is
-    the ordinary case for a machine without Git for Windows, whose installer
-    puts only ``Git\cmd`` on ``PATH`` while shipping an sh beside it — so it
-    is looked for there before giving up.
+    On Windows a host with no sh on ``PATH`` is the ordinary case for a
+    machine with Git for Windows, whose installer puts only ``Git\cmd`` on
+    ``PATH`` while shipping an sh beside it — so it is looked for there
+    before giving up.
+
+    Returns:
+        The sh's argv prefix, ``(<path>, "-c")``.
+
+    Raises:
+        FileNotFoundError: When the host has no sh — which nothing asks it to
+            answer unless something wants a shell.
     """
     override = os.environ.get(_SH_OVERRIDE)
     if override:
@@ -229,6 +247,30 @@ class HostRunner:
         ``on_cancel`` to its end before the cancellation goes on, however
         insistently the caller cancels meanwhile. It is cleanup, so a failure
         in it is logged rather than raised (ADR-0017).
+
+        Args:
+            argv: The program and its arguments, run directly, not through a
+                shell.
+            stdin: Text written to the process's stdin, which is then closed.
+            capture: Keep all of both streams; ``False`` keeps bounded tails.
+            on_stdout: Called with each stdout line, its line ending
+                stripped; awaited when it returns a coroutine.
+            on_stderr: The same, for stderr. With neither callback a line is
+                logged at DEBUG.
+            cwd: The working directory; ``None`` is this process's own.
+            env: The whole environment the process gets; ``None`` inherits
+                the host's.
+            on_cancel: Awaited to its end after a cancelled exec's tree is
+                dead, to stop what the process left running elsewhere.
+
+        Returns:
+            The exit code with the captured output, or its tails.
+
+        Raises:
+            OSError: When ``argv`` cannot be started — ``FileNotFoundError``
+                for a program not found.
+            asyncio.CancelledError: When the exec was cancelled, once its
+                tree has been killed and ``on_cancel`` has run.
         """
         log_argv(SANDBOX, argv)
         popen_kwargs: dict[str, object] = {

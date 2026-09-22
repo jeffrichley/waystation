@@ -45,7 +45,13 @@ def _write_file_commands(path: str, content: str) -> list[str]:
 
 @dataclass(frozen=True, slots=True)
 class ScriptedCommit:
-    """One commit the scripted agent creates before exiting."""
+    """One commit the scripted agent creates before exiting.
+
+    Attributes:
+        message: The commit message.
+        files: Each file's path, relative to the workspace, and the whole
+            content it is written with.
+    """
 
     message: str
     files: Mapping[str, str]
@@ -57,6 +63,22 @@ class ScriptedAgent:
 
     Which shell is the sandbox's to say, so this plays back the same on
     ``NoSandbox`` and in a container with no argument either way (ADR-0036).
+
+    Attributes:
+        lines: Printed to stdout first, one per line.
+        outcome: Reported on an Outcome marker line after the commits: a
+            string as it is, anything else as JSON. ``None`` reports none.
+        exit_code: What the script exits with.
+        env: Values set in the agent's environment.
+        pass_env: Host variable names passed through to the agent.
+        commits: Made in order, after ``lines``.
+        uncommitted: Files written after the commits and left uncommitted,
+            for collect's salvage to find.
+        delay: Seconds slept before anything else; ``None`` sleeps not at all.
+        linger: Keep running after the Outcome, with children, until killed
+            — for a test of completion grace or of cancellation.
+        linger_touch: While lingering, a path a background child keeps
+            appending to, so a test can see the tree is still alive.
     """
 
     lines: Sequence[str] = ()
@@ -75,6 +97,19 @@ class ScriptedAgent:
         return None
 
     def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
+        """A shell script that plays this agent back in the sandbox.
+
+        It prints ``lines``, makes each of ``commits`` and leaves
+        ``uncommitted`` written, reports ``outcome`` on a marker line, then
+        exits ``exit_code`` — or lingers first, when asked to.
+
+        Args:
+            prompt: Ignored: playback says what it was scripted to.
+            outcome_schema: Ignored, for the same reason.
+
+        Returns:
+            A ``script`` command, for the sandbox's own shell (ADR-0036).
+        """
         del prompt, outcome_schema  # scripted playback ignores prompt/schema
         parts: list[str] = ["set -e"]
         if self.delay is not None:
@@ -111,6 +146,15 @@ class ScriptedAgent:
         )
 
     def parse(self, line: str) -> Sequence[AgentEvent]:
+        """A marker line as its Outcome, any other line as text.
+
+        Args:
+            line: One line of the script's stdout.
+
+        Returns:
+            ``OutcomeReported`` for an Outcome marker line, ``AgentText`` for
+            any other non-empty line, and nothing for an empty one.
+        """
         # The public helper, so playback reads a marker exactly as a
         # provider author's agent would be read (#43).
         reported = find_outcome(line)

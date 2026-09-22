@@ -83,27 +83,44 @@ def run_agent[OutcomeT](
     result execs it, parses stdout lines and returns the last valid report
     (ADR-0038).
 
-    ``on_output`` receives every stdout and stderr line as an ``AgentLine``,
-    awaited before the next line is read.
+    An ``Exception`` from ``provider.command`` propagates from the call
+    unchanged: nothing has started, so there is nothing to await. An
+    ``Exception`` from ``parse`` or ``on_output`` cancels the exec, then
+    propagates from the await unchanged.
 
-    ``host_env`` is the host environment the provider's ``pass_env`` names are
-    looked up in; a run passes the one it read at its start, so one run sees
-    one environment however long it takes (ADR-0034). On its own it reads
-    ``os.environ``, as running a command by hand would.
+    Args:
+        sandbox: The started sandbox the agent execs in.
+        provider: Builds the agent's command and parses its stdout.
+        prompt: The prompt text handed to ``provider.command``.
+        outcome_type: The Outcome's type — a ``BaseModel``, dataclass or
+            ``TypedDict`` — which the schema is derived from and every report
+            validated against.
+        timeouts: The agent's bounds — silence, wall and completion grace;
+            ``None`` is ``Timeouts()``, whose silence and wall are unbounded
+            (ADR-0017).
+        on_output: Called with every stdout and stderr line as an
+            ``AgentLine``, awaited before the next line is read.
+        host_env: The host environment the provider's ``pass_env`` names are
+            looked up in; a run passes the one it read at its start, so one
+            run sees one environment however long it takes (ADR-0034).
+            ``None`` reads ``os.environ``, as running a command by hand would.
+        env: Resolved literals laid over the provider's tier at the agent
+            exec. A run passes its per-run tier here, since the sandbox
+            already holds that tier but the provider's would otherwise win
+            over it at this one exec — and the most specific tier wins
+            everywhere (ADR-0013).
 
-    ``env`` is resolved literals laid over the provider's tier at the agent
-    exec. A run passes its per-run tier here, since the sandbox already
-    holds that tier but the provider's would otherwise win over it at this
-    one exec — and the most specific tier wins everywhere (ADR-0013).
+    Returns:
+        A coroutine to await for the agent's exit and the last valid Outcome
+        it reported. An agent held past ``completion_grace`` after reporting
+        one is stopped and still returns it, its exit marked ``hanging``.
 
-    Raises ``TypeError`` at the call for an ``outcome_type`` that is not
-    object-shaped, before the provider is asked for anything, and an
-    ``Exception`` from ``provider.command`` propagates from the call
-    unchanged: nothing has started, so there is nothing to await.
-
-    Awaiting raises ``StageError`` for agent-stage failures (non-zero exit,
-    missing/invalid Outcome, silence/wall timeout). An ``Exception`` from
-    ``parse`` or ``on_output`` cancels the exec, then propagates unchanged.
+    Raises:
+        TypeError: At the call, before the provider is asked for anything,
+            for an ``outcome_type`` that is not object-shaped.
+        StageError: From the await, at stage ``"agent"``: ``AgentExited`` for
+            a non-zero exit, ``OutcomeMissing`` or ``OutcomeInvalid`` for no
+            valid report, ``TimedOut`` for a silence or wall bound.
     """
     command = provider.command(prompt, outcome_schema(outcome_type))
     return _run(

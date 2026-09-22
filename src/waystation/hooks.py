@@ -47,6 +47,11 @@ class RunContext:
     __slots__ = ("_record",)
 
     def __init__(self, record: RunRecord) -> None:
+        """View ``record``; a run makes one, never a flow script.
+
+        Args:
+            record: The run's record, which its result is assembled from too.
+        """
         self._record = record
 
     @property
@@ -123,31 +128,78 @@ class HookBundle:
     """
 
     def on_run_start(self, ctx: RunContext) -> Awaitable[None] | None:
-        """Fired as a run starts, before the workspace stage."""
+        """Fired as a run starts, before the workspace stage.
+
+        Args:
+            ctx: The run.
+
+        Returns:
+            ``None``, or an awaitable the run awaits before going on.
+        """
         return None
 
     def on_workspace_ready(self, ctx: RunContext) -> Awaitable[None] | None:
-        """Fired once the workspace is prepared."""
+        """Fired once the workspace is prepared.
+
+        Args:
+            ctx: The run; ``ctx.base_sha`` is resolved from here on.
+
+        Returns:
+            ``None``, or an awaitable the run awaits before going on.
+        """
         return None
 
     def on_sandbox_ready(self, ctx: RunContext) -> Awaitable[None] | None:
-        """Fired once the sandbox is up, before the agent starts."""
+        """Fired once the sandbox is up, before the agent starts.
+
+        Args:
+            ctx: The run; ``ctx.sandbox`` is usable from here until teardown.
+
+        Returns:
+            ``None``, or an awaitable the run awaits before going on.
+        """
         return None
 
     def on_agent_output(
         self, ctx: RunContext, line: AgentLine
     ) -> Awaitable[None] | None:
-        """Fired for each line the agent emits."""
+        """Fired for each line the agent emits.
+
+        Args:
+            ctx: The run.
+            line: The line, the stream it came on, and the events the
+                provider parsed from it.
+
+        Returns:
+            ``None``, or an awaitable the run awaits before going on.
+        """
         return None
 
     def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> Awaitable[None] | None:
-        """Fired when the agent exec ends; ``exit.exit_code`` is -1 if stopped."""
+        """Fired when the agent exec ends.
+
+        Args:
+            ctx: The run.
+            exit: How the agent exec ended; ``exit.exit_code`` is -1 if it was
+                stopped.
+
+        Returns:
+            ``None``, or an awaitable the run awaits before going on.
+        """
         return None
 
     def on_integrated(
         self, ctx: RunContext, report: IntegrationReport
     ) -> Awaitable[None] | None:
-        """Fired when integration lands."""
+        """Fired when integration lands.
+
+        Args:
+            ctx: The run.
+            report: What integration did: what landed, and where.
+
+        Returns:
+            ``None``, or an awaitable the run awaits before going on.
+        """
         return None
 
     def on_run_end(
@@ -155,7 +207,15 @@ class HookBundle:
         ctx: RunContext,
         result: RunResult[Any],
     ) -> Awaitable[None] | None:
-        """Fired for every result a run returns."""
+        """Fired for every result a run returns.
+
+        Args:
+            ctx: The run; ``ctx.stage`` is where it ended.
+            result: The result the run is about to return.
+
+        Returns:
+            ``None``, or an awaitable the run awaits before going on.
+        """
         return None
 
 

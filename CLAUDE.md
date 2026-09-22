@@ -12,7 +12,7 @@ A bare, hackable Python library for orchestrating sandboxed AI coding agents —
 
 ## Done means CI is green
 
-This is a public repo, so the gate is **CI green on the PR** — not a passing run on your machine. `just check` (`ruff check` · `ruff format --check` · `mypy` strict · `pytest`, 85% floor) is the fast local signal, and CI runs exactly that on Linux **and** Windows, so a local pass is evidence, not the verdict. Push the branch, watch the run, and fix what the matrix finds. Never lower the floor to pass; never add an ignore you can't justify in the same breath.
+This is a public repo, so the gate is **CI green on the PR** — not a passing run on your machine. `just check` (`ruff check` · `ruff format --check` · `mypy` strict · `pytest`, 90% branch-coverage floor) is the fast local signal, and CI runs exactly that on Linux **and** Windows, so a local pass is evidence, not the verdict. Push the branch, watch the run, and fix what the matrix finds. Never lower the floor to pass; never add an ignore you can't justify in the same breath.
 
 **Green means land it.** Both legs pass and the merge is yours to make, without waiting to be told: a green PR left sitting is the ticket unfinished. Then delete the branch on both sides — its commits are on `main`, so the delete costs nothing, while the branch left behind makes the next reader work out which of a dozen are still live. `gh pr merge <n> --merge --delete-branch` does all three, and `git fetch --prune` clears the tracking refs someone else's merge left you holding.
 

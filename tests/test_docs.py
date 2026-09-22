@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -105,3 +106,33 @@ def test_every_module_curates_its_public_surface() -> None:
         f"no __all__: {missing}. Curate the names the module means to export; "
         "everything else is underscore-private (CLAUDE.md)."
     )
+
+
+@pytest.mark.unit
+def test_the_coverage_floor_is_one_number_everywhere_it_is_written() -> None:
+    """The floor lives in two config tables and two guides; they drift apart silently.
+
+    It went from #18's 90% to 85% in one table with no reason recorded (#145),
+    so every place that states it is held to the same number here.
+    """
+    config = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    addopts = config["tool"]["pytest"]["ini_options"]["addopts"]
+    (pytest_floor,) = (
+        int(opt.removeprefix("--cov-fail-under="))
+        for opt in addopts
+        if opt.startswith("--cov-fail-under=")
+    )
+    floors = {
+        "pytest addopts": pytest_floor,
+        "coverage.report": config["tool"]["coverage"]["report"]["fail_under"],
+    }
+    for guide in (REPO / "CLAUDE.md", TESTS_GUIDE):
+        stated = re.findall(
+            r"(\d+)% branch-coverage floor|floor is (\d+)% branch coverage",
+            guide.read_text(encoding="utf-8"),
+        )
+        assert stated, f"{guide.relative_to(REPO)} no longer states the floor"
+        for match in stated:
+            floors[str(guide.relative_to(REPO))] = int("".join(match))
+
+    assert len(set(floors.values())) == 1, f"coverage floors disagree: {floors}"

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic import TypeAdapter
+from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
 
 __all__ = ["outcome_schema"]
 
@@ -19,7 +20,14 @@ def outcome_schema(outcome_type: type[Any]) -> dict[str, Any]:
     Raises ``TypeError`` unless the type is object-shaped: an Outcome is a
     JSON object (ADR-0021).
     """
-    schema = TypeAdapter(outcome_type).json_schema()
+    try:
+        schema = TypeAdapter(outcome_type).json_schema()
+    except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as exc:
+        msg = (
+            f"outcome type {outcome_type!r} has no JSON schema; "
+            "use a BaseModel, dataclass or TypedDict"
+        )
+        raise TypeError(msg) from exc
     # A root that is only a ref names its shape in $defs; judge that shape.
     root = schema
     if "$ref" in root and "$defs" in schema:

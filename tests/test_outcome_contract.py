@@ -8,7 +8,7 @@ refused type or a provider that cannot build its command fails at the call.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -60,6 +60,20 @@ def test_run_agent_refuses_a_non_object_outcome_before_the_provider_is_asked() -
 
     with pytest.raises(TypeError, match="object-shaped"):
         _ = run_agent(_NO_SANDBOX, agent, "report back", str)
+
+    assert agent.schemas == []
+
+
+class Hook(BaseModel):
+    on_done: Callable[[], None]
+
+
+@pytest.mark.unit
+def test_run_agent_refuses_a_schemaless_outcome_before_the_provider_is_asked() -> None:
+    agent = RecordingAgent()
+
+    with pytest.raises(TypeError, match=r"Hook.*BaseModel, dataclass or TypedDict"):
+        _ = run_agent(_NO_SANDBOX, agent, "report back", Hook)
 
     assert agent.schemas == []
 

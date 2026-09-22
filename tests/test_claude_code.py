@@ -357,13 +357,20 @@ def test_a_tool_results_text_blocks_are_joined_into_its_text() -> None:
                             {"type": "image", "source": {}},
                             {"type": "text", "text": "second"},
                         ],
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t2",
+                        "content": {"not": "a shape it knows"},
                     }
                 ]
             },
         }
     )
     assert list(ClaudeCode().parse(line)) == [
-        AgentToolResult("t1", is_error=False, text="first\nsecond")
+        AgentToolResult("t1", is_error=False, text="first\nsecond"),
+        # A shape it cannot read is no text, not a failed result.
+        AgentToolResult("t2", is_error=False, text=""),
     ]
 
 

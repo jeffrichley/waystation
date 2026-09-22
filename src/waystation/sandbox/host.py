@@ -342,14 +342,14 @@ class HostRunner:
             await asyncio.gather(pump_out, pump_err)
         except asyncio.CancelledError:
             tree.kill()
-            await _wait_for_the_tree_to_die(process)
-            pump_out.cancel()
-            pump_err.cancel()
-            # Whatever a reader was doing, it must not replace the
-            # cancellation on its way out.
-            await asyncio.gather(pump_out, pump_err, return_exceptions=True)
-            if on_cancel is not None:
-                await self._clean_up(on_cancel)
+            # All of it, not just on_cancel: a second cancel landing while
+            # the killed process exits would otherwise skip on_cancel, and
+            # leave running what only it reaches (#169). Held, then raised
+            # below with the first (ADR-0017).
+            await run_to_end(
+                self._clean_up(process, pump_out, pump_err, on_cancel),
+                lambda _: None,
+            )
             raise
 
         if capture:
@@ -369,16 +369,28 @@ class HostRunner:
         )
 
     @staticmethod
-    async def _clean_up(on_cancel: Callable[[], Awaitable[None]]) -> None:
-        """Reach what the killed process left running elsewhere, to the end.
+    async def _clean_up(
+        process: asyncio.subprocess.Process,
+        pump_out: asyncio.Task[None],
+        pump_err: asyncio.Task[None],
+        on_cancel: Callable[[], Awaitable[None]] | None,
+    ) -> None:
+        """After the kill: wait out the tree, stop the readers, run ``on_cancel``.
 
-        One more cancellation meanwhile adds nothing to the one already on
-        its way, so it is held rather than spent; a failure is logged,
-        because raising would put an error where a cancellation belongs
-        (ADR-0017).
+        ``on_cancel`` reaches what the killed process left running elsewhere.
+        Its failure is logged, because raising would put an error where a
+        cancellation belongs (ADR-0017).
         """
+        await _wait_for_the_tree_to_die(process)
+        pump_out.cancel()
+        pump_err.cancel()
+        # Whatever a reader was doing, it must not replace the cancellation
+        # on its way out.
+        await asyncio.gather(pump_out, pump_err, return_exceptions=True)
+        if on_cancel is None:
+            return
         try:
-            await run_to_end(on_cancel(), lambda _: None)
+            await on_cancel()
         except Exception:
             SANDBOX.exception("failed to clean up after a cancelled exec")
 

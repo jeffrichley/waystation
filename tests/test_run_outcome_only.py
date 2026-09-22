@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
@@ -41,8 +42,7 @@ async def test_outcome_only_run_returns_validated_outcome(host_repo: Path) -> No
     assert isinstance(result, RunSucceeded)
     assert result.outcome == Answer(summary="done")
     assert result.base_sha is not None
-    assert len(result.run_id) == 8
-    assert all(c in "0123456789abcdef" for c in result.run_id)
+    assert re.fullmatch("[0-9a-f]{8}", result.run_id), result.run_id
     assert result.agent is not None
     assert result.agent.exit_code == 0
     assert result.agent.hanging is False
@@ -64,8 +64,8 @@ async def test_awaiting_same_spec_twice_yields_distinct_run_ids(
     first = await spec
     second = await spec
     assert first.run_id != second.run_id
-    assert len(first.run_id) == 8
-    assert len(second.run_id) == 8
+    assert re.fullmatch("[0-9a-f]{8}", first.run_id), first.run_id
+    assert re.fullmatch("[0-9a-f]{8}", second.run_id), second.run_id
 
 
 @pytest.mark.git

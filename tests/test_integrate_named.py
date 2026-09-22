@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from pydantic import BaseModel
 
-from helpers import commit_on, git
+from helpers import a_run, commit_on, git
 from waystation import Flow, Integration, NoSandbox, RunSucceeded
 from waystation.testing import ScriptedAgent, ScriptedCommit
 
@@ -137,3 +138,23 @@ async def test_integrate_serializes_concurrent_lands(host_repo: Path) -> None:
     tree_files = git(host_repo, "ls-tree", "--name-only", "-r", "agents/race")
     assert "a.txt" in tree_files
     assert "b.txt" in tree_files
+
+
+@pytest.mark.git
+@pytest.mark.parametrize("mechanism", ["apply", "merge"])
+async def test_landing_the_same_series_twice_makes_no_empty_commit(
+    host_repo: Path, mechanism: Literal["apply", "merge"]
+) -> None:
+    """The second landing finds its change already there, and lands nothing."""
+    spec = a_run(host_repo).integrate("agents/twice", mechanism=mechanism)
+
+    first = await spec
+    tip = git(host_repo, "rev-parse", "agents/twice")
+    second = await spec
+
+    assert isinstance(first, RunSucceeded), first
+    assert isinstance(second, RunSucceeded), second
+    assert second.report is not None
+    assert second.report.landed == ()
+    assert second.report.target_after == tip
+    assert git(host_repo, "rev-parse", "agents/twice") == tip, "no empty commit"

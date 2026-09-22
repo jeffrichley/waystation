@@ -5,28 +5,35 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from helpers import ShellAgent, lifecycle
+from helpers import ShellAgent, a_run, lifecycle
 from waystation import (
     AgentExit,
     AgentExited,
     Errored,
+    ExecResult,
     Flow,
     NoSandbox,
     OutcomeInvalid,
     OutcomeMissing,
     RunFailed,
+    Sandbox,
     StageError,
     WaystationError,
+    Workspace,
     prepare_workspace,
     run_agent,
 )
 from waystation.agents.protocol import AgentCommand, AgentEvent
+from waystation.sandbox.protocol import LineCallback
 from waystation.testing import ScriptedAgent
 
 
@@ -344,3 +351,68 @@ async def test_an_agent_the_sandbox_does_not_have_says_the_sandbox_is_missing_it
     assert any("exited 127" in m for m in said), said
     assert any("could not find" in m for m in said), said
     assert any("waystation-no-such-binary" in m for m in said), said
+
+
+class _SandboxBroke(Exception):
+    """What a broken backend raises: a plain ``Exception``, nothing of ours."""
+
+
+class _BrokenBox:
+    """A live sandbox whose every exec raises."""
+
+    def __init__(self, inner: Sandbox) -> None:
+        self.workspace = inner.workspace
+        self.shell = inner.shell
+
+    async def exec(
+        self,
+        argv: Sequence[str],
+        *,
+        stdin: str | None = None,
+        env: Mapping[str, str] | None = None,
+        capture: bool = True,
+        on_stdout: LineCallback | None = None,
+        on_stderr: LineCallback | None = None,
+    ) -> ExecResult:
+        raise _SandboxBroke("exec broke")
+
+
+@dataclass(frozen=True)
+class _BrokenSandbox:
+    """``NoSandbox``, broken at ``start`` or at every ``exec``."""
+
+    at: Literal["start", "exec"]
+    inner: NoSandbox = field(default_factory=NoSandbox)
+
+    async def preflight(self) -> None:
+        await self.inner.preflight()
+
+    @asynccontextmanager
+    async def start(
+        self, ws: Workspace, *, env: Mapping[str, str]
+    ) -> AsyncIterator[Sandbox]:
+        if self.at == "start":
+            raise _SandboxBroke("start broke")
+        async with self.inner.start(ws, env=env) as box:
+            yield _BrokenBox(box)
+
+
+@pytest.mark.git
+@pytest.mark.parametrize(
+    ("at", "stage"), [("start", "sandbox"), ("exec", "agent")], ids=["start", "exec"]
+)
+async def test_a_backend_raising_a_plain_exception_is_errored_at_its_stage(
+    host_repo: Path, at: Literal["start", "exec"], stage: str
+) -> None:
+    """A backend is the user's protocol, so what it raises is anyone's type.
+
+    It still comes back as a value, the exception attached (ADR-0016); an
+    exec that raises is the agent's, the first thing to exec.
+    """
+    result = await a_run(host_repo, sandbox=_BrokenSandbox(at))
+
+    assert isinstance(result, RunFailed), result
+    assert result.stage == stage
+    assert isinstance(result.failure, Errored)
+    assert isinstance(result.failure.exception, _SandboxBroke)
+    assert str(result.failure.exception) == f"{at} broke"

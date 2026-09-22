@@ -361,3 +361,49 @@ async def test_patch_series_from_range(host_repo: Path) -> None:
     assert series.commits == 1
     assert series.base_sha == base
     assert "on feature" in series.patches[0]
+
+
+_REWINDS_BELOW_BASE = "\n".join(
+    ["set -e", "git reset -q --hard HEAD~1", f"echo '{OK_OUTCOME_LINE}'"]
+)
+_COMMITS_AN_ORPHAN = "\n".join(
+    [
+        "set -e",
+        "git checkout -q --orphan lone",
+        "printf 'lone\\n' > LONE",
+        "git add LONE && git commit -q -m lone",
+        f"echo '{OK_OUTCOME_LINE}'",
+    ]
+)
+
+
+@pytest.mark.git
+@pytest.mark.parametrize(
+    ("script", "tree"),
+    [(_REWINDS_BELOW_BASE, ["README"]), (_COMMITS_AN_ORPHAN, ["B", "LONE", "README"])],
+    ids=["rewind", "orphan"],
+)
+async def test_a_head_that_does_not_descend_from_base_is_refused_and_squashed(
+    host_repo: Path, script: str, tree: list[str]
+) -> None:
+    """Not only a merge is nonlinear: so is any HEAD base is not an ancestor of.
+
+    What the agent left is kept all the same, as one commit on base whose
+    tree is the agent's (ADR-0006).
+    """
+    # A second commit, so the base has a parent to rewind to.
+    commit_on(host_repo, git(host_repo, "branch", "--show-current"), {"B": "b\n"})
+
+    result = await Flow(host_repo, agent=ShellAgent(script), sandbox=NoSandbox()).run(
+        "go below base"
+    )
+
+    assert isinstance(result, RunFailed), result
+    assert result.stage == "collect"
+    assert isinstance(result.failure, Refused)
+    assert result.failure.reason == "nonlinear_series"
+    assert result.preserved == f"waystation/{result.run_id}"
+    assert result.series is not None
+    assert result.series.commits == 1
+    assert git(host_repo, "rev-parse", f"{result.preserved}~1") == result.base_sha
+    assert git(host_repo, "ls-tree", "--name-only", result.preserved).split() == tree

@@ -13,16 +13,19 @@ from pathlib import Path
 
 import pytest
 
-from helpers import ShellAgent, a_run
+from helpers import OK_OUTCOME, PROMPT, ShellAgent, a_run
 from waystation import (
+    Flow,
     Integration,
     NoSandbox,
     RunFailed,
     RunSpec,
     RunSucceeded,
+    Series,
     Summary,
     Timeouts,
 )
+from waystation.hooks import RunContext
 from waystation.testing import ScriptedAgent
 
 # The bare names the builders own, spelled out rather than read off the class:
@@ -237,3 +240,45 @@ async def test_a_failed_run_carries_its_name_too(host_repo: Path) -> None:
 
     assert isinstance(result, RunFailed), result
     assert result.name == "doomed"
+
+
+@pytest.mark.git
+async def test_salvage_off_on_one_run_drops_its_work_over_a_salvaging_flow(
+    host_repo: Path,
+) -> None:
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(uncommitted={"DIRTY": "gone\n"}, outcome=OK_OUTCOME),
+        sandbox=NoSandbox(),
+        salvage=True,
+    )
+
+    result = await flow.run(PROMPT).salvage(False)
+
+    assert isinstance(result, RunSucceeded), result
+    assert result.series == Series(commits=0, salvaged=False)
+    assert result.preserved is None
+
+
+@pytest.mark.git
+async def test_a_sandbox_named_on_one_run_is_the_one_it_runs_in(
+    host_repo: Path,
+) -> None:
+    seen: list[str] = []
+
+    async def env_inside(ctx: RunContext) -> None:
+        shown = await ctx.sandbox.exec([*ctx.sandbox.shell, "env"])
+        seen.append(shown.stdout)
+
+    flow = Flow(
+        host_repo,
+        agent=ScriptedAgent(outcome=OK_OUTCOME),
+        sandbox=NoSandbox(env={"WAYSTATION_BACKEND": "the flow's"}),
+    )
+    other = NoSandbox(env={"WAYSTATION_BACKEND": "this run's"})
+
+    result = await flow.run(PROMPT).sandbox(other).on_sandbox_ready(env_inside)
+
+    assert isinstance(result, RunSucceeded), result
+    inside = dict(line.split("=", 1) for line in seen[0].splitlines() if "=" in line)
+    assert inside["WAYSTATION_BACKEND"] == "this run's"

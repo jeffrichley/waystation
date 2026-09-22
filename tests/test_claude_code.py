@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from helpers import RECORDED_CLAUDE, ShellAgent, Total, recorded_claude
 from waystation import (
@@ -372,3 +373,37 @@ async def test_an_agent_that_gives_up_on_the_schema_reports_no_outcome(
 
     assert isinstance(result, RunFailed), result
     assert isinstance(result.failure, OutcomeMissing)
+
+
+# A process that sent work to the background emits one result per turn, and
+# holds them all until that work ends: each carries structured output if its
+# turn called StructuredOutput, so the last is the answer (#158). Recorded by
+# hand from Claude Code 2.1.278 on haiku, not by the live suite: a prompt that
+# calls StructuredOutput before and after a background sub-agent. Hooks,
+# thinking and the init line are cut, and host paths scrubbed.
+
+
+class Summary(BaseModel):
+    """The Outcome the ``background_results`` recording reports."""
+
+    summary: str
+
+
+@pytest.mark.unit
+def test_a_run_that_waited_on_background_work_reports_every_turns_outcome() -> None:
+    assert _of(OutcomeReported, _events("background_results")) == [
+        OutcomeReported({"summary": "first: launched"}),
+        OutcomeReported({"summary": "second: Done."}),
+    ]
+
+
+@pytest.mark.git
+async def test_the_last_turns_outcome_is_the_runs_outcome(host_repo: Path) -> None:
+    result = await Flow(
+        host_repo, agent=Replayed("background_results"), sandbox=NoSandbox()
+    ).run("p", outcome=Summary)
+
+    assert isinstance(result, RunSucceeded), result
+    assert result.outcome == Summary(summary="second: Done.")
+    assert result.agent is not None
+    assert not result.agent.hanging

@@ -32,7 +32,6 @@ from helpers import (
 )
 from waystation import (
     Flow,
-    GitRepo,
     Integration,
     IntegrationReport,
     NoSandbox,
@@ -43,6 +42,7 @@ from waystation import (
     Summary,
 )
 from waystation.agents import AgentLine
+from waystation.integration import GitRepo
 from waystation.testing import ScriptedAgent, ScriptedCommit
 
 

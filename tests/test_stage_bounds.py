@@ -27,7 +27,6 @@ from helpers import (
     workspaces,
 )
 from waystation import (
-    GitRepo,
     Integration,
     IntegrationReport,
     PatchSeries,
@@ -38,6 +37,7 @@ from waystation import (
     Timeouts,
 )
 from waystation.clock import ManualClock, use_clock
+from waystation.integration import GitRepo
 
 TARGET = "feature"
 

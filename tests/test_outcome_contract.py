@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field, TypeAdapter
 from pydantic.errors import PydanticUserError
 
 from helpers import RecordingAgent
-from waystation import AgentCommand, Flow, NoSandbox, Sandbox, run_agent
+from waystation import Flow, NoSandbox, run_agent
+from waystation.agents import AgentCommand
+from waystation.sandbox import Sandbox
 
 
 class Answer(BaseModel):

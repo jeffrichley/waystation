@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from waystation import AgentCommand
+from waystation.agents import AgentCommand
 from waystation.testing import ScriptedAgent
 
 

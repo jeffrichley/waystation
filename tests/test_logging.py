@@ -14,13 +14,13 @@ from rich.logging import RichHandler
 from helpers import PROMPT, a_run, lifecycle
 from waystation import (
     CommandFailed,
-    GitRepo,
     RunSucceeded,
     StageError,
     configure_logging,
 )
 from waystation.agents.outcome import OUTCOME_MARKER
 from waystation.hooks import HOOK_NAMES, HookRegistry, RunContext
+from waystation.integration import GitRepo
 from waystation.observability import redact_argv
 from waystation.observers import RunLog
 

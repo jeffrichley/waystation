@@ -274,3 +274,99 @@ def _sections_owed(fn: Callable[..., object]) -> list[str]:
     elif returns not in ("None", "NoReturn", "Never"):
         owed.append("Returns")
     return owed
+
+
+# What a flow script writes and reads, and nothing else: the seam vocabulary
+# lives in `waystation.agents`, `.sandbox`, `.integration` and `.testing`, one
+# home each (#174). Adding a line here is an API commitment, so it is a line
+# someone has to write on purpose.
+_FLOW_SCRIPT_SURFACE = {
+    # building a flow and describing runs
+    "Flow",
+    "RunSpec",
+    "fan_out",
+    # the primitives, for a loop composed by hand, and what they hand back
+    "prepare_workspace",
+    "run_agent",
+    "collect",
+    "integrate",
+    "preserve_series",
+    "remove_workspace",
+    "stages",
+    "preflight",
+    "Workspace",
+    "PatchSeries",
+    # results, and every value one carries
+    "RunResult",
+    "RunSucceeded",
+    "RunConflicted",
+    "RunFailed",
+    "AgentExit",
+    "AgentUsage",
+    "Series",
+    "IntegrationReport",
+    "Stage",
+    # failures: the union, its members, and what a primitive raises
+    "Failure",
+    "TimedOut",
+    "AgentExited",
+    "OutcomeMissing",
+    "OutcomeInvalid",
+    "HookRaised",
+    "CommandFailed",
+    "Refused",
+    "Errored",
+    "WaystationError",
+    "PreflightError",
+    "StageError",
+    # hooks
+    "RunContext",
+    "HookBundle",
+    "HookName",
+    # configuration and the shipped implementations
+    "Timeouts",
+    "Summary",
+    "Integration",
+    "Squash",
+    "ClaudeCode",
+    "DockerSandbox",
+    "NoSandbox",
+    # the seams a flow script names in its own signatures
+    "AgentProvider",
+    "SandboxBackend",
+    "IntegrationStrategy",
+    # observability and signals
+    "configure_logging",
+    "handle_signals",
+    "run_logger",
+    "RunLogFiles",
+    "EventLog",
+    "Dashboard",
+}
+
+
+@pytest.mark.unit
+def test_the_top_level_exports_what_a_flow_script_writes_and_no_more() -> None:
+    """#174: the top level is the flow script's vocabulary, and only that.
+
+    A seam's own vocabulary — ``AgentCommand`` and the event types, ``Sandbox``
+    and ``ExecResult``, ``GitRepo`` and the landing values — belongs to
+    ``waystation.agents``, ``.sandbox`` and ``.integration``, where the author
+    implementing that seam is already looking. Re-exporting it here too leaves
+    two spellings of one name and every reader deciding which is the real one,
+    which is what ADR-0044 settled for ``ScriptedAgent``.
+
+    So this list is the contract, and it is checked rather than described: a
+    name added to ``waystation.__all__`` without a line here fails, and a line
+    here without the export fails too.
+    """
+    import waystation
+
+    exported = set(waystation.__all__)
+
+    assert exported == _FLOW_SCRIPT_SURFACE, (
+        "top-level exports drifted from the flow-script surface. "
+        f"exported but not agreed: {sorted(exported - _FLOW_SCRIPT_SURFACE)}; "
+        f"agreed but not exported: {sorted(_FLOW_SCRIPT_SURFACE - exported)}. "
+        "A seam's vocabulary belongs to its own module (#174)."
+    )

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from waystation import OutcomeReported, find_outcome, outcome_instructions
+from waystation.agents import OutcomeReported, find_outcome, outcome_instructions
 from waystation.agents.outcome import OUTCOME_MARKER
 from waystation.testing import ScriptedAgent
 

@@ -83,7 +83,6 @@ from typing import Any
 from pydantic import BaseModel
 
 from waystation import (
-    AgentCommand,
     DockerSandbox,
     Flow,
     Integration,
@@ -93,11 +92,16 @@ from waystation import (
     RunSucceeded,
     Timeouts,
     configure_logging,
-    find_outcome,
     handle_signals,
+)
+from waystation.agents import (
+    AgentCommand,
+    AgentEvent,
+    AgentText,
+    AgentToolUse,
+    find_outcome,
     outcome_instructions,
 )
-from waystation.agents import AgentEvent, AgentText, AgentToolUse
 
 _CREDENTIAL = "CURSOR_API_KEY"
 

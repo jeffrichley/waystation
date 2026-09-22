@@ -17,7 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from waystation import Sandbox, SandboxBackend, Workspace, prepare_workspace
+from waystation import SandboxBackend, Workspace, prepare_workspace
+from waystation.sandbox import Sandbox
 
 __all__ = ["SandboxConformance"]
 

@@ -19,8 +19,6 @@ import pytest
 
 from helpers import commit_on, git
 from waystation import (
-    GitRepo,
-    GitResult,
     Integration,
     IntegrationReport,
     IntegrationStrategy,
@@ -28,7 +26,7 @@ from waystation import (
     integrate,
     preserve_series,
 )
-from waystation.integration import Conflict
+from waystation.integration import Conflict, GitRepo, GitResult
 
 TARGET = "agents/landed"
 

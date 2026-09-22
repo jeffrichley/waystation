@@ -54,11 +54,10 @@ ignore = ["D105"]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-# The docstring rules hold the library's API (#147). A test's docstring states
-# a behaviour, in prose, and an example is a script a user reads top to bottom:
-# neither has Args to document.
-"tests/**" = ["D"]
-"examples/**" = ["D"]
+# The docstring rules hold the library's API (#147), so they stop at src/. A
+# test's docstring states a behaviour, in prose, and an example is a script a
+# user reads top to bottom: neither has Args to document.
+"!src/**" = ["D"]
 
 [tool.mypy]
 python_version = "3.12"

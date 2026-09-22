@@ -119,7 +119,8 @@ class SandboxBackend(Protocol):
     async def preflight(self) -> None:
         """Check, before any run starts, that this backend can start one.
 
-        Fan-out calls it once per batch, not once per run (ADR-0032).
+        Preflight calls it once per batch for each distinct backend, not once
+        per run (ADR-0032).
 
         Raises:
             PreflightError: When the backend cannot run here — a daemon not

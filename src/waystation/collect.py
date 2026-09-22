@@ -135,7 +135,7 @@ async def collect(
     work it will not land.
 
     Args:
-        sandbox: The started sandbox the workspace is mounted in.
+        sandbox: The started sandbox that holds the workspace.
         workspace: The run's workspace; its ``base_sha`` starts the series.
         salvage: Commit whatever the agent left uncommitted, so it is the
             series' last patch, instead of leaving it behind.
@@ -146,7 +146,7 @@ async def collect(
     Raises:
         StageError: At ``"collect"``: ``Refused("nonlinear_series")`` with the
             squash on ``series`` when the series is not linear, or the failure
-            of a git step the collect ran.
+            of a git command the collect ran.
     """
     base = workspace.base_sha
     salvaged = False

@@ -166,6 +166,10 @@ def test_every_public_callable_documents_its_args_and_what_it_returns() -> None:
     )
 
 
+# The method wrappers whose function sits one attribute further in.
+_BOUND_DESCRIPTORS = (classmethod, staticmethod)
+
+
 def _public_callables() -> list[tuple[str, Callable[..., object]]]:
     """Every function and method a public module's ``__all__`` hands a user.
 
@@ -184,7 +188,11 @@ def _public_callables() -> list[tuple[str, Callable[..., object]]]:
                 found[id(obj)] = (f"{obj.__module__}.{name}", obj)
             elif inspect.isclass(obj):
                 for attr, member in vars(obj).items():
-                    fn = member.__func__ if isinstance(member, _WRAPPED) else member
+                    fn = (
+                        member.__func__
+                        if isinstance(member, _BOUND_DESCRIPTORS)
+                        else member
+                    )
                     if (
                         inspect.isfunction(fn)
                         and fn.__module__.startswith("waystation")
@@ -196,9 +204,6 @@ def _public_callables() -> list[tuple[str, Callable[..., object]]]:
                     ):
                         found[id(fn)] = (f"{obj.__module__}.{fn.__qualname__}", fn)
     return sorted(found.values(), key=lambda pair: pair[0])
-
-
-_WRAPPED = (classmethod, staticmethod)
 
 
 def _public_modules() -> list[ModuleType]:

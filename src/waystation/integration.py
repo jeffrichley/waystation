@@ -512,7 +512,7 @@ class IntegrationStrategy(Protocol):
 
         Raises:
             StageError: A refusal — the target checked out, moved or dirty —
-                or a git step that failed; ``integrate`` names the stage.
+                or a git command that failed; ``integrate`` names the stage.
         """
         ...
 
@@ -672,7 +672,7 @@ class Integration:
 
         Raises:
             StageError: A refusal from ``read_target`` or ``move_target``, or
-                a git step that failed, with no stage named.
+                a git command that failed, with no stage named.
         """
         target = await repo.read_target(self.target, base=series.base_sha)
         if not series.patches:
@@ -789,7 +789,7 @@ class Squash:
 
         Raises:
             StageError: A refusal from ``read_target`` or ``move_target``, or
-                a git step that failed, with no stage named.
+                a git command that failed, with no stage named.
         """
         target = await repo.read_target(self.target, base=series.base_sha)
         if not series.patches:

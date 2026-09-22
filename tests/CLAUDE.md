@@ -39,6 +39,7 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `host_state(repo, ignoring=None)` | the host's refs, HEAD, index and tree in one value — compare before and after to prove something left the host untouched; `ignoring=` leaves one branch out, the target that moved or the branch a run kept |
 | `init_host_repo(root)` | what `host_repo` is built from — call it directly only for a *second* repo, or one outside `tmp_path` |
 | `TEST_IMAGE` | the name of the docker tier's image — for a test that must name it outside the `image` fixture, as a preflight test does |
+| `TRANSPORTS` / `Chosen` | the two transports a `DockerSandbox` can be told, for `@pytest.mark.parametrize("transport", TRANSPORTS)` — bind is skipped off Linux, saying why — and their type. Name one outright; `auto` would pick for you and leave the other untested (#106) |
 | `branches(repo, pattern)` | the short names of the branches matching `pattern` — `"waystation/*"` for the preservation branches a run kept |
 | `printf_bytes(path, data)` | a sh command writing `data` to `path` byte for byte, as octal escapes — so a CR or a non-UTF-8 byte reaches the file, not just the command line |
 | `assert_refused(result, reason, repo)` | a run that failed at integrate with `Refused(reason)`, `a_run`'s default series kept on its preservation branch — for a target a landing refused |
@@ -77,6 +78,23 @@ it ships so that a backend waystation doesn't ship runs the same ones
 does that three times, for `NoSandbox`, `DockerSandbox` and `ThinHost` — the
 third being a backend built from the public surface alone, alone in
 `thin_backend.py` so a guard test can read its imports.
+
+**`DockerSandbox` runs the whole suite once per transport** (#106): both on
+Linux, copy alone on macOS and Windows hosts (bind is skipped there, saying
+why), neither on Windows CI, which has no Linux daemon. Left to `auto`, the
+suite ran bind on CI and copy nowhere, and #76's copy-only bug was caught by
+reading instead.
+
+Most promises are about `docker exec` and cannot tell the transports apart:
+the shell, streams, stdin, bytes, long lines, the tail, the kill, the
+environment. Four are about how the workspace *arrived*, and those are the
+**transport-sensitive** ones: the exec's working directory is the workspace
+root, the refs that travel are all the sandbox sees, a commit is authored as
+the host's identity, and teardown leaves `ws.path` alone. A new promise about
+the arrival — what the repository holds, where it sits, whose it is — is
+transport-sensitive too. It goes in the suite like any other, and both legs
+run it; if the suite ever grows too slow to run twice, these four are the
+ones to keep on both.
 
 **A contract every backend keeps goes in the suite, not in one backend's
 module.** A test in `test_docker_sandbox.py` should be about docker: the image's

@@ -11,7 +11,6 @@ import asyncio
 import logging
 import secrets
 import subprocess
-import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Literal
@@ -23,6 +22,8 @@ from helpers import (
     OK_OUTCOME_LINE,
     PROMPT,
     TEST_IMAGE,
+    TRANSPORTS,
+    Chosen,
     ShellAgent,
     a_run,
     awaited,
@@ -55,22 +56,6 @@ from waystation.sandbox._docker_plans import plan_exec, plan_kill
 from waystation.testing import ScriptedAgent, ScriptedCommit
 
 MISSING_IMAGE = "waystation-test-missing:never"
-
-Chosen = Literal["copy", "bind"]
-
-TRANSPORTS = [
-    "copy",
-    pytest.param(
-        "bind",
-        marks=pytest.mark.skipif(
-            sys.platform != "linux",
-            reason="Docker Desktop shows a bound /workspace as root's on Windows "
-            "and macOS, so git in the image's user refuses it as dubious "
-            "ownership (ADR-0043, ADR-0028); auto copies there, and the Linux "
-            "CI job runs bind",
-        ),
-    ),
-]
 
 
 def _labelled(run_id: str) -> list[str]:

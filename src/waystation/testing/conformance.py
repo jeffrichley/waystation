@@ -22,6 +22,10 @@ from waystation.sandbox import Sandbox
 
 __all__ = ["SandboxConformance"]
 
+# The host repo's own identity: what a commit in any sandbox is authored as.
+_NAME = "Waystation Conformance"
+_EMAIL = "conformance@waystation.example"
+
 # Longer than the stream reader's own limit (64 KiB), so a backend that reads
 # a line the easy way loses it and this notices (ADR-0017).
 _LONG_LINE = 32 * 2**13
@@ -90,8 +94,8 @@ class SandboxConformance:
         repo = tmp_path / "conformance-host"
         repo.mkdir()
         _git(repo, "init")
-        _git(repo, "config", "user.name", "Waystation Conformance")
-        _git(repo, "config", "user.email", "conformance@waystation.example")
+        _git(repo, "config", "user.name", _NAME)
+        _git(repo, "config", "user.email", _EMAIL)
         (repo / "README").write_text("committed\n", encoding="utf-8")
         _git(repo, "add", "README")
         _git(repo, "commit", "-m", "init")
@@ -141,6 +145,24 @@ class SandboxConformance:
 
         assert sorted(listed.stdout.split()) == sorted(workspace.refs)
         assert remotes.stdout.strip() == ""
+
+    async def test_a_commit_in_the_sandbox_is_authored_as_the_host(
+        self, sandbox: Sandbox
+    ) -> None:
+        """The series lands as the host's author, whichever way it travelled.
+
+        A copy writes the identity into its clone; a bind carries whatever
+        the workspace was given. Either way a sandbox has no identity of its
+        own, so one that commits as its image's user would land a stranger's
+        commits (#106).
+        """
+        committed = await sandbox.exec(
+            [*sandbox.shell, "git commit --quiet --allow-empty -m conformance"]
+        )
+        author = await sandbox.exec(["git", "log", "-1", "--format=%an <%ae>"])
+
+        assert committed.exit_code == 0, committed.stderr
+        assert author.stdout.strip() == f"{_NAME} <{_EMAIL}>"
 
     async def test_a_sandbox_leaves_the_workspace_where_it_found_it(
         self, backend: SandboxBackend, workspace: Workspace

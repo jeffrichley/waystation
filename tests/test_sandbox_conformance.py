@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from helpers import TRANSPORTS, Chosen
 from thin_backend import ThinHost
 from waystation import DockerSandbox, NoSandbox, SandboxBackend
 from waystation.testing import SandboxConformance
@@ -25,10 +26,18 @@ class TestNoSandboxConforms(SandboxConformance):
 
 
 @pytest.mark.docker
+@pytest.mark.parametrize("transport", TRANSPORTS)
 class TestDockerSandboxConforms(SandboxConformance):
+    """The whole suite, once per transport (#106).
+
+    Every promise under both, not just the transport-sensitive ones
+    tests/CLAUDE.md names: a leg is 15 container starts, about 8 s serial on
+    Docker Desktop, which is cheaper than deciding test by test.
+    """
+
     @pytest.fixture
-    def backend(self, image: str) -> SandboxBackend:
-        return DockerSandbox(image)
+    def backend(self, image: str, transport: Chosen) -> SandboxBackend:
+        return DockerSandbox(image, transport=transport)
 
 
 @pytest.mark.git

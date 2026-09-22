@@ -9,7 +9,11 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic import TypeAdapter
-from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
+from pydantic.errors import (
+    PydanticInvalidForJsonSchema,
+    PydanticSchemaGenerationError,
+    PydanticUserError,
+)
 
 __all__ = ["outcome_schema"]
 
@@ -22,10 +26,15 @@ def outcome_schema(outcome_type: type[Any]) -> dict[str, Any]:
     """
     try:
         schema = TypeAdapter(outcome_type).json_schema()
-    except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as exc:
+    except PydanticUserError as exc:
+        # Every pydantic refusal of the type itself — no schema, a field with
+        # none, a name it cannot resolve — but not misuse of pydantic (#141).
+        schemaless = (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema)
+        if not isinstance(exc, schemaless) and exc.code != "class-not-fully-defined":
+            raise
         msg = (
-            f"outcome type {outcome_type!r} has no JSON schema; "
-            "use a BaseModel, dataclass or TypedDict"
+            f"outcome type {outcome_type!r} has no JSON schema; use a BaseModel, "
+            "dataclass or TypedDict whose fields all have one"
         )
         raise TypeError(msg) from exc
     # A root that is only a ref names its shape in $defs; judge that shape.

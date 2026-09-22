@@ -108,7 +108,7 @@ def test_non_object_outcome_raises_at_flow_run(host_repo: Path) -> None:
 
 
 @pytest.mark.git
-def test_an_outcome_type_pydantic_cannot_schema_raises_type_error_at_flow_run(
+def test_a_plain_class_outcome_raises_type_error_at_flow_run(
     host_repo: Path,
 ) -> None:
     class Plain:

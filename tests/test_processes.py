@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import time
 from collections.abc import Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +86,9 @@ async def test_injected_strategy_kills_a_stopped_agent_and_releases_every_exec(
     result = await flow.run("stop", outcome=Answer).on_agent_output(stop)
 
     assert isinstance(result, RunFailed)
-    assert processes.events.count("kill") == 1
+    # At least one: the runner sweeps the group again a beat later, for a
+    # child that was forked as the first sweep walked past it (#110).
+    assert processes.events.count("kill") >= 1
     assert processes.events.count("release") == processes.events.count("adopt")
     last_release = len(processes.events) - 1 - processes.events[::-1].index("release")
     assert processes.events.index("kill") < last_release
@@ -260,3 +264,86 @@ async def test_cancelling_again_while_the_tree_dies_still_reaches_on_cancel() ->
     runner.release()
 
     assert cleaned == ["reached"]
+
+
+class _MissesOnce:
+    """The real strategy, but the first sweep of the group misses a child.
+
+    The kernel's own miss is a race: ``kill(-pgid)`` walks the process table,
+    and a child its parent is forking as the walk passes lands in the group
+    with the signal already spent (#110). Reproducing that race costs a
+    hundred cancellations for a handful of survivors, so the miss is injected
+    instead and the window becomes a number, as ``_SlowToAdopt`` does for the
+    spawn (ADR-0042).
+    """
+
+    def __init__(self, inner: ProcessStrategy) -> None:
+        self.inner = inner
+        self.sweeps = 0
+
+    def base_env_keys(self) -> Sequence[str]:
+        return self.inner.base_env_keys()
+
+    def spawn_options(self) -> dict[str, Any]:
+        return self.inner.spawn_options()
+
+    def adopt(self, process: asyncio.subprocess.Process) -> ProcessTree:
+        tree = self.inner.adopt(process)
+        strategy = self
+
+        class _MissingFirst:
+            def kill(self) -> None:
+                strategy.sweeps += 1
+                if strategy.sweeps == 1:
+                    # The leader dies; what it started is left in the group,
+                    # exactly as a fork that raced the sweep would be.
+                    with suppress(ProcessLookupError, OSError):
+                        process.kill()
+                    return
+                tree.kill()
+
+            def release(self) -> None:
+                tree.release()
+
+        return _MissingFirst()
+
+
+@pytest.mark.git
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX process groups; Windows has its job"
+)
+async def test_a_child_the_first_sweep_missed_is_dead_before_the_cancel_ends(
+    tmp_path: Path,
+) -> None:
+    """#110: one sweep of a process group is not atomic against a fork.
+
+    A child forked as the sweep walks the table inherits the group but never
+    sees the signal, so it outlives the kill and goes on writing in the
+    workspace collect is about to read — the race ADR-0023 exists to rule
+    out. The sweep runs again, a beat later and before the leader is reaped,
+    so a child that landed late is still reachable under the same group id.
+    """
+    runner = HostRunner(processes=_MissesOnce(host_processes()))
+    pulse = tmp_path / "pulse"
+    ready = asyncio.Event()
+
+    def watch(line: str) -> None:
+        if line.strip() == "started":
+            ready.set()
+
+    # Pulsing rather than running: "it stopped" is then a fact about a file.
+    script = (
+        f"( while :; do printf x >> {pulse}; sleep 0.05; done ) & echo started; wait"
+    )
+    exec_task = asyncio.create_task(
+        runner.run([*host_shell(), script], capture=False, on_stdout=watch)
+    )
+    await asyncio.wait_for(ready.wait(), timeout=60)
+    exec_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await exec_task
+    runner.release()
+
+    settled = pulse.stat().st_size
+    await asyncio.sleep(0.3)  # several pulses; a live child would show here
+    assert pulse.stat().st_size == settled, "a child outlived the cancelled exec"

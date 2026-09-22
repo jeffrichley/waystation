@@ -159,7 +159,16 @@ async def _read_line(stream: asyncio.StreamReader) -> bytes:
 _KILL_GRACE = 5.0
 
 
-async def _wait_for_the_tree_to_die(process: asyncio.subprocess.Process) -> None:
+# Long enough for a fork that was in flight when the first sweep walked the
+# process table to have landed, short enough to be nothing on a path that is
+# already killing a process. Not a knob: a caller cannot want this number,
+# and the tree is swept again either way (ADR-0046).
+_SETTLE = 0.005
+
+
+async def _wait_for_the_tree_to_die(
+    tree: ProcessTree, process: asyncio.subprocess.Process
+) -> None:
     """Wait out a killed process, then give up on it rather than on the run.
 
     Waiting matters: core removes the workspace next, and on Windows a live
@@ -173,7 +182,17 @@ async def _wait_for_the_tree_to_die(process: asyncio.subprocess.Process) -> None
     chose to wait": it is the caller losing the ability to choose anything
     again, Ctrl-C included. So the wait is bounded and the failure is loud
     (ADR-0042).
+
+    The tree is swept once more first. A child that was being forked as the
+    first sweep walked the process table is in the group but never saw the
+    signal (#110), and it is reachable under that group id only while the
+    leader is unreaped — which it is here, since ``wait`` below is what
+    reaps it. Sweeping after that could reach a group some other process
+    was given in the meantime (bazelbuild/bazel#11910), so this is the last
+    point at which it is this tree's (ADR-0046).
     """
+    await asyncio.sleep(_SETTLE)
+    tree.kill()
     try:
         async with asyncio.timeout(_KILL_GRACE):
             await process.wait()
@@ -347,7 +366,7 @@ class HostRunner:
             # leave running what only it reaches (#169). Held, then raised
             # below with the first (ADR-0017).
             await run_to_end(
-                self._clean_up(process, pump_out, pump_err, on_cancel),
+                self._clean_up(tree, process, pump_out, pump_err, on_cancel),
                 lambda _: None,
             )
             raise
@@ -370,6 +389,7 @@ class HostRunner:
 
     @staticmethod
     async def _clean_up(
+        tree: ProcessTree,
         process: asyncio.subprocess.Process,
         pump_out: asyncio.Task[None],
         pump_err: asyncio.Task[None],
@@ -381,7 +401,7 @@ class HostRunner:
         Its failure is logged, because raising would put an error where a
         cancellation belongs (ADR-0017).
         """
-        await _wait_for_the_tree_to_die(process)
+        await _wait_for_the_tree_to_die(tree, process)
         pump_out.cancel()
         pump_err.cancel()
         # Whatever a reader was doing, it must not replace the cancellation

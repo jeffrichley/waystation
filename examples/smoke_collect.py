@@ -34,6 +34,7 @@ from waystation import (
     NoSandbox,
     RunFailed,
     RunSucceeded,
+    Timeouts,
     configure_logging,
     handle_signals,
 )
@@ -97,6 +98,18 @@ async def main() -> None:
             ),
             sandbox=NoSandbox(),
             integration=Integration("agents/demo"),
+            # Every bound defaults to unbounded (ADR-0017), so choose your
+            # own. A scripted agent in a local repo finishes in a second;
+            # these only give a wedged git a way out.
+            timeouts=Timeouts(
+                workspace=60,
+                sandbox=60,
+                agent_silence=60,
+                agent_wall=120,
+                collect=60,
+                integrate=60,
+                teardown=60,
+            ),
         )
         result = await flow.run("write a greeting", outcome=Answer)
 

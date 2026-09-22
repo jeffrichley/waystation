@@ -79,6 +79,37 @@ def test_every_rung_starts_with_good_habits(rung: Path) -> None:
     )
 
 
+# The calls that take a ``timeouts=``: a flow, or the agent primitive a flow
+# built from primitives runs (issue #148).
+_BOUNDED = {"Flow", "run_agent"}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "example", sorted(EXAMPLES.glob("*.py")), ids=lambda example: example.stem
+)
+def test_every_example_passes_timeouts_to_what_it_runs(example: Path) -> None:
+    """Every script, rung or not, bounds what it runs (#18, #148).
+
+    ``just smoke`` runs a script outside the ladder, and it is as copyable as
+    any rung, so the rule holds for every file under ``examples/``.
+    """
+    tree = ast.parse(example.read_text(encoding="utf-8"))
+    bounded = [call for call in _calls(tree) if _name(call) in _BOUNDED]
+    unbounded = [
+        call.lineno
+        for call in bounded
+        if not any(keyword.arg == "timeouts" for keyword in call.keywords)
+    ]
+
+    assert bounded, f"{example.name} builds no Flow and calls no run_agent"
+    assert not unbounded, (
+        f"{example.name} passes no timeouts= at line(s) {unbounded}: every "
+        "bound defaults to unbounded (ADR-0017), and a copied script should "
+        "choose its own"
+    )
+
+
 @pytest.mark.unit
 def test_the_readme_flagship_parses_and_imports_only_public_names() -> None:
     """The front door's snippet is code a newcomer pastes, so it must be code.

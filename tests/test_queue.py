@@ -33,7 +33,9 @@ from helpers import (
     workspaces,
 )
 from waystation import (
+    Errored,
     HookRaised,
+    PreflightError,
     RunContext,
     RunFailed,
     RunResult,
@@ -172,7 +174,10 @@ async def test_a_run_failing_preflight_reports_it_and_the_rest_go_on(
     failed = next(result for result in results if isinstance(result, RunFailed))
     assert failed.stage is None, "it never began, so no stage failed"
     assert failed.name == refused.spec.label == "ticket-7"
-    assert str(missing) in str(failed.failure)
+    # The exception, not the failure's repr, which doubles a Windows path's `\`.
+    assert isinstance(failed.failure, Errored)
+    assert isinstance(failed.failure.exception, PreflightError)
+    assert str(missing) in str(failed.failure.exception)
     assert [type(result) for result in results].count(RunSucceeded) == 1
     assert workspaces(isolated_tempdir) == []
 

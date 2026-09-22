@@ -78,6 +78,36 @@ def test_redact_argv_keeps_ordinary_git_arguments() -> None:
     assert redact_argv(argv) == argv
 
 
+def test_redact_argv_elides_a_whole_value_that_carries_whitespace() -> None:
+    argv = (
+        "docker",
+        "exec",
+        "-e",
+        "TOKEN=abc def ghi",
+        "-e",
+        "PEM=-----BEGIN KEY-----\nsecret\tbody\n-----END KEY-----",
+        "--env=SECRET=two words",
+        "c",
+        "sh",
+    )
+    assert redact_argv(argv) == (
+        "docker",
+        "exec",
+        "-e",
+        "TOKEN=***",
+        "-e",
+        "PEM=***",
+        "--env=SECRET=***",
+        "c",
+        "sh",
+    )
+
+
+def test_redact_argv_elides_an_embedded_assignment_only_up_to_whitespace() -> None:
+    argv = ("sh", "-c", "export TOKEN=abc && run --fast now")
+    assert redact_argv(argv) == ("sh", "-c", "export TOKEN=*** && run --fast now")
+
+
 def test_configure_logging_installs_exactly_one_stderr_handler(
     clean_logging: None,
 ) -> None:
@@ -225,6 +255,16 @@ def test_command_failed_redacts_its_argv() -> None:
     )
 
     assert failure.argv == ("docker", "run", "-e", "ANTHROPIC_API_KEY=***", "image")
+
+
+def test_command_failed_redacts_a_value_that_carries_whitespace() -> None:
+    failure = CommandFailed(
+        argv=["docker", "exec", "-e", "TOKEN=abc def\nghi", "c", "sh"],
+        exit_code=1,
+        stderr_tail="boom",
+    )
+
+    assert failure.argv == ("docker", "exec", "-e", "TOKEN=***", "c", "sh")
 
 
 @pytest.mark.git

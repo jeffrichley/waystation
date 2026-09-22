@@ -20,6 +20,15 @@ ELIDED = "***"
 # dotted name, so ``--api-key=`` and git's ``-c user.email=x`` are not keys.
 _ASSIGNMENT = re.compile(r"(?<![-\w.])([A-Za-z_][A-Za-z0-9_]*)=\S+")
 
+# An argument that *is* an assignment, bare or behind one flag, loses its whole
+# value: docker's ``-e KEY=VAL`` carries a value with spaces or newlines in it
+# as one argument, and the rule above would stop at its first word. Nothing
+# tells ``TOKEN=abc def`` from a script opening ``A=1 cmd``, so the script loses
+# its tail too — over-redaction is the accepted failure (ADR-0025).
+_WHOLE_ASSIGNMENT = re.compile(
+    r"\A(?P<head>(?:--?[A-Za-z][\w-]*=)?[A-Za-z_][A-Za-z0-9_]*=).+\Z", re.DOTALL
+)
+
 # Credentials that travel without a key naming them — bare, behind a flag, or
 # as a URL's userinfo. Each alternative is an issuer's own published shape, so
 # the sweep never guesses at entropy and never eats an ordinary word.
@@ -45,6 +54,7 @@ _URL_USERINFO = re.compile(r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]*://)[^/\s:@]+@")
 # Every rule, in the order each argument passes through them. Teaching the
 # redactor a new credential shape is one pattern and one line here.
 _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (_WHOLE_ASSIGNMENT, rf"\g<head>{ELIDED}"),
     (_ASSIGNMENT, rf"\1={ELIDED}"),
     (_URL_PASSWORD, rf"\g<head>:{ELIDED}@"),
     (_URL_USERINFO, rf"\g<head>{ELIDED}@"),

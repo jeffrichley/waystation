@@ -4,7 +4,8 @@ CI never executes an example: a real agent costs money and needs Docker. What
 it can do is read them. Every rung sets explicit ``Timeouts`` and calls
 ``configure_logging()`` and ``handle_signals()`` (#18), because a copied script
 should start with good habits, and a rung that quietly drops one teaches the
-opposite. These read the source without importing it.
+opposite. The ``Timeouts`` rule binds every script under ``examples/``, rung
+or not (#148). These read the source without importing it.
 """
 
 from __future__ import annotations
@@ -64,7 +65,10 @@ def test_every_listed_rung_exists() -> None:
 @pytest.mark.unit
 @pytest.mark.parametrize("rung", _rungs(), ids=lambda rung: rung.stem)
 def test_every_rung_starts_with_good_habits(rung: Path) -> None:
-    """Tutorial docstring, explicit ``Timeouts``, logging and signals (#18)."""
+    """Tutorial docstring, logging and signals (#18).
+
+    Explicit ``Timeouts`` is the next test's, which holds every example to it.
+    """
     tree = ast.parse(rung.read_text(encoding="utf-8"))
     calls = _calls(tree)
     names = {_name(call) for call in calls}
@@ -72,10 +76,50 @@ def test_every_rung_starts_with_good_habits(rung: Path) -> None:
     assert ast.get_docstring(tree), f"{rung.name} has no tutorial docstring"
     assert "configure_logging" in names, f"{rung.name} never calls configure_logging"
     assert "handle_signals" in names, f"{rung.name} never calls handle_signals"
-    timeouts = [call for call in calls if _name(call) == "Timeouts"]
-    assert any(call.keywords for call in timeouts), (
-        f"{rung.name} sets no explicit Timeouts: every bound defaults to "
-        "unbounded (ADR-0017), and a copied script should choose its own"
+
+
+# What takes a run's bounds, and how: a flow and the agent primitive by the
+# ``timeouts=`` keyword, the stage runner by its first argument (issue #148).
+_TAKES_TIMEOUTS = {"Flow": "timeouts", "run_agent": "timeouts", "stages": "bounds"}
+
+
+def _bounds(call: ast.Call) -> ast.expr | None:
+    """The expression ``call`` passes as its bounds, or ``None`` if it passes none."""
+    keyword = _TAKES_TIMEOUTS[_name(call) or ""]
+    passed = [kw.value for kw in call.keywords if kw.arg == keyword]
+    if not passed and keyword == "bounds" and call.args:
+        passed = [call.args[0]]
+    return passed[0] if passed else None
+
+
+def _chooses_a_bound(bounds: ast.expr | None) -> bool:
+    """False for no bounds, ``None``, or a bare ``Timeouts()``, which bound nothing."""
+    if bounds is None or (isinstance(bounds, ast.Constant) and bounds.value is None):
+        return False
+    if isinstance(bounds, ast.Call) and _name(bounds) == "Timeouts":
+        return bool(bounds.args or bounds.keywords)
+    return True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "example", sorted(EXAMPLES.glob("*.py")), ids=lambda example: example.stem
+)
+def test_every_example_bounds_what_it_runs(example: Path) -> None:
+    """Every script, rung or not, passes explicit ``Timeouts`` (#18, #148).
+
+    ``just smoke`` runs a script outside the ladder, and it is as copyable as
+    any rung, so the rule holds for every file under ``examples/``.
+    """
+    tree = ast.parse(example.read_text(encoding="utf-8"))
+    runners = [call for call in _calls(tree) if _name(call) in _TAKES_TIMEOUTS]
+    unbounded = [call.lineno for call in runners if not _chooses_a_bound(_bounds(call))]
+
+    assert runners, f"{example.name} builds no Flow and calls no primitive"
+    assert not unbounded, (
+        f"{example.name} sets no explicit Timeouts at line(s) {unbounded}: every "
+        "bound defaults to unbounded (ADR-0017), and a copied script should "
+        "choose its own"
     )
 
 

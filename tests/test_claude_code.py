@@ -362,7 +362,7 @@ def test_a_tool_results_text_blocks_are_joined_into_its_text() -> None:
                         "type": "tool_result",
                         "tool_use_id": "t2",
                         "content": {"not": "a shape it knows"},
-                    }
+                    },
                 ]
             },
         }

@@ -1,7 +1,7 @@
 ---
 type: adr
 title: 0044 The Scripted Agent Lives In Waystation Testing
-status: draft
+status: stable
 ---
 
 # `ScriptedAgent` lives only in `waystation.testing`, and the suite beside it loads lazily

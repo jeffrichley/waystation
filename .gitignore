@@ -24,3 +24,6 @@ uv.lock.bak
 
 # Stacks a wedged test left behind (tests/hang_dump.py)
 hang-dumps/
+
+# macOS Finder metadata
+.DS_Store

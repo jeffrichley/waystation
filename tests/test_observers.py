@@ -170,10 +170,15 @@ async def test_the_run_file_is_readable_while_the_run_is_still_going(
     )
 
 
-def _attached() -> tuple[list[logging.Handler], int]:
-    """What a run file attaches to the ``waystation`` logger, and holds it at."""
+def _attached() -> tuple[list[logging.Handler], list[logging.Handler], int]:
+    """What an observer attaches to the ``waystation`` loggers, and holds them at.
+
+    ``RunLogFiles`` attaches to the package logger, ``EventLog`` to the
+    channel beneath it; either left behind is a leak.
+    """
     root = logging.getLogger("waystation")
-    return list(root.handlers), root.level
+    channel = logging.getLogger("waystation.run")
+    return list(root.handlers), list(channel.handlers), root.level
 
 
 @pytest.mark.git
@@ -304,6 +309,40 @@ async def test_a_cancelled_run_ends_its_event_log_with_cancelled(
     assert events[-1]["name"] is None
     assert events[-1]["run_id"] == run_id, "the same envelope as a hook's line"
     assert _attached() == before, "the level is given back once the run is over"
+
+
+@pytest.mark.git
+async def test_leaving_a_fan_out_early_ends_each_runs_events_with_cancelled(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    """The case the task watch exists for (ADR-0026): runs cancelled by the
+    block's exit, in a process that keeps going."""
+    path = tmp_path / "events.jsonl"
+    before = _attached()
+    working: set[str] = set()
+
+    def watch(ctx: RunContext, line: AgentLine) -> None:
+        if line.raw == "ready":
+            working.add(ctx.run_id)
+
+    spec: RunSpec[Summary] = (
+        Flow(
+            host_repo,
+            agent=ShellAgent(WORKS_UNTIL_STOPPED),
+            sandbox=NoSandbox(),
+            hooks=[EventLog(path)],
+        )
+        .run("work until stopped")
+        .on_agent_output(watch)
+    )
+    async with fan_out([spec, spec]) as results:
+        await until_batch(lambda: len(working) == 2, results)
+
+    events = events_in(path)
+    for run_id in working:
+        mine = [e["event"] for e in events if e["run_id"] == run_id]
+        assert mine[-1] == "cancelled"
+    assert _attached() == before
 
 
 @pytest.mark.git

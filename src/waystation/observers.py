@@ -460,6 +460,11 @@ class _Watches[T]:
     def running(self) -> list[str]:
         return list(self._open)
 
+    def end_all(self) -> None:
+        """End every run still watched: an observer's ``close()``."""
+        for run_id in self.running():
+            self.end(run_id)
+
     def end(self, run_id: str) -> _Watch[T] | None:
         """Detach the run's handler and give the level back, if still watched."""
         # Popped first, so whichever end comes first finds the entry.
@@ -674,7 +679,7 @@ class EventLog(HookBundle):
         extras = vars(record)
         self._write(
             datetime.fromtimestamp(record.created, UTC),
-            extras["event"],
+            cast("RunEvent", extras["event"]),
             extras["run_id"],
             extras["run_name"],
         )
@@ -694,7 +699,7 @@ class EventLog(HookBundle):
     def _write(
         self,
         ts: datetime,
-        event: str,
+        event: RunEvent | HookName,
         run_id: str,
         name: str | None,
         fields: Mapping[str, Any] | None = None,
@@ -725,8 +730,7 @@ class EventLog(HookBundle):
         flushed, and a run's hold on the level ends with the run, so nothing is
         lost or left held without this.
         """
-        for run_id in self._runs.running():
-            self._runs.end(run_id)
+        self._runs.end_all()
         with self._lock:
             if self._file is not None:
                 self._file.close()

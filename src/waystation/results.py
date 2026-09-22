@@ -93,10 +93,17 @@ class AgentUsage:
 
 @dataclass(frozen=True, slots=True)
 class AgentExit:
+    """How the agent's exec ended.
+
+    ``cancelled`` says the run was cancelled while the agent worked, and its
+    tree was killed (ADR-0023): there is no exit code, so ``exit_code`` is -1.
+    """
+
     exit_code: int
     elapsed: float
     hanging: bool
     usage: AgentUsage | None = None
+    cancelled: bool = False
 
 
 @dataclass(frozen=True, slots=True)

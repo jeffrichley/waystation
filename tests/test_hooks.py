@@ -10,7 +10,18 @@ from typing import Any, override
 import pytest
 from pydantic import BaseModel
 
-from helpers import OK_OUTCOME_LINE, OUTCOME, ShellAgent, commit_on, git
+from helpers import (
+    OK_OUTCOME_LINE,
+    OUTCOME,
+    WORKS_UNTIL_STOPPED,
+    ShellAgent,
+    a_run,
+    awaited,
+    branches,
+    commit_on,
+    git,
+    until,
+)
 from waystation import (
     AgentExit,
     AgentExited,
@@ -981,3 +992,45 @@ def test_a_hook_point_is_offered_everywhere_a_hook_is_registered(hook: str) -> N
     assert callable(getattr(Flow, method, None)), "the flow's decorator"
     assert callable(getattr(RunSpec, method, None)), "the run spec's builder"
     assert callable(getattr(RunLog, method, None)), "the built-in run log"
+
+
+@pytest.mark.git
+async def test_a_cancelled_run_fires_agent_end_with_the_sandbox_still_up(
+    host_repo: Path,
+) -> None:
+    """The one point a cancelled run can carry a file out before teardown (#154)."""
+    working = asyncio.Event()
+    seen: list[tuple[AgentExit, str]] = []
+
+    def watch(ctx: RunContext, line: AgentLine) -> None:
+        if line.raw == "ready":
+            working.set()
+
+    async def carry_out(ctx: RunContext, exit: AgentExit) -> None:
+        result = await ctx.sandbox.exec(["cat", "wip.txt"])
+        seen.append((exit, result.stdout))
+
+    spec = (
+        Flow(host_repo, agent=ShellAgent(WORKS_UNTIL_STOPPED), sandbox=NoSandbox())
+        .run("work until stopped")
+        .on_agent_output(watch)
+        .on_agent_end(carry_out)
+    )
+    task = asyncio.create_task(awaited(spec))
+    await until(working.is_set, task)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    ((exit, wip),) = seen
+    assert exit.cancelled
+    assert exit.exit_code == -1
+    assert wip == "wip\n"
+    assert branches(host_repo, "waystation/*"), "the series is still kept"
+
+
+@pytest.mark.git
+async def test_an_agent_that_ends_on_its_own_is_not_cancelled(host_repo: Path) -> None:
+    exits: list[AgentExit] = []
+    await a_run(host_repo).on_agent_end(lambda ctx, exit: exits.append(exit))
+    assert [e.cancelled for e in exits] == [False]

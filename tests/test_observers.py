@@ -9,7 +9,7 @@ import json
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from rich.console import Console
@@ -21,6 +21,8 @@ from helpers import (
     WORKS_UNTIL_STOPPED,
     ShellAgent,
     a_run,
+    awaited,
+    until,
     until_batch,
 )
 from waystation import (
@@ -37,7 +39,8 @@ from waystation import (
     observers,
 )
 from waystation.agents import AgentLine
-from waystation.hooks import RunContext
+from waystation.hooks import HookName, RunContext
+from waystation.observability import RunEvent
 from waystation.testing import ScriptedAgent
 
 
@@ -247,6 +250,7 @@ async def test_event_log_writes_one_object_per_lifecycle_event(
         "run_start",
         "workspace_ready",
         "sandbox_ready",
+        "agent_start",
         "agent_end",
         "integrated",
         "run_end",
@@ -259,6 +263,60 @@ async def test_event_log_writes_one_object_per_lifecycle_event(
     )
     assert by_event["integrated"]["target"] == "landing"
     assert by_event["workspace_ready"]["base_sha"] == result.base_sha
+
+
+@pytest.mark.unit
+def test_every_event_in_the_vocabulary_reaches_the_event_log() -> None:
+    """Each event arrives by its hook or off the channel: none by neither (#144)."""
+    hooked = {name for name in get_args(HookName) if f"on_{name}" in vars(EventLog)}
+
+    assert set(get_args(RunEvent)) <= hooked | observers._CHANNEL_ONLY
+
+
+@pytest.mark.git
+async def test_a_cancelled_run_ends_its_event_log_with_cancelled(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    """No run_end comes (ADR-0017), so ``cancelled`` is the run's last word."""
+    path = tmp_path / "events.jsonl"
+    before = _attached()
+    working = asyncio.Event()
+
+    def watch(ctx: RunContext, line: AgentLine) -> None:
+        if line.raw == "ready":
+            working.set()
+
+    spec: RunSpec[Summary] = (
+        Flow(host_repo, agent=ShellAgent(WORKS_UNTIL_STOPPED), sandbox=NoSandbox())
+        .run("work until stopped")
+        .hooks(EventLog(path))
+        .on_agent_output(watch)
+    )
+    task = asyncio.create_task(awaited(spec))
+    await until(working.is_set, task)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    events = events_in(path)
+    assert [event["event"] for event in events][-2:] == ["agent_start", "cancelled"]
+    (run_id,) = {event["run_id"] for event in events}
+    assert events[-1]["name"] is None
+    assert events[-1]["run_id"] == run_id, "the same envelope as a hook's line"
+    assert _attached() == before, "the level is given back once the run is over"
+
+
+@pytest.mark.git
+async def test_an_event_log_gives_the_level_back_when_its_run_ends(
+    host_repo: Path, tmp_path: Path
+) -> None:
+    """The channel is read only while a run is going: a flow's ``EventLog``
+    that is never closed must not hold the hierarchy for the process's life."""
+    before = _attached()
+
+    await a_run(host_repo).hooks(EventLog(tmp_path / "events.jsonl"))
+
+    assert _attached() == before
 
 
 @pytest.mark.git

@@ -8,8 +8,7 @@ refused type or a provider that cannot build its command fails at the call.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -17,29 +16,12 @@ import pytest
 from pydantic import BaseModel, Field, TypeAdapter
 from pydantic.errors import PydanticUserError
 
+from helpers import RecordingAgent
 from waystation import AgentCommand, Flow, NoSandbox, Sandbox, run_agent
-from waystation.agents import AgentEvent
 
 
 class Answer(BaseModel):
     summary: str
-
-
-@dataclass
-class RecordingAgent:
-    """An agent that remembers every schema it was asked to deliver."""
-
-    schemas: list[dict[str, Any]] = field(default_factory=list)
-
-    def preflight(self) -> None:
-        return None
-
-    def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
-        self.schemas.append(outcome_schema)
-        return AgentCommand(argv=("true",))
-
-    def parse(self, line: str) -> Sequence[AgentEvent]:
-        return ()
 
 
 # Never touched: every test here stops before the exec begins.

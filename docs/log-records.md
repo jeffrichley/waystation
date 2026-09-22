@@ -25,7 +25,7 @@ text is for people and may change; the `event` extra is the contract.
 | `run_start` | INFO | The run begins, before the workspace is prepared. Also a hook. |
 | `workspace_ready` | INFO | The base ref resolved and the workspace is built. Also a hook. |
 | `sandbox_ready` | INFO | The sandbox is up and `ctx.sandbox` is usable. Also a hook. |
-| `agent_start` | INFO | The prompt is read and the agent is about to exec. **No hook.** |
+| `agent_start` | INFO | The agent is about to exec, with the prompt read as the run started (ADR-0045). **No hook.** |
 | `agent_end` | INFO | The agent exited; the record carries its code and elapsed. Also a hook. |
 | `integrated` | INFO | A series landed on its target. Also a hook. |
 | `run_end` | INFO | The run produced a result — succeeded, failed or conflicted. Also a hook. |

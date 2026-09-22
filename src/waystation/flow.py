@@ -181,7 +181,8 @@ class RunSpec[OutcomeT]:
         provider: The agent provider that will run — ``.agent()`` sets it.
         backend: The sandbox backend it runs in — ``.sandbox()`` sets it.
         base_ref: The ref the workspace starts from — ``.base()`` sets it.
-        prompt: The instructions handed to the agent, or a path to them.
+        prompt: The instructions handed to the agent, or a path to them,
+            read once as each run starts (ADR-0045).
         outcome_type: The object-shaped type the agent reports back.
         bounds: The per-stage ``Timeouts`` — ``.timeouts()`` sets them.
         salvaging: Whether work left uncommitted is salvaged —
@@ -539,8 +540,10 @@ class RunSpec[OutcomeT]:
     ) -> RunResult[OutcomeT]:
         """Run the stages in order; each phase below owns its own stages."""
         try:
-            # run_start fires for every run, so a prompt file that cannot be
-            # read waits its turn: the run started, and then it failed.
+            # Read once, before run_start, so every hook and the agent see the
+            # same text (ADR-0045). run_start fires for every run, so a prompt
+            # file that cannot be read waits its turn: the run started, and
+            # then it failed.
             prompt_error: StageError | None = None
             try:
                 record.prompt = self._prompt_text()
@@ -572,9 +575,10 @@ class RunSpec[OutcomeT]:
     def _prompt_text(self) -> str:
         """The prompt as text, whether the flow script gave a string or a path.
 
-        Resolved before ``run_start`` so every hook sees ``ctx.prompt``, but a
-        file that cannot be read still fails the agent stage: preparing the
-        agent's prompt is the agent's business, whenever it happens.
+        Resolved once, before ``run_start``, so every hook sees ``ctx.prompt``
+        and the agent is handed that same text (ADR-0045). A file that cannot
+        be read still fails the agent stage: preparing the agent's prompt is
+        the agent's business, whenever it happens.
         """
         if not isinstance(self.prompt, Path):
             return self.prompt
@@ -676,6 +680,8 @@ class RunSpec[OutcomeT]:
             record.log.on_agent_output(ctx, line)
             await self.hook_registry.fire("agent_output", ctx, line)
 
+        # Read as the run started, not now: the agent gets what ctx showed
+        # every hook before it (ADR-0045).
         prompt_text = ctx.prompt
         # Built before agent_start: a provider that cannot build its command
         # never started an agent, so no agent_end fires for it either

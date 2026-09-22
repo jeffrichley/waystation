@@ -461,6 +461,33 @@ class GatedSandbox:
                 await self.gate.hold()
 
 
+@dataclass
+class RecordingAgent:
+    """An agent that remembers every prompt and schema it was handed.
+
+    It plays back through ``plays``, a quiet ``ScriptedAgent`` reporting
+    ``OK_OUTCOME`` unless given another. It keeps state across runs, which a
+    real provider never does (ADR-0018), so give each test its own.
+    """
+
+    plays: ScriptedAgent = field(
+        default_factory=lambda: ScriptedAgent(outcome=OK_OUTCOME)
+    )
+    prompts: list[str] = field(default_factory=list)
+    schemas: list[dict[str, Any]] = field(default_factory=list)
+
+    def preflight(self) -> None:
+        self.plays.preflight()
+
+    def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
+        self.prompts.append(prompt)
+        self.schemas.append(outcome_schema)
+        return self.plays.command(prompt, outcome_schema)
+
+    def parse(self, line: str) -> Sequence[AgentEvent]:
+        return self.plays.parse(line)
+
+
 @dataclass(frozen=True)
 class ShellAgent:
     """An agent that is a shell script; an ``OUTCOME <json>`` line reports.

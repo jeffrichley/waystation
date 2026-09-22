@@ -18,6 +18,7 @@ from waystation import (
     Flow,
     Integration,
     NoSandbox,
+    RunContext,
     RunFailed,
     RunSpec,
     RunSucceeded,
@@ -25,7 +26,6 @@ from waystation import (
     Summary,
     Timeouts,
 )
-from waystation.hooks import RunContext
 from waystation.testing import ScriptedAgent
 
 # The bare names the builders own, spelled out rather than read off the class:
@@ -280,5 +280,6 @@ async def test_a_sandbox_named_on_one_run_is_the_one_it_runs_in(
     result = await flow.run(PROMPT).sandbox(other).on_sandbox_ready(env_inside)
 
     assert isinstance(result, RunSucceeded), result
+    assert len(seen) == 1, seen
     inside = dict(line.split("=", 1) for line in seen[0].splitlines() if "=" in line)
     assert inside["WAYSTATION_BACKEND"] == "this run's"

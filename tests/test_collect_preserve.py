@@ -383,7 +383,7 @@ _COMMITS_AN_ORPHAN = "\n".join(
     [(_REWINDS_BELOW_BASE, ["README"]), (_COMMITS_AN_ORPHAN, ["B", "LONE", "README"])],
     ids=["rewind", "orphan"],
 )
-async def test_a_head_that_does_not_descend_from_base_is_refused_and_squashed(
+async def test_a_head_that_does_not_descend_from_base_is_refused_and_kept_as_one_commit(
     host_repo: Path, script: str, tree: list[str]
 ) -> None:
     """Not only a merge is nonlinear: so is any HEAD base is not an ancestor of.

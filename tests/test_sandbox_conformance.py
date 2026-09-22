@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from helpers import TRANSPORTS, Chosen
 from thin_backend import ThinHost
 from waystation import DockerSandbox, NoSandbox, SandboxBackend
 from waystation.testing import SandboxConformance
@@ -25,10 +26,20 @@ class TestNoSandboxConforms(SandboxConformance):
 
 
 @pytest.mark.docker
+@pytest.mark.parametrize("transport", TRANSPORTS)
 class TestDockerSandboxConforms(SandboxConformance):
+    """The whole suite, once per transport (#106).
+
+    Left to ``auto``, each host ran one transport and CI never ran copy at
+    all: bind on Linux, and no Linux daemon on Windows. A promise that holds
+    under one and breaks under the other is the gap #76 was caught in by
+    reading, so both run every promise. It is cheap enough to: a container
+    start is the cost, and the suite is under twenty of them.
+    """
+
     @pytest.fixture
-    def backend(self, image: str) -> SandboxBackend:
-        return DockerSandbox(image)
+    def backend(self, image: str, transport: Chosen) -> SandboxBackend:
+        return DockerSandbox(image, transport=transport)
 
 
 @pytest.mark.git

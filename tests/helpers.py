@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import subprocess
+import sys
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
@@ -49,8 +50,10 @@ __all__ = [
     "PROMPT",
     "RECORDED_CLAUDE",
     "TEST_IMAGE",
+    "TRANSPORTS",
     "USAGE",
     "WORKS_UNTIL_STOPPED",
+    "Chosen",
     "Gate",
     "GatedSandbox",
     "ShellAgent",
@@ -75,6 +78,27 @@ __all__ = [
 
 TEST_IMAGE = "waystation-test"
 """The image the docker tier runs in; ``just test-image`` builds it."""
+
+Chosen = Literal["copy", "bind"]
+"""A transport a test names outright: ``auto`` is a choice made for it."""
+
+TRANSPORTS = [
+    "copy",
+    pytest.param(
+        "bind",
+        marks=pytest.mark.skipif(
+            sys.platform != "linux",
+            reason="Docker Desktop shows a bound /workspace as root's on Windows "
+            "and macOS, so git in the image's user refuses it as dubious "
+            "ownership (ADR-0043, ADR-0028); auto copies there, and the Linux "
+            "CI job runs bind",
+        ),
+    ),
+]
+"""The two transports a ``DockerSandbox`` can be told to use, for ``parametrize``.
+
+Bind runs on Linux alone; elsewhere it is skipped, saying why.
+"""
 
 OK_OUTCOME = {"summary": "ok"}
 """The Outcome a scripted agent reports when the test doesn't care what it says."""

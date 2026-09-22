@@ -246,7 +246,17 @@ class HookRegistry:
     entries: tuple[HookEntry, ...] = ()
 
     def with_bundles(self, *bundles: object) -> HookRegistry:
-        """Append every ``on_<hook>`` method each bundle defines."""
+        """Append every ``on_<hook>`` method each bundle defines.
+
+        Args:
+            *bundles: Objects defining one or more ``on_<hook>`` methods.
+
+        Returns:
+            A new registry: this one's entries, then each bundle's.
+
+        Raises:
+            TypeError: A bundle defines no ``on_<hook>`` method.
+        """
         added: list[HookEntry] = []
         for bundle in bundles:
             found = [
@@ -266,7 +276,15 @@ class HookRegistry:
     def with_function(
         self, hook: HookName, function: Callable[..., object]
     ) -> HookRegistry:
-        """Append one function at ``hook``."""
+        """Append one function at ``hook``.
+
+        Args:
+            hook: Where the function fires.
+            function: Called with the run's context and the hook's arguments.
+
+        Returns:
+            A new registry: this one's entries, then ``function``.
+        """
         return HookRegistry((*self.entries, HookEntry(hook, function)))
 
     async def fire(
@@ -282,6 +300,13 @@ class HookRegistry:
         at once, or with ``stop_on_raise=False`` for the first one raised after
         every other function at ``hook`` has run; later ones are logged
         (ADR-0024).
+
+        Args:
+            hook: Which functions to call.
+            ctx: The run's context, every function's first argument.
+            *args: The hook's own arguments, passed after ``ctx``.
+            stop_on_raise: Raise at the first function that raises, rather
+                than after every function at ``hook`` has run.
         """
         first: StageError | None = None
         for entry in self.entries:

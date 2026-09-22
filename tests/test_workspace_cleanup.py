@@ -20,12 +20,11 @@ from waystation import (
     RunFailed,
     RunSucceeded,
     Sandbox,
-    ScriptedAgent,
-    ScriptedCommit,
     Workspace,
     prepare_workspace,
 )
 from waystation import workspace as _workspace
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 
 class Answer(BaseModel):

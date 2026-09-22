@@ -17,10 +17,9 @@ from waystation import (
     Refused,
     RunFailed,
     RunSucceeded,
-    ScriptedAgent,
-    ScriptedCommit,
 )
 from waystation.integration import GitRepo
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 
 class Answer(BaseModel):

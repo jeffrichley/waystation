@@ -20,10 +20,10 @@ from waystation import (
     RunFailed,
     RunSpec,
     RunSucceeded,
-    ScriptedAgent,
     Summary,
     Timeouts,
 )
+from waystation.testing import ScriptedAgent
 
 # The bare names the builders own, spelled out rather than read off the class:
 # a list derived from `RunSpec` would agree with whatever `RunSpec` became.

@@ -34,11 +34,10 @@ from waystation import (
     NoSandbox,
     RunFailed,
     RunSucceeded,
-    ScriptedAgent,
-    ScriptedCommit,
     configure_logging,
     handle_signals,
 )
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 
 class Answer(BaseModel):

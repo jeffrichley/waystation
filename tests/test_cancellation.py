@@ -40,11 +40,10 @@ from waystation import (
     RunContext,
     RunResult,
     RunSpec,
-    ScriptedAgent,
-    ScriptedCommit,
     Summary,
 )
 from waystation.agents import AgentLine
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 
 @dataclass(frozen=True)

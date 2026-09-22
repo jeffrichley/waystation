@@ -26,8 +26,6 @@ from waystation import (
     RunResult,
     RunSpec,
     RunSucceeded,
-    ScriptedAgent,
-    ScriptedCommit,
     TimedOut,
     Timeouts,
 )
@@ -39,6 +37,7 @@ from waystation.agents import (
 from waystation.clock import ManualClock, use_clock
 from waystation.hooks import HOOK_NAMES
 from waystation.observers import RunLog
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 
 class Answer(BaseModel):

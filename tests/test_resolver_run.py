@@ -23,10 +23,10 @@ from waystation import (
     RunFailed,
     RunSpec,
     RunSucceeded,
-    ScriptedCommit,
     Summary,
     integrate,
 )
+from waystation.testing import ScriptedCommit
 
 pytestmark = pytest.mark.git
 

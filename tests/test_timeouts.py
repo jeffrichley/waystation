@@ -16,22 +16,14 @@ import pytest
 from pydantic import BaseModel
 
 from helpers import USAGE, ShellAgent, awaited, until
-from waystation import (
-    Flow,
-    NoSandbox,
-    RunFailed,
-    RunSucceeded,
-    ScriptedAgent,
-    ScriptedCommit,
-    TimedOut,
-    Timeouts,
-)
+from waystation import Flow, NoSandbox, RunFailed, RunSucceeded, TimedOut, Timeouts
 from waystation.agents import AgentUsage
 from waystation.agents.outcome import OUTCOME_MARKER
 from waystation.agents.protocol import AgentCommand, AgentEvent
-from waystation.agents.scripted import ScriptedAgent as ScriptedParser
 from waystation.clock import ManualClock, get_clock, use_clock
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
+from waystation.testing import ScriptedAgent, ScriptedCommit
+from waystation.testing import ScriptedAgent as ScriptedParser
 from waystation.workspace import Workspace
 
 

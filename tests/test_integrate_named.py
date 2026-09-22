@@ -8,14 +8,8 @@ import pytest
 from pydantic import BaseModel
 
 from helpers import commit_on, git
-from waystation import (
-    Flow,
-    Integration,
-    NoSandbox,
-    RunSucceeded,
-    ScriptedAgent,
-    ScriptedCommit,
-)
+from waystation import Flow, Integration, NoSandbox, RunSucceeded
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 
 class Answer(BaseModel):

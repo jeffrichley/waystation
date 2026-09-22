@@ -28,7 +28,6 @@ from waystation import (
     RunConflicted,
     RunFailed,
     RunSucceeded,
-    ScriptedCommit,
     Squash,
     Summary,
 )
@@ -39,6 +38,7 @@ from waystation.integration import (
     IntegrationReport,
     IntegrationStrategy,
 )
+from waystation.testing import ScriptedCommit
 
 pytestmark = pytest.mark.git
 

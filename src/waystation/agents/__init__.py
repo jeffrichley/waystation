@@ -13,7 +13,6 @@ from waystation.agents.protocol import (
     OutcomeReported,
 )
 from waystation.agents.run_agent import run_agent
-from waystation.agents.scripted import ScriptedAgent, ScriptedCommit
 from waystation.results import AgentUsage
 
 __all__ = [
@@ -25,8 +24,6 @@ __all__ = [
     "AgentToolUse",
     "AgentUsage",
     "OutcomeReported",
-    "ScriptedAgent",
-    "ScriptedCommit",
     "find_outcome",
     "outcome_instructions",
     "run_agent",

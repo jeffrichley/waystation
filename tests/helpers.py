@@ -29,8 +29,6 @@ from waystation import (
     RunSpec,
     Sandbox,
     SandboxBackend,
-    ScriptedAgent,
-    ScriptedCommit,
     Summary,
     Workspace,
 )
@@ -42,6 +40,7 @@ from waystation.agents import (
     OutcomeReported,
 )
 from waystation.sandbox.protocol import LineCallback
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 __all__ = [
     "MAKES_A_MERGE",

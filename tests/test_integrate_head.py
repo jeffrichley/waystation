@@ -20,7 +20,6 @@ from waystation import (
     RunConflicted,
     RunFailed,
     RunSucceeded,
-    ScriptedCommit,
     Squash,
     integrate,
 )
@@ -30,6 +29,7 @@ from waystation.integration import (
     IntegrationReport,
     IntegrationStrategy,
 )
+from waystation.testing import ScriptedCommit
 
 pytestmark = pytest.mark.git
 
@@ -421,7 +421,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from waystation import Flow, NoSandbox, RunLogFiles, ScriptedAgent, ScriptedCommit
+from waystation import Flow, NoSandbox, RunLogFiles
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 here = Path(__file__).resolve().parent
 

@@ -44,8 +44,6 @@ from waystation import (
     RunFailed,
     RunSucceeded,
     Sandbox,
-    ScriptedAgent,
-    ScriptedCommit,
     Summary,
     TimedOut,
     Timeouts,
@@ -55,6 +53,7 @@ from waystation.agents import AgentLine
 from waystation.clock import ManualClock, use_clock
 from waystation.sandbox import clone_in
 from waystation.sandbox._docker_plans import plan_exec, plan_kill
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 MISSING_IMAGE = "waystation-test-missing:never"
 

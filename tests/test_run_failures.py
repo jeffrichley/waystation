@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from helpers import ShellAgent, lifecycle
+from helpers import Gate, GatedSandbox, ShellAgent, a_run, lifecycle
 from waystation import (
     AgentExit,
     AgentExited,
@@ -344,3 +345,36 @@ async def test_an_agent_the_sandbox_does_not_have_says_the_sandbox_is_missing_it
     assert any("exited 127" in m for m in said), said
     assert any("could not find" in m for m in said), said
     assert any("waystation-no-such-binary" in m for m in said), said
+
+
+class _SandboxBroke(Exception):
+    """What a broken backend raises: a plain ``Exception``, nothing of ours."""
+
+
+@dataclass(frozen=True)
+class _Breaks(Gate):
+    """A gate that raises where ``GatedSandbox`` would hold the run."""
+
+    async def hold(self) -> None:
+        raise _SandboxBroke("the backend broke")
+
+
+@pytest.mark.git
+@pytest.mark.parametrize(
+    ("at", "stage"), [("start", "sandbox"), ("collect", "collect")]
+)
+async def test_a_backend_raising_a_plain_exception_is_errored_at_its_stage(
+    host_repo: Path, at: Literal["start", "collect"], stage: str
+) -> None:
+    """A backend is the user's protocol, so what it raises is anyone's type.
+
+    It still comes back as a value, the exception attached (ADR-0016), and
+    blamed on the stage that called the backend: ``start`` is the sandbox
+    stage's, and a git ``exec`` collect's.
+    """
+    result = await a_run(host_repo, sandbox=GatedSandbox(_Breaks(), at=at))
+
+    assert isinstance(result, RunFailed), result
+    assert result.stage == stage
+    assert isinstance(result.failure, Errored)
+    assert isinstance(result.failure.exception, _SandboxBroke)

@@ -123,6 +123,9 @@ def package_logger() -> logging.Logger:
     A failure that arrived after the run already failed (ADR-0024), or a
     built-in observer that failed and was ignored (ADR-0026) — at ERROR, and
     tagged, so it reaches the file of the run it happened in.
+
+    Returns:
+        The ``waystation`` logger, run-tagging included.
     """
     return _tagged(PACKAGE)
 
@@ -221,13 +224,28 @@ def log_argv(logger: logging.Logger, argv: Sequence[str]) -> None:
 
 
 def tag(logger: logging.Logger, run_id: str, name: str | None) -> RunLoggerAdapter:
-    """Bind ``logger`` to one run, so its records carry the run wherever logged."""
+    """Bind ``logger`` to one run, so its records carry the run wherever logged.
+
+    Args:
+        logger: The logger whose records should carry the run.
+        run_id: The run's id, logged as ``run_id``.
+        name: The run's name, logged as ``run_name``; ``None`` for an unnamed
+            run.
+
+    Returns:
+        An adapter over ``logger`` that tags every record with the run.
+    """
     return RunLoggerAdapter(logger, {"run_id": run_id, "run_name": name})
 
 
 @contextmanager
 def bind_run(run_id: str, name: str | None) -> Iterator[None]:
-    """Tag records logged too deep to be handed the run — git and sandbox argv."""
+    """Tag records logged too deep to be handed the run — git and sandbox argv.
+
+    Args:
+        run_id: The run's id, for every record logged inside the block.
+        name: The run's name; ``None`` for an unnamed run.
+    """
     token = _current_run.set((run_id, name))
     try:
         yield
@@ -245,6 +263,15 @@ class RunLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
     def process(
         self, msg: Any, kwargs: MutableMapping[str, Any]
     ) -> tuple[Any, MutableMapping[str, Any]]:
+        """Merge the run's tags under the call's own ``extra``, which win.
+
+        Args:
+            msg: The message, passed through untouched.
+            kwargs: The logging call's keyword arguments.
+
+        Returns:
+            ``msg``, and ``kwargs`` with the merged ``extra``.
+        """
         extra = dict(self.extra or {})
         extra.update(kwargs.get("extra") or {})
         kwargs["extra"] = extra
@@ -273,6 +300,13 @@ def would_reach(record: logging.LogRecord, level: int) -> bool:
     the extra records reach neither. A logger the script tuned itself still
     gets through, which is the whole point of per-logger tuning: one rule,
     used everywhere insulation is needed, so the two cannot drift apart.
+
+    Args:
+        record: The record in question.
+        level: The level the would-be receiver chose.
+
+    Returns:
+        Whether ``record`` reaches ``level``, or its logger was tuned by hand.
     """
     if record.levelno >= level:
         return True
@@ -339,6 +373,9 @@ def configured_console() -> Console | None:
 
     A live display has to draw on this one: log lines printed through any
     other console would land in the middle of the display.
+
+    Returns:
+        The installed handler's console, or ``None``.
     """
     for handler in logging.getLogger(PACKAGE).handlers:
         if isinstance(handler, _WaystationHandler):

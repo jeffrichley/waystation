@@ -186,3 +186,77 @@ async def test_cancelling_an_exec_kills_what_its_agent_started_too(
     assert abandoned == [], (
         "the tree died, rather than the runner giving up on it after the grace"
     )
+
+
+class _SlowToDie:
+    """The real strategy, but the kill lands ``window`` seconds late.
+
+    A killed ``docker exec`` client takes its time to exit on a loaded host,
+    and the runner waits it out before reaching into the container. This makes
+    that wait a number instead of a race (#169), as ``_SlowToAdopt`` does for
+    the spawn.
+    """
+
+    def __init__(self, inner: ProcessStrategy, window: float) -> None:
+        self.inner = inner
+        self.window = window
+
+    def base_env_keys(self) -> Sequence[str]:
+        return self.inner.base_env_keys()
+
+    def spawn_options(self) -> dict[str, Any]:
+        return self.inner.spawn_options()
+
+    def adopt(self, process: asyncio.subprocess.Process) -> ProcessTree:
+        tree = self.inner.adopt(process)
+        window = self.window
+
+        class _Late:
+            def kill(self) -> None:
+                asyncio.get_running_loop().call_later(window, tree.kill)
+
+            def release(self) -> None:
+                tree.release()
+
+        return _Late()
+
+
+@pytest.mark.git
+async def test_cancelling_again_while_the_tree_dies_still_reaches_on_cancel() -> None:
+    """#169: every cancel after the first is held until ``on_cancel`` has run.
+
+    ``on_cancel`` is what reaches a process the host kill cannot — Docker's
+    in-container kill (ADR-0023). A second cancel landing while the runner
+    waited for the killed client to exit used to escape the handler and skip
+    it, so the container went on writing after the exec was cancelled.
+    """
+    runner = HostRunner(processes=_SlowToDie(host_processes(), window=0.5))
+    ready = asyncio.Event()
+    cleaned: list[str] = []
+
+    async def on_cancel() -> None:
+        cleaned.append("reached")
+
+    def watch(line: str) -> None:
+        if line.strip() == "started":
+            ready.set()
+
+    script = "echo started; while true; do sleep 0.05; done"
+    exec_task = asyncio.create_task(
+        runner.run(
+            [*host_shell(), script],
+            capture=False,
+            on_stdout=watch,
+            on_cancel=on_cancel,
+        )
+    )
+    await asyncio.wait_for(ready.wait(), timeout=60)
+    exec_task.cancel()
+    while not exec_task.done():
+        await asyncio.sleep(0.02)
+        exec_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await exec_task
+    runner.release()
+
+    assert cleaned == ["reached"]

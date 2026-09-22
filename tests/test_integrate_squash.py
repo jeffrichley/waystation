@@ -12,15 +12,9 @@ from pathlib import Path
 import pytest
 
 from helpers import a_run, awaited, commit_on, git, host_state, subjects
-from waystation import (
-    Refused,
-    RunConflicted,
-    RunFailed,
-    RunSucceeded,
-    ScriptedCommit,
-    Squash,
-)
+from waystation import Refused, RunConflicted, RunFailed, RunSucceeded, Squash
 from waystation.integration import Conflict
+from waystation.testing import ScriptedCommit
 
 pytestmark = pytest.mark.git
 

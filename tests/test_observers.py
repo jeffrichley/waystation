@@ -31,7 +31,6 @@ from waystation import (
     RunLogFiles,
     RunSpec,
     RunSucceeded,
-    ScriptedAgent,
     Summary,
     configure_logging,
     fan_out,
@@ -39,6 +38,7 @@ from waystation import (
 )
 from waystation.agents import AgentLine
 from waystation.hooks import RunContext
+from waystation.testing import ScriptedAgent
 
 
 @pytest.mark.git

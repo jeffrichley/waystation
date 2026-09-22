@@ -60,6 +60,8 @@ Mark by what a test needs, so anyone can run the cheap ones anywhere:
 | `USAGE` | the prefix of a line `ShellAgent` parses into an `AgentUsage` — `AgentUsage`'s fields as JSON — for a test about reported token usage |
 | `recorded_claude(scenario)` / `RECORDED_CLAUDE` / `Total` | the stdout lines of a real Claude Code run, the directory they live in, and the Outcome the `success` recording reports — `test_claude_code_live` records and re-validates them; read its docstring before adding a scenario |
 
+`ScriptedAgent` and `ScriptedCommit` come from `waystation.testing`, their one home (ADR-0044) — not `waystation`, which no longer exports them.
+
 Test modules import helpers as a top-level module — `from helpers import git` — because pytest puts the test file's directory on `sys.path`. `mypy_path` in `pyproject.toml` includes `tests` so the type checker resolves it the same way.
 
 **Keep the tables above current.** `test_docs.py` fails if a shared fixture or helper isn't listed here, so adding one means adding its row — the table is what the next agent reads instead of copy-pasting yours.

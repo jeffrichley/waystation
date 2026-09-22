@@ -8,15 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from waystation import (
-    Flow,
-    NoSandbox,
-    RunSucceeded,
-    ScriptedAgent,
-    Summary,
-    prepare_workspace,
-)
+from waystation import Flow, NoSandbox, RunSucceeded, Summary, prepare_workspace
 from waystation.agents.outcome import OUTCOME_MARKER
+from waystation.testing import ScriptedAgent
 
 
 @pytest.mark.git

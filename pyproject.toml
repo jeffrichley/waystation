@@ -15,7 +15,8 @@ dependencies = [
 
 [project.optional-dependencies]
 # `waystation.testing` ships the sandbox conformance suite, which is pytest
-# tests; nothing else in the library imports pytest.
+# tests and loaded lazily; nothing else in the library imports pytest, so
+# `ScriptedAgent` from the same package needs no extra (ADR-0044).
 testing = ["pytest>=8", "pytest-asyncio>=1.4.0"]
 
 [build-system]

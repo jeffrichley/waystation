@@ -22,14 +22,13 @@ from waystation import (
     RunFailed,
     RunSucceeded,
     Sandbox,
-    ScriptedAgent,
-    ScriptedCommit,
     StageError,
     TimedOut,
     Timeouts,
     Workspace,
 )
 from waystation.clock import ManualClock, use_clock
+from waystation.testing import ScriptedAgent, ScriptedCommit
 from waystation.workspace import remove_workspace
 
 

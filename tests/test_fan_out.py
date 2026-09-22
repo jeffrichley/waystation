@@ -45,11 +45,11 @@ from waystation import (
     RunSpec,
     RunSucceeded,
     SandboxBackend,
-    ScriptedAgent,
     Summary,
     fan_out,
 )
 from waystation.agents import AgentLine
+from waystation.testing import ScriptedAgent
 
 
 def _why(results: Sequence[RunResult[Any]]) -> list[str]:

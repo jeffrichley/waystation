@@ -35,8 +35,6 @@ from waystation import (
     NoSandbox,
     PatchSeries,
     Refused,
-    ScriptedAgent,
-    ScriptedCommit,
     StageError,
     Summary,
     TimedOut,
@@ -51,6 +49,7 @@ from waystation import (
 from waystation.agents import AgentLine
 from waystation.clock import ManualClock, use_clock
 from waystation.results import Stage
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 
 class Answer(BaseModel):

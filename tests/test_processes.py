@@ -13,14 +13,7 @@ import pytest
 from pydantic import BaseModel
 
 from helpers import OUTCOME, ShellAgent
-from waystation import (
-    Flow,
-    NoSandbox,
-    RunContext,
-    RunFailed,
-    RunSucceeded,
-    ScriptedAgent,
-)
+from waystation import Flow, NoSandbox, RunContext, RunFailed, RunSucceeded
 from waystation.agents import (
     AgentLine,
 )
@@ -31,6 +24,7 @@ from waystation.sandbox import (
     host_processes,
     host_shell,
 )
+from waystation.testing import ScriptedAgent
 
 
 class Answer(BaseModel):

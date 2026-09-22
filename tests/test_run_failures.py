@@ -21,13 +21,13 @@ from waystation import (
     OutcomeInvalid,
     OutcomeMissing,
     RunFailed,
-    ScriptedAgent,
     StageError,
     WaystationError,
     prepare_workspace,
     run_agent,
 )
 from waystation.agents.protocol import AgentCommand, AgentEvent
+from waystation.testing import ScriptedAgent
 
 
 class Answer(BaseModel):

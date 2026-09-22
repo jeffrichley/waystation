@@ -11,14 +11,8 @@ from pydantic import BaseModel
 from pydantic.errors import PydanticSchemaGenerationError
 
 from helpers import OK_OUTCOME, git
-from waystation import (
-    Flow,
-    NoSandbox,
-    RunSucceeded,
-    ScriptedAgent,
-    Summary,
-    prepare_workspace,
-)
+from waystation import Flow, NoSandbox, RunSucceeded, Summary, prepare_workspace
+from waystation.testing import ScriptedAgent
 
 
 class Answer(BaseModel):

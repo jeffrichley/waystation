@@ -26,12 +26,11 @@ from waystation import (
     PreflightError,
     RunSpec,
     RunSucceeded,
-    ScriptedAgent,
-    ScriptedCommit,
     Summary,
     preflight,
 )
 from waystation.agents import AgentCommand, AgentEvent
+from waystation.testing import ScriptedAgent, ScriptedCommit
 
 
 @dataclass

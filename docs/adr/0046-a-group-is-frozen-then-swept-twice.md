@@ -1,7 +1,7 @@
 ---
 type: adr
 title: 0046 A Group Is Frozen Then Swept Twice
-status: draft
+status: stable
 ---
 
 # A process group is frozen before it is swept, and swept again before its leader is reaped

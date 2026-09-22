@@ -134,4 +134,4 @@ check it fails with the fix reverted (ADR-0042).
 
 ## Coverage
 
-The floor is 85% and CI enforces it. It's a floor, not a target — don't write a test to move the number. If a branch is genuinely unreachable on this platform, say so where it lives rather than chasing it.
+The floor is 90% branch coverage (#18) and CI enforces it. It's a floor, not a target — don't write a test to move the number. If a branch is genuinely unreachable on this platform, say so where it lives rather than chasing it.

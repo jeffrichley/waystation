@@ -23,7 +23,6 @@ from waystation.agents.protocol import AgentCommand, AgentEvent
 from waystation.clock import ManualClock, get_clock, use_clock
 from waystation.sandbox.protocol import ExecResult, LineCallback, Sandbox
 from waystation.testing import ScriptedAgent, ScriptedCommit
-from waystation.testing import ScriptedAgent as ScriptedParser
 from waystation.workspace import Workspace
 
 
@@ -168,7 +167,7 @@ class ParseOnlyAgent:
     def parse(self, line: str) -> Sequence[AgentEvent]:
         if line.startswith(USAGE):
             return ShellAgent("").parse(line)
-        return ScriptedParser().parse(line)
+        return ScriptedAgent().parse(line)
 
 
 @pytest.mark.git

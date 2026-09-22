@@ -3,7 +3,7 @@
 #18's import surface and story 114 put ``ScriptedAgent`` here; the
 conformance suite in the same package needs pytest (``waystation[testing]``),
 so it is resolved lazily and a flow script's tests can play an agent back
-without it (ADR-0035, #142).
+without it (ADR-0044).
 """
 
 from __future__ import annotations
@@ -42,9 +42,11 @@ def test_the_testing_package_exports_the_scripted_agent_beside_the_suite() -> No
 @pytest.mark.parametrize("package", [waystation, waystation.agents])
 def test_the_scripted_agent_has_one_home(package: object) -> None:
     """A test double is not part of the production surface #18 lists."""
+    moved = {"ScriptedAgent", "ScriptedCommit"}
     exported = set(getattr(package, "__all__"))  # noqa: B009 - typed as object
 
-    assert not exported & {"ScriptedAgent", "ScriptedCommit"}
+    assert not exported & moved
+    assert not {name for name in moved if hasattr(package, name)}
 
 
 @pytest.mark.unit

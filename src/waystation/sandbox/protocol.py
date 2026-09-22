@@ -64,7 +64,7 @@ class Sandbox(Protocol):
 
         The working directory is the root of ``workspace``, so a caller never
         spells a path that only one backend's host would understand
-        (ADR-0012). ``env`` goes over the environment the sandbox started
+        (ADR-0043). ``env`` goes over the environment the sandbox started
         with, and nothing else reaches the process (ADR-0013, ADR-0034).
 
         Captured output is exact: a byte that is not UTF-8 — a latin-1 file

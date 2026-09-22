@@ -1,4 +1,4 @@
-"""Transport: how a workspace gets into a sandbox (ADR-0012).
+"""Transport: how a workspace gets into a sandbox (ADR-0043).
 
 Bind is each backend's own business — a mount, or nothing at all. Copy works
 on any backend through the protocol's exec, so it lives here once, as a helper

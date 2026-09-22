@@ -1,4 +1,4 @@
-"""Any backend that copies calls ``clone_in``; it needs nothing but exec (ADR-0012).
+"""Any backend that copies calls ``clone_in``; it needs nothing but exec (ADR-0043).
 
 The backend here is the smallest one that copies: an empty host directory,
 filled by ``clone_in`` over the protocol's own exec. ``DockerSandbox`` copies
@@ -128,7 +128,7 @@ async def test_a_copied_workspace_holds_the_refs_that_travel_and_no_others(
     The suite proves it for whichever transport a backend chose, and
     `DockerSandbox`'s default chooses bind on Linux — so the script this
     module owns would otherwise be checked on no CI leg at all. Here it needs
-    no docker: `clone_in` asks nothing of a sandbox but `exec` (ADR-0012).
+    no docker: `clone_in` asks nothing of a sandbox but `exec` (ADR-0043).
     """
     commit_on(host_repo, "other", {"o.txt": "o\n"})
     git(host_repo, "tag", "v1")

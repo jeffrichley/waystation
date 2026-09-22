@@ -118,7 +118,7 @@ class SandboxConformance:
     async def test_an_exec_runs_in_the_root_of_this_runs_workspace(
         self, sandbox: Sandbox, workspace: Workspace
     ) -> None:
-        """ADR-0012: the working directory is the workspace root, nothing deeper."""
+        """ADR-0043: the working directory is the workspace root, nothing deeper."""
         prefix = await sandbox.exec(["git", "rev-parse", "--show-prefix"])
         branch = await sandbox.exec(["git", "rev-parse", "--abbrev-ref", "HEAD"])
 

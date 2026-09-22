@@ -1,6 +1,7 @@
 ---
-status: stable
+status: deprecated
 type: adr
+superseded_by: adr/0043-transport-binds-only-on-linux
 ---
 
 # Workspace transport is a backend option, copy by default on Windows

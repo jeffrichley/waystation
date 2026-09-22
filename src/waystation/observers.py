@@ -60,13 +60,13 @@ _logger = package_logger()
 
 # How much of a prompt's first line an INFO line may carry. The rest of the
 # prompt never reaches a log record at all.
-PROMPT_HEAD = 80
+_PROMPT_HEAD = 80
 
 
 def _head(prompt: str) -> str:
     """The prompt's first line, bounded; never more of it than that."""
     first = prompt.splitlines()[0] if prompt else ""
-    return first if len(first) <= PROMPT_HEAD else f"{first[: PROMPT_HEAD - 1]}…"
+    return first if len(first) <= _PROMPT_HEAD else f"{first[: _PROMPT_HEAD - 1]}…"
 
 
 class RunLog(HookBundle):

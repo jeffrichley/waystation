@@ -12,7 +12,7 @@ from collections.abc import Sequence
 
 __all__ = ["redact_argv"]
 
-ELIDED = "***"
+_ELIDED = "***"
 
 # An environment variable's name: identifier-shaped, as a shell requires.
 _KEY = r"[A-Za-z_][A-Za-z0-9_]*"
@@ -59,11 +59,11 @@ _URL_USERINFO = re.compile(r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]*://)[^/\s:@]+@")
 # Every rule, in the order each argument passes through them. Teaching the
 # redactor a new credential shape is one pattern and one line here.
 _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (_WHOLE_ASSIGNMENT, rf"\g<head>{ELIDED}"),
-    (_ASSIGNMENT, rf"\1={ELIDED}"),
-    (_URL_PASSWORD, rf"\g<head>:{ELIDED}@"),
-    (_URL_USERINFO, rf"\g<head>{ELIDED}@"),
-    (_TOKEN, ELIDED),
+    (_WHOLE_ASSIGNMENT, rf"\g<head>{_ELIDED}"),
+    (_ASSIGNMENT, rf"\1={_ELIDED}"),
+    (_URL_PASSWORD, rf"\g<head>:{_ELIDED}@"),
+    (_URL_USERINFO, rf"\g<head>{_ELIDED}@"),
+    (_TOKEN, _ELIDED),
 )
 
 

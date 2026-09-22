@@ -40,6 +40,7 @@ __all__ = [
     "Integration",
     "IntegrationReport",
     "IntegrationStrategy",
+    "Mechanism",
     "PatchSeries",
     "Squash",
     "Target",

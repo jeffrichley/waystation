@@ -29,7 +29,26 @@ from rich.logging import RichHandler
 # must not import this one; observability is its public home.
 from waystation._redaction import redact_argv
 
-__all__ = ["RunEvent", "configure_logging", "log_argv", "redact_argv", "run_logger"]
+__all__ = [
+    "AGENT",
+    "AGENT_OUTPUT",
+    "GIT",
+    "HOOK",
+    "PACKAGE",
+    "RUN",
+    "SANDBOX",
+    "RunEvent",
+    "RunLoggerAdapter",
+    "bind_run",
+    "configure_logging",
+    "configured_console",
+    "log_argv",
+    "package_logger",
+    "redact_argv",
+    "run_logger",
+    "tag",
+    "would_reach",
+]
 
 RunEvent = Literal[
     "run_start",
@@ -148,7 +167,7 @@ def run_logger(name: str) -> logging.Logger:
     if not name:
         msg = "run_logger needs a name for your stream, e.g. run_logger('myco.docker')"
         raise ValueError(msg)
-    if name in SHIPPED_STREAMS:
+    if name in _SHIPPED_STREAMS:
         msg = (
             f"{name!r} is a stream waystation ships, and its records are "
             f"documented down to their extras: pick a name of your own, such "
@@ -170,7 +189,7 @@ logging.getLogger(PACKAGE).addHandler(logging.NullHandler())
 # these do — `run_logger` is `_stream` plus a guard keeping callers off these
 # names — so there is no privileged path in, only names already spoken for.
 
-SHIPPED_STREAMS = frozenset({"run", "agent", "agent.output", "hook", "git", "sandbox"})
+_SHIPPED_STREAMS = frozenset({"run", "agent", "agent.output", "hook", "git", "sandbox"})
 
 RUN = _stream("run")
 """One INFO line per lifecycle event of a run, each tagged with its ``event``."""

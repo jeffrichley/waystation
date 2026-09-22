@@ -32,7 +32,7 @@ from typing import Any
 __all__ = ["DUMPS", "arm"]
 
 DUMPS = Path(__file__).resolve().parent.parent / "hang-dumps"
-"""Where a dump lands; CI and the soak workflow upload this directory."""
+"""Where a dump lands; CI uploads this directory when a leg fails."""
 
 # How long before `faulthandler_timeout` this fires. Small, because it only
 # has to land first — the two are describing the same moment from different

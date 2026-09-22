@@ -123,10 +123,14 @@ went quiet, and on Windows that is nearly always the `os._exit` on the last
 row — the test hung. A real native death says so: it prints `Windows fatal
 exception: access violation` and that reaches the log.
 
-Dumps land in `hang-dumps/` (gitignored). `.github/workflows/soak.yml` runs the
-suite many times over on a `workflow_dispatch` and uploads them: an
-intermittent failure is a rate, so one green run is not evidence that it is
-gone.
+Dumps land in `hang-dumps/` (gitignored), and CI uploads them when a leg fails.
+
+**A flake is not settled by re-running it.** Repeating the suite until it
+fails only works if it *can* fail: #105's soaks passed 90 times while the
+fault was live. Find the variable the race depends on and set it — #105's was
+the window before a child joins its job, which `_SlowToAdopt` in
+`test_processes.py` makes a parameter — so the test reproduces to order, and
+check it fails with the fix reverted (ADR-0042).
 
 ## Coverage
 

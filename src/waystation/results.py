@@ -286,7 +286,11 @@ class RunConflicted[OutcomeT]:
 
 @dataclass(frozen=True, slots=True)
 class RunFailed:
-    """A run that failed at a stage; never raised from an awaited run."""
+    """A run that failed at a stage; never raised from an awaited run.
+
+    ``stage`` is ``None`` only for a run a queue submitted that failed its
+    preflight: it never began, so no stage failed (#113).
+    """
 
     run_id: str
     name: str | None
@@ -295,7 +299,7 @@ class RunFailed:
     agent: AgentExit | None
     series: Series | None
     preserved: str | None
-    stage: Stage
+    stage: Stage | None
     failure: Failure
 
 

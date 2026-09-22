@@ -11,7 +11,8 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 
 | ADR | Read it when you're… |
 | --- | --- |
-| [0003](0003-flows-are-plain-python.md) Flows are plain imperative Python | tempted to add config, templates, or a declarative layer |
+| [0047](0047-flows-are-plain-python-and-a-queue-is-fan-outs-open-ended-peer.md) Flows are plain imperative Python, and a queue is fan-out's open-ended peer | tempted to add config, templates, or a declarative layer, adding a parallel construct, or touching the queue |
+| [0003](0003-flows-are-plain-python.md) Flows are plain imperative Python with one parallel spelling | *superseded by 0047*: only for the history of "`fan_out` is the only parallel construct" |
 | [0004](0004-pure-library-boundary.md) Pure library: no CLI, no forge, no magic directory | adding a CLI, a GitHub call, or a dotfile the library owns |
 | [0021](0021-dataclass-values-pydantic-at-the-outcome.md) Values are dataclasses; pydantic validates only the Outcome | reaching for a `BaseModel` anywhere but the Outcome |
 | [0022](0022-immutable-runs-no-default-integration.md) A run is immutable, and nothing integrates unless asked | adding mutation to a run spec, or a default that lands commits |
@@ -81,7 +82,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0001](0001-observability-as-hook-bundles.md) Observability is opt-in and ships as hook bundles | adding logging, a dashboard, or any way to watch a run |
 | [0025](0025-credentials-are-elided-in-the-value-not-at-the-call-site.md) Credentials are elided inside the value | logging a command line, or touching redaction |
 | [0026](0026-built-in-observers-guard-themselves-and-hold-the-level.md) A built-in observer guards itself, and a run file holds the level | adding a shipped observer, changing what the console prints, or ending what a cancelled run left open |
-| [0007](0007-fan-out-yields-never-raises.md) Fan-out yields typed results and never raises | touching fan-out or how a batch reports |
+| [0007](0007-fan-out-yields-never-raises.md) Fan-out yields typed results and never raises | touching fan-out or the queue, or how a batch reports |
 
 ## Adding one
 

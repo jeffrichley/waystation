@@ -611,7 +611,10 @@ class RunSpec[OutcomeT]:
                 if isinstance(result, RunFailed):
                     # Owed work went on after the failure — collect after the
                     # agent, say — but the run ended where it failed, and
-                    # run_end's hooks read that off ctx (ADR-0039).
+                    # run_end's hooks read that off ctx (ADR-0039). A run
+                    # that began always failed at a stage; only a queue's
+                    # refused preflight has none (#113).
+                    assert result.stage is not None
                     record.stage = result.stage
                 try:
                     # Every run_end hook sees the result, even after one raises.

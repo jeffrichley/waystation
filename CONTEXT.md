@@ -25,7 +25,7 @@ The refs a workspace carries into the sandbox — the run branch, and whatever e
 _Avoid_: refspec (git's own word for the mapping, not the set), visible refs
 
 **Primitive**:
-A public, composable building block a flow script may use individually instead of the whole loop — a stage of a run, or a cross-run tool such as fan-out.
+A public, composable building block a flow script may use individually instead of the whole loop — a stage of a run, or a cross-run tool such as fan-out or a queue.
 
 **Fan-out**:
 Running multiple runs concurrently and consuming each result as it completes.
@@ -33,6 +33,10 @@ Running multiple runs concurrently and consuming each result as it completes.
 **Batch**:
 The iterable of runs handed to one fan-out — heterogeneous by design: different agents, sandboxes, integration targets, even different flows.
 _Avoid_: group, stage, job set
+
+**Queue**:
+Fan-out's open-ended peer: a block that stays open, takes a run spec whenever one is submitted, preflights each run as it starts, and yields each result as it completes until it is closed and every submitted run has reported. A batch is the case of it that is submitted and closed at once (ADR-0047).
+_Avoid_: pool, scheduler, job queue, worker
 
 **Sandbox**:
 The isolated, ephemeral environment an agent executes in — created for a run, destroyed after it.

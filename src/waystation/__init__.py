@@ -46,6 +46,7 @@ from waystation.integration import (
 from waystation.observability import configure_logging, run_logger
 from waystation.observers import Dashboard, EventLog, RunLogFiles
 from waystation.preflight import preflight
+from waystation.queue import queue
 from waystation.results import (
     AgentExit,
     AgentExited,
@@ -128,6 +129,7 @@ __all__ = [
     "preserve_series",
     "preflight",
     "prepare_workspace",
+    "queue",
     "remove_workspace",
     "run_agent",
     "run_logger",

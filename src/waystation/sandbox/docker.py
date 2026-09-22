@@ -109,9 +109,11 @@ class DockerSandbox:
     cancelled exec is killed with everything it started (ADR-0023); with
     ``--read-only`` in ``run_args``, add ``--tmpfs /tmp``.
 
-    ``transport`` is how the workspace gets in (ADR-0012): ``"auto"`` copies
-    on Windows and binds elsewhere. ``"bind"`` mounts the host workspace at
-    ``/workspace``, so the image's user must be the host user's uid on Linux.
+    ``transport`` is how the workspace gets in (ADR-0043): ``"auto"`` binds
+    on Linux and copies everywhere else. ``"bind"`` mounts the host workspace
+    at ``/workspace``, so the image's user must be the host user's uid; on
+    Docker Desktop, Windows or macOS, the mount shows as root's and git
+    refuses it, which is why ``auto`` never binds there.
     ``"copy"`` clones it in with ``clone_in``, into a ``/workspace`` the image
     gives its user — ``RUN install -d -o <user> /workspace`` — and needs
     ``base64`` too (ADR-0028).

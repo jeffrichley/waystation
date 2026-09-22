@@ -65,10 +65,11 @@ TRANSPORTS = [
     pytest.param(
         "bind",
         marks=pytest.mark.skipif(
-            sys.platform == "win32",
-            reason="a Windows host binds over 9p as root, so git in the image's "
-            "user refuses it as dubious ownership (ADR-0012, ADR-0028); auto "
-            "copies there, and the Linux CI job runs bind",
+            sys.platform != "linux",
+            reason="Docker Desktop shows a bound /workspace as root's on Windows "
+            "and macOS, so git in the image's user refuses it as dubious "
+            "ownership (ADR-0043, ADR-0028); auto copies there, and the Linux "
+            "CI job runs bind",
         ),
     ),
 ]

@@ -235,11 +235,10 @@ def test_reaping_every_run_finds_every_labelled_sandbox() -> None:
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ("platform", "transport"),
-    [("win32", "copy"), ("linux", "bind"), ("darwin", "bind")],
+    [("win32", "copy"), ("linux", "bind"), ("darwin", "copy")],
 )
-def test_auto_copies_on_windows_and_binds_elsewhere(
-    platform: str, transport: str
-) -> None:
+def test_auto_binds_only_on_linux(platform: str, transport: str) -> None:
+    """Only a Linux bind keeps the host's owner; elsewhere git refuses it (#135)."""
     assert resolve_transport("auto", platform=platform) == transport
 
 

@@ -7,7 +7,7 @@ runs through the host's own (ADR-0027). The host's own strategy is the
 default, and ``host_processes`` is the only place that chooses by platform;
 the guards inside each strategy only refuse the wrong one.
 
-Signals (``handle_signals``) and the Docker transport default (ADR-0012) are
+Signals (``handle_signals``) and the Docker transport default (ADR-0043) are
 OS-specific too, but they belong to their own consumers, not here.
 """
 

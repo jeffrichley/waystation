@@ -44,10 +44,15 @@ def _group_record(group: str) -> tuple[str, str]:
 def resolve_transport(
     transport: Transport, *, platform: str = sys.platform
 ) -> Literal["copy", "bind"]:
-    """``auto`` copies on Windows and binds elsewhere (ADR-0012)."""
+    """``auto`` binds only on Linux, and copies everywhere else (ADR-0043).
+
+    Only a Linux bind keeps the host's owner. Docker Desktop shows a bound
+    ``/workspace`` as root's, on Windows and macOS alike, and git in the
+    image's user refuses it as dubious ownership.
+    """
     if transport != "auto":
         return transport
-    return "copy" if platform == "win32" else "bind"
+    return "bind" if platform == "linux" else "copy"
 
 
 def _env_flags(env: Mapping[str, str]) -> list[str]:

@@ -245,6 +245,7 @@ class RunLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
     def process(
         self, msg: Any, kwargs: MutableMapping[str, Any]
     ) -> tuple[Any, MutableMapping[str, Any]]:
+        """Merge the run's tags under the caller's ``extra``; the caller's win."""
         extra = dict(self.extra or {})
         extra.update(kwargs.get("extra") or {})
         kwargs["extra"] = extra

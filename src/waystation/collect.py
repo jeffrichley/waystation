@@ -30,12 +30,25 @@ class PatchSeries:
 
     @property
     def commits(self) -> int:
+        """How many patches, so how many commits, the series holds."""
         return len(self.patches)
 
     @classmethod
     def from_format_patch(
         cls, base_sha: str, stdout: str, *, salvaged: bool = False
     ) -> PatchSeries:
+        """The series ``git format-patch --stdout`` wrote, one patch per commit.
+
+        Args:
+            base_sha: The commit the series applies to.
+            stdout: format-patch's whole output, decoded without newline
+                translation.
+            salvaged: Whether the last patch is work collect committed for
+                the agent.
+
+        Returns:
+            The series, empty when ``stdout`` holds no patch.
+        """
         return cls(
             base_sha=base_sha,
             patches=_split_format_patch(stdout),
@@ -49,6 +62,17 @@ class PatchSeries:
         Host-side and stage-less: this serves a landing and a resolver run
         alike, so a failure leaves it unattributed and whoever runs it as a
         stage names one (ADR-0032).
+
+        Args:
+            repo: The host repo holding both revisions.
+            base: The revision the series applies to; resolved to a sha.
+            ref: The revision the series ends at.
+
+        Returns:
+            One patch per commit in ``base..ref``, oldest first.
+
+        Raises:
+            StageError: When git fails, with no stage named yet.
         """
         host = Path(repo)
         verified = await run_git(host, "rev-parse", "--verify", base)
@@ -109,6 +133,20 @@ async def collect(
     collect stage, so this is the edge that names it (ADR-0032). The squash collect
     made of it rides on the error's ``series``, so a caller can still keep the
     work it will not land.
+
+    Args:
+        sandbox: The started sandbox the workspace is mounted in.
+        workspace: The run's workspace; its ``base_sha`` starts the series.
+        salvage: Commit whatever the agent left uncommitted, so it is the
+            series' last patch, instead of leaving it behind.
+
+    Returns:
+        The linear series ``base..HEAD``.
+
+    Raises:
+        StageError: At ``"collect"``: ``Refused("nonlinear_series")`` with the
+            squash on ``series`` when the series is not linear, or the failure
+            of a git step the collect ran.
     """
     base = workspace.base_sha
     salvaged = False

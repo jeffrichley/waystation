@@ -131,6 +131,13 @@ def run_logger(name: str) -> logging.Logger:
     the lifecycle channel's, and yours are lines, not events
     (``docs/log-records.md``).
 
+    Args:
+        name: Your stream's name, dotted as you like, without the
+            ``waystation.`` prefix it is given.
+
+    Returns:
+        The logger ``waystation.<name>``, tagging each record with the run.
+
     Raises:
         ValueError: When ``name`` is one waystation already ships, or is
             already spelled under the package. Writing to ``run`` would put
@@ -185,7 +192,12 @@ SANDBOX = _stream("sandbox")
 
 
 def log_argv(logger: logging.Logger, argv: Sequence[str]) -> None:
-    """Log one command line at DEBUG, with its credentials elided."""
+    """Log one command line at DEBUG, with its credentials elided.
+
+    Args:
+        logger: The logger to write the line to.
+        argv: The command line, as it was run; it is redacted before logging.
+    """
     logger.debug("%s", " ".join(redact_argv(argv)))
 
 
@@ -273,6 +285,19 @@ def configure_logging(
     Records keep propagating to the root logger, as a library's should: a host
     that collects waystation's logs still gets them, and where that host's own
     handler writes is the host's business.
+
+    Args:
+        level: The level for the ``waystation`` logger and the console, as a
+            number or a stdlib level name such as ``"DEBUG"``.
+        console: The ``rich`` console to write through; by default the one
+            installed before, or a new one on stderr.
+
+    Returns:
+        The console the handler writes through, for a live display to draw on
+        so its lines and the log's do not interleave.
+
+    Raises:
+        KeyError: When ``level`` is a name stdlib ``logging`` does not know.
     """
     logger = logging.getLogger(PACKAGE)
     if console is None:

@@ -105,8 +105,11 @@ class _FanOut[OutcomeT]:
         return self._tasks
 
     async def _run(self, spec: RunSpec[OutcomeT]) -> RunResult[OutcomeT]:
-        """One run, begun once a slot is free: until then it has no workspace,
-        so its base ref resolves when it starts, not when the batch did."""
+        """One run, begun once a slot is free.
+
+        Until then it has no workspace, so its base ref resolves when it
+        starts, not when the batch did.
+        """
         async with self._slots or contextlib.nullcontext():
             # The batch was preflighted whole, once per distinct spec: the one
             # thing fan-out does that a script awaiting each spec cannot.

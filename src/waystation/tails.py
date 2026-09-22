@@ -21,6 +21,15 @@ def bound_tail(
     A tail is for people. Captured output keeps a byte that is not UTF-8 as a
     surrogate escape, so git gets it back; here it reads as U+FFFD, since a
     lone surrogate cannot be printed or written to a UTF-8 log.
+
+    Args:
+        text: The output to cut the tail from.
+        max_lines: The most lines the tail keeps.
+        max_bytes: The most UTF-8 bytes the tail keeps; a single line longer
+            than this keeps its last ``max_bytes``.
+
+    Returns:
+        The tail, empty when ``text`` is.
     """
     if not text:
         return ""
@@ -53,12 +62,23 @@ class TailBuffer:
         max_lines: int = DEFAULT_MAX_LINES,
         max_bytes: int = DEFAULT_MAX_BYTES,
     ) -> None:
+        """Start an empty buffer.
+
+        Args:
+            max_lines: The most chunks the buffer holds.
+            max_bytes: The most UTF-8 bytes the buffer holds.
+        """
         self._max_lines = max_lines
         self._max_bytes = max_bytes
         self._lines: deque[str] = deque()
         self._size = 0
 
     def append(self, chunk: str) -> None:
+        """Add ``chunk``, dropping the oldest output past either limit.
+
+        Args:
+            chunk: Output as it arrived, usually one line.
+        """
         if not chunk:
             return
         raw = chunk.encode("utf-8")
@@ -82,4 +102,9 @@ class TailBuffer:
             self._size = len(raw)
 
     def text(self) -> str:
+        """The tail as it stands.
+
+        Returns:
+            Every chunk the buffer still holds, joined.
+        """
         return "".join(self._lines)

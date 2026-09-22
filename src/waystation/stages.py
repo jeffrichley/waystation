@@ -163,6 +163,8 @@ class _StageRunner:
                 ``StageError`` from ``work`` that no stage has claimed comes
                 out attributed to ``stage``.
             ValueError: When ``bound`` names no ``Timeouts`` field.
+            RuntimeError: When called outside the runner's ``async with``
+                block.
             asyncio.CancelledError: One held from an earlier stage, or — with
                 ``interruptible`` — one that stopped ``work`` itself.
         """
@@ -203,6 +205,8 @@ class _StageRunner:
         Raises:
             StageError: With ``TimedOut`` when the bound fires.
             ValueError: When ``bound`` names no ``Timeouts`` field.
+            RuntimeError: When called outside the runner's ``async with``
+                block.
         """
         return await self._begin(stage, work, bound, surfacing=False)
 

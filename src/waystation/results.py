@@ -83,6 +83,11 @@ class Timeouts:
 
 @dataclass(frozen=True, slots=True)
 class AgentUsage:
+    """What the agent reported spending: tokens, and cost and turns when it says.
+
+    Fields a provider does not report are ``None``.
+    """
+
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int | None = None
@@ -108,6 +113,11 @@ class AgentExit:
 
 @dataclass(frozen=True, slots=True)
 class Series:
+    """The patch series a run collected, as its result reports it.
+
+    ``salvaged`` says its last commit is work collect committed for the agent.
+    """
+
     commits: int
     salvaged: bool
 
@@ -156,6 +166,8 @@ class IntegrationReport:
 
 @dataclass(frozen=True, slots=True)
 class TimedOut:
+    """A bound ran out: ``bound`` names it, after ``elapsed`` of ``limit`` seconds."""
+
     bound: str
     limit: float
     elapsed: float
@@ -163,6 +175,11 @@ class TimedOut:
 
 @dataclass(frozen=True, slots=True)
 class AgentExited:
+    """The agent exited non-zero, with the tails of what it wrote.
+
+    ``outcome`` is the Outcome it reported before failing, if it did.
+    """
+
     exit_code: int
     stdout_tail: str
     stderr_tail: str
@@ -171,17 +188,23 @@ class AgentExited:
 
 @dataclass(frozen=True, slots=True)
 class OutcomeMissing:
+    """The agent exited without reporting an Outcome."""
+
     stdout_tail: str
 
 
 @dataclass(frozen=True, slots=True)
 class OutcomeInvalid:
+    """The agent reported an Outcome, ``raw``, that failed validation."""
+
     raw: Any
     error: ValidationError
 
 
 @dataclass(frozen=True, slots=True)
 class HookRaised:
+    """The hook ``function``, registered for ``hook``, raised ``exception``."""
+
     hook: HookName
     function: str
     exception: BaseException
@@ -201,12 +224,16 @@ class CommandFailed:
 
 @dataclass(frozen=True, slots=True)
 class Refused:
+    """A stage declined to go on, for ``reason``; ``detail`` says more."""
+
     reason: RefusalReason
     detail: str
 
 
 @dataclass(frozen=True, slots=True)
 class Errored:
+    """A stage raised an exception no other kind of failure describes."""
+
     exception: BaseException
 
 

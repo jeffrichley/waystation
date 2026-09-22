@@ -46,8 +46,11 @@ class Sandbox(Protocol):
 
     @property
     def shell(self) -> Sequence[str]:
-        """Read only when something wants a shell, so a backend may resolve
-        it lazily — a plain attribute satisfies this just as well."""
+        """The argv prefix a command string follows in this sandbox.
+
+        Read only when something wants a shell, so a backend may resolve it
+        lazily — a plain attribute satisfies this just as well.
+        """
         ...
 
     async def exec(
@@ -82,6 +85,29 @@ class Sandbox(Protocol):
         process still writing into the workspace (ADR-0023). For a backend
         whose work outlives the host process it spawned, that reaches into
         the sandbox too; ``HostRunner``'s ``on_cancel`` is where that goes.
+
+        Args:
+            argv: The command, run directly — no shell unless it names one;
+                prefix ``shell`` to run a script.
+            stdin: Text fed to the process's stdin, then closed; ``None``
+                gives it none. A process that exits without reading it all
+                reports its own exit code, not the closed pipe.
+            env: Values laid over the sandbox's started environment for this
+                exec only.
+            capture: Keep all of stdout and stderr in the result. ``False``
+                keeps bounded tails instead, for long-running output.
+            on_stdout: Called with each stdout line as it arrives; may be a
+                coroutine function, which is awaited.
+            on_stderr: The same, for stderr.
+
+        Returns:
+            The exit code and the captured output, or its tails when
+            ``capture`` is ``False``. A non-zero exit is a result, not a
+            raise.
+
+        Raises:
+            asyncio.CancelledError: When the exec was cancelled — raised only
+                once the process tree it started is dead.
         """
         ...
 
@@ -90,7 +116,16 @@ class Sandbox(Protocol):
 class SandboxBackend(Protocol):
     """A way to isolate a run. ``waystation.testing`` holds it to its contract."""
 
-    async def preflight(self) -> None: ...
+    async def preflight(self) -> None:
+        """Check, before any run starts, that this backend can start one.
+
+        Fan-out calls it once per batch, not once per run (ADR-0032).
+
+        Raises:
+            PreflightError: When the backend cannot run here — a daemon not
+                reachable, an image missing — saying what to do about it.
+        """
+        ...
 
     def start(
         self,
@@ -113,5 +148,15 @@ class SandboxBackend(Protocol):
         A start whose enter fails cleans up after itself, as ``async with``
         expects of any context manager: nothing exits a start that never
         entered.
+
+        Args:
+            ws: The workspace the sandbox runs against: bound in, copied in
+                with ``clone_in``, or used where it lies.
+            env: The literal environment core resolved for this run, laid
+                over the backend's own.
+
+        Returns:
+            An async context manager whose enter gives the started
+            ``Sandbox`` and whose exit tears down what this backend made.
         """
         ...

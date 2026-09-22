@@ -32,9 +32,9 @@ __all__ = [
 
 
 def decode(output: bytes) -> str:
-    """Bytes from git as text, without newline translation.
+    r"""Bytes from git as text, without newline translation.
 
-    Never use text-mode pipes for git: on Windows they rewrite "\\n" as "\\r\\n"
+    Never use text-mode pipes for git: on Windows they rewrite "\n" as "\r\n"
     (and back), which changes every line of a patch. surrogateescape keeps
     bytes that are not UTF-8.
     """

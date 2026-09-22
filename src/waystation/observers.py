@@ -81,6 +81,12 @@ class RunLog(HookBundle):
     __slots__ = ("_output", "_run")
 
     def __init__(self, run_id: str, name: str | None) -> None:
+        """Bind the run's loggers to one run.
+
+        Args:
+            run_id: The run's id.
+            name: The run's display name, or ``None`` when unnamed.
+        """
         self._run = tag(RUN, run_id, name)
         self._output = tag(AGENT_OUTPUT, run_id, name)
 
@@ -94,31 +100,64 @@ class RunLog(HookBundle):
 
     @override
     def on_run_start(self, ctx: RunContext) -> None:
+        """Log that the run started, and on which repo.
+
+        Args:
+            ctx: The run.
+        """
         self._event("run_start", "run start: %s", ctx.repo)
 
     @override
     def on_workspace_ready(self, ctx: RunContext) -> None:
+        """Log that the workspace is ready, with its base.
+
+        Args:
+            ctx: The run.
+        """
         self._event(
             "workspace_ready", "workspace ready: base %s", (ctx.base_sha or "")[:12]
         )
 
     @override
     def on_sandbox_ready(self, ctx: RunContext) -> None:
+        """Log that the sandbox is up.
+
+        Args:
+            ctx: The run.
+        """
         self._event("sandbox_ready", "sandbox up")
 
     @override
     def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
+        """Log the agent's line at DEBUG, marking stderr.
+
+        Args:
+            ctx: The run.
+            line: The line, and which stream it came on.
+        """
         prefix = "[stderr] " if line.stream == "stderr" else ""
         self._output.debug("%s%s", prefix, line.raw)
 
     @override
     def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> None:
+        """Log the agent's exit code and how long it ran.
+
+        Args:
+            ctx: The run.
+            exit: How the agent's exec ended.
+        """
         self._event(
             "agent_end", "agent end: exit %d in %.1fs", exit.exit_code, exit.elapsed
         )
 
     @override
     def on_integrated(self, ctx: RunContext, report: IntegrationReport) -> None:
+        """Log how many commits landed, and onto what.
+
+        Args:
+            ctx: The run.
+            report: What integration did.
+        """
         landed = len(report.landed)
         self._event(
             "integrated",
@@ -134,6 +173,12 @@ class RunLog(HookBundle):
         ctx: RunContext,
         result: RunResult[Any],
     ) -> None:
+        """Log how the run ended and how long it took.
+
+        Args:
+            ctx: The run.
+            result: What the run returned.
+        """
         elapsed = sum(result.elapsed.values())
         if isinstance(result, RunFailed):
             self._event(
@@ -159,7 +204,11 @@ class RunLog(HookBundle):
     # ordinary records on the channel, which is what lets a user's bundle see
     # them without a privileged path in (ADR-0001, ADR-0026).
     def agent_start(self, prompt: str) -> None:
-        """Announce the prompt by shape only — its body is never logged."""
+        """Announce the prompt by shape only — its body is never logged.
+
+        Args:
+            prompt: The prompt the agent is handed.
+        """
         self._event(
             "agent_start",
             "agent start: prompt %d chars, first line %r",
@@ -170,7 +219,13 @@ class RunLog(HookBundle):
     def cancelled(
         self, stage: Stage, *, kept_on: str | None, landed_on: str | None
     ) -> None:
-        """Say a run was cancelled, and where its series went, if anywhere."""
+        """Say a run was cancelled, and where its series went, if anywhere.
+
+        Args:
+            stage: The stage the run was in when it was cancelled.
+            kept_on: The preservation branch its series is kept on, if any.
+            landed_on: The target its series landed on, if it did.
+        """
         if kept_on is not None:
             self._event(
                 "cancelled",
@@ -408,8 +463,10 @@ def _safely[**P](
 
 @dataclass(slots=True)
 class _Watch[T]:
-    """One run being read off the channel: what its observer keeps for it, the
-    handler taking its records, and the watch on the task running it.
+    """One run being read off the channel.
+
+    What its observer keeps for it, the handler taking its records, and the
+    watch on the task running it.
 
     ``task`` is ``None`` for a hook called by hand, with no run around it.
     """
@@ -503,6 +560,11 @@ class RunLogFiles(HookBundle):
     """
 
     def __init__(self, directory: Path | str) -> None:
+        """Write each run's file under ``directory``.
+
+        Args:
+            directory: Where the files go; made on the first run if missing.
+        """
         self.directory = Path(directory)
         self._runs: _Watches[_FlushingFile] = _Watches(
             PACKAGE, lambda run_id: self._finish(run_id, _NO_RESULT_FOOTER)
@@ -511,6 +573,11 @@ class RunLogFiles(HookBundle):
     @override
     @_safely
     def on_run_start(self, ctx: RunContext) -> None:
+        """Open the run's file and write its header and prompt.
+
+        Args:
+            ctx: The run.
+        """
         stem = f"{ctx.name}-{ctx.run_id}" if ctx.name else ctx.run_id
         file = _FlushingFile(self.directory / f"{stem}.log")
         handler = _RunFileHandler(ctx.run_id, file)
@@ -527,6 +594,12 @@ class RunLogFiles(HookBundle):
     @override
     @_safely
     def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
+        """Write the agent's line to the run's file, marking stderr.
+
+        Args:
+            ctx: The run.
+            line: The line, and which stream it came on.
+        """
         file = self._runs.kept(ctx.run_id)
         if file is None:
             return
@@ -540,6 +613,12 @@ class RunLogFiles(HookBundle):
         ctx: RunContext,
         result: RunResult[Any],
     ) -> None:
+        """End the run's file with a footer saying how it ended.
+
+        Args:
+            ctx: The run.
+            result: What the run returned.
+        """
         self._finish(ctx.run_id, _footer(result))
 
     def close(self) -> None:
@@ -609,6 +688,13 @@ class EventLog(HookBundle):
     """
 
     def __init__(self, path: Path | str, *, include_output: bool = False) -> None:
+        """Write every run's events to ``path``, opened on the first one.
+
+        Args:
+            path: The JSONL file; appended to, and made with its directory if missing.
+            include_output: Write an ``agent_output`` line for every line the agent
+                emits, too.
+        """
         self.path = Path(path)
         self.include_output = include_output
         self._lock = threading.Lock()
@@ -618,6 +704,11 @@ class EventLog(HookBundle):
     @override
     @_safely
     def on_run_start(self, ctx: RunContext) -> None:
+        """Write ``run_start``, and start reading the run's hook-less events.
+
+        Args:
+            ctx: The run.
+        """
         # Before the line, so a file that can't be written still gives the
         # level back when the run ends, rather than never having taken it.
         self._runs.start(
@@ -630,16 +721,32 @@ class EventLog(HookBundle):
     @override
     @_safely
     def on_workspace_ready(self, ctx: RunContext) -> None:
+        """Write ``workspace_ready``, with the base.
+
+        Args:
+            ctx: The run.
+        """
         self._line("workspace_ready", ctx, {"base_sha": ctx.base_sha})
 
     @override
     @_safely
     def on_sandbox_ready(self, ctx: RunContext) -> None:
+        """Write ``sandbox_ready``.
+
+        Args:
+            ctx: The run.
+        """
         self._line("sandbox_ready", ctx)
 
     @override
     @_safely
     def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
+        """Write ``agent_output``, when ``include_output`` is set.
+
+        Args:
+            ctx: The run.
+            line: The line, and which stream it came on.
+        """
         if not self.include_output:
             return
         self._line("agent_output", ctx, {"stream": line.stream, "raw": line.raw})
@@ -647,11 +754,23 @@ class EventLog(HookBundle):
     @override
     @_safely
     def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> None:
+        """Write ``agent_end``, with the exit's fields.
+
+        Args:
+            ctx: The run.
+            exit: How the agent's exec ended.
+        """
         self._line("agent_end", ctx, _fields(exit))
 
     @override
     @_safely
     def on_integrated(self, ctx: RunContext, report: IntegrationReport) -> None:
+        """Write ``integrated``, with the report's fields.
+
+        Args:
+            ctx: The run.
+            report: What integration did.
+        """
         self._line("integrated", ctx, _fields(report))
 
     @override
@@ -661,6 +780,12 @@ class EventLog(HookBundle):
         ctx: RunContext,
         result: RunResult[Any],
     ) -> None:
+        """Write ``run_end``, with the result's fields, and stop reading the run.
+
+        Args:
+            ctx: The run.
+            result: What the run returned.
+        """
         fields = _fields(result)
         if isinstance(result, RunFailed):
             # The union's tag, which flattening the fields would otherwise lose:
@@ -722,8 +847,10 @@ class EventLog(HookBundle):
             self._file.write(json.dumps(line, default=repr))
 
     def close(self) -> None:
-        """Release the file, and stop reading the channel for any run still
-        watched — one cancelled inside a task that went on (ADR-0026).
+        """Release the file, and stop reading the channel for any run still watched.
+
+        A run still watched is one cancelled inside a task that went on
+        (ADR-0026).
 
         A flow has no end event, so a script that wants the handle back scopes
         the log itself: ``with EventLog(path) as log:``. Every line is already
@@ -800,6 +927,12 @@ class Dashboard(HookBundle):
     """
 
     def __init__(self, console: Console | None = None) -> None:
+        """Make a dashboard; it draws once opened with ``async with``.
+
+        Args:
+            console: The ``rich`` console to draw on; by default the one
+                ``configure_logging`` installed, or a new one on stderr.
+        """
         self.console = console
         self._rows: dict[str, _Row] = {}
         # Hooks add rows on the event loop while the display reads them from
@@ -841,6 +974,11 @@ class Dashboard(HookBundle):
     @override
     @_safely
     def on_run_start(self, ctx: RunContext) -> None:
+        """Add the run's row and start its clock.
+
+        Args:
+            ctx: The run.
+        """
         clock = get_clock()
         row = _Row(ctx=ctx, clock=clock, started=clock.monotonic())
         with self._lock:
@@ -849,6 +987,12 @@ class Dashboard(HookBundle):
     @override
     @_safely
     def on_agent_output(self, ctx: RunContext, line: AgentLine) -> None:
+        """Show the last thing the agent said, if the line said anything.
+
+        Args:
+            ctx: The run.
+            line: The line, and which stream it came on.
+        """
         row = self._rows.get(ctx.run_id)
         said = _said(line)
         if row is not None and said is not None:
@@ -857,6 +1001,12 @@ class Dashboard(HookBundle):
     @override
     @_safely
     def on_agent_end(self, ctx: RunContext, exit: AgentExit) -> None:
+        """Show what the agent cost, once it reports usage.
+
+        Args:
+            ctx: The run.
+            exit: How the agent's exec ended.
+        """
         row = self._rows.get(ctx.run_id)
         if row is not None and exit.usage is not None:
             row.cost_usd = exit.usage.cost_usd
@@ -864,6 +1014,12 @@ class Dashboard(HookBundle):
     @override
     @_safely
     def on_run_end(self, ctx: RunContext, result: RunResult[Any]) -> None:
+        """Stop the row's clock and mark how the run ended.
+
+        Args:
+            ctx: The run.
+            result: What the run returned.
+        """
         row = self._rows.get(ctx.run_id)
         if row is None:
             return

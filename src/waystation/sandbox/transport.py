@@ -46,7 +46,16 @@ async def clone_in(sandbox: Sandbox, ws: Workspace) -> None:
     The exec is idempotent, so one that exits 126 or 137 is tried again,
     twice at most, 250 ms apart (ADR-0016).
 
-    Raises ``StageError("sandbox", CommandFailed)`` when the clone fails.
+    Args:
+        sandbox: The started sandbox to clone into; its ``workspace`` is the
+            empty directory the clone lands in, and its ``shell`` runs the
+            clone script.
+        ws: The host workspace whose refs travel. Only its commits do.
+
+    Raises:
+        StageError: At stage ``"sandbox"``: with ``CommandFailed`` when the
+            clone's exec exits non-zero, after any retries; with the git
+            failure when bundling the workspace on the host fails.
     """
     with attributing("sandbox"):
         # What travels is the workspace's own answer, so a bundled sandbox and

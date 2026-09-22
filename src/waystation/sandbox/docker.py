@@ -109,18 +109,29 @@ class DockerSandbox:
     cancelled exec is killed with everything it started (ADR-0023); with
     ``--read-only`` in ``run_args``, add ``--tmpfs /tmp``.
 
-    ``transport`` is how the workspace gets in (ADR-0043): ``"auto"`` binds
-    on Linux and copies everywhere else. ``"bind"`` mounts the host workspace
-    at ``/workspace``, so the image's user must be the host user's uid; on
-    Docker Desktop, Windows or macOS, the mount shows as root's and git
-    refuses it, which is why ``auto`` never binds there.
-    ``"copy"`` clones it in with ``clone_in``, into a ``/workspace`` the image
-    gives its user — ``RUN install -d -o <user> /workspace`` — and needs
-    ``base64`` too (ADR-0028).
+    On Docker Desktop, Windows or macOS, a bound workspace shows as root's
+    and git refuses it, which is why ``"auto"`` never binds there.
 
-    ``env`` and ``pass_env`` are all of the environment it gets (ADR-0013);
-    ``run_args`` go to ``docker run`` as they are, for networks, limits and
-    mounts waystation has no setting for.
+    Attributes:
+        image: The image each run's container starts from, already on this
+            host.
+        env: Values set in the container. With ``pass_env`` it is all of
+            the environment the container gets (ADR-0013).
+        pass_env: Host variable names passed into the container, where the
+            host has them.
+        transport: How the workspace gets in (ADR-0043). ``"auto"`` binds on
+            Linux and copies everywhere else. ``"bind"`` mounts the host
+            workspace at ``/workspace``, so the image's user must be the host
+            user's uid. ``"copy"`` clones it in with ``clone_in``, into a
+            ``/workspace`` the image gives its user — ``RUN install -d -o
+            <user> /workspace`` — and needs ``base64`` too (ADR-0028).
+        run_args: Arguments for ``docker run`` as they are, for networks,
+            limits and mounts waystation has no setting for.
+
+    Raises:
+        ValueError: When ``transport`` is not one of its three values.
+        TypeError: When ``pass_env`` or ``run_args`` is a single string
+            rather than a sequence of them.
     """
 
     image: str
@@ -152,6 +163,12 @@ class DockerSandbox:
         refusal. A lookup that merely failed is reported as what it was, with
         docker's own words on it: telling someone to rebuild an image they
         already have sends them somewhere there is nothing to find.
+
+        Raises:
+            PreflightError: When the docker CLI is not on ``PATH``, the daemon
+                does not answer, or the image cannot be read. An image that
+                is absent carries ``Refused("image_missing")`` and a build
+                hint; the rest carry docker's own failure.
         """
         if shutil.which("docker") is None:
             missing = FileNotFoundError("docker CLI not found on PATH")
@@ -195,7 +212,16 @@ class DockerSandbox:
         of a flow running now, which only you can tell apart (ADR-0014). Name
         the run when you can.
 
-        Raises ``StageError("sandbox", CommandFailed)`` when docker fails.
+        Args:
+            run_id: Remove only this run's sandbox. ``None`` removes every
+                sandbox waystation made on this host, live runs' included.
+
+        Returns:
+            How many containers docker removed.
+
+        Raises:
+            StageError: At stage ``"sandbox"``, with ``CommandFailed``, when a
+                docker call fails.
         """
         found = await _docker_or_raise(plan_list(run_id))
         ids = found.stdout.split()
@@ -211,6 +237,24 @@ class DockerSandbox:
         *,
         env: Mapping[str, str],
     ) -> AsyncIterator[Sandbox]:
+        """A fresh container from ``image``, holding ``ws`` at ``/workspace``.
+
+        The container is named before it is created, so teardown removes it
+        with ``docker rm -f`` however far the start got — even when a bound
+        kills ``docker run`` before it says what it made (ADR-0014).
+
+        Args:
+            ws: The workspace to bind in or copy in, by ``transport``.
+            env: Core's literal values, laid over this backend's ``env``.
+
+        Yields:
+            The started sandbox; each exec is a ``docker exec`` into it.
+
+        Raises:
+            StageError: At stage ``"sandbox"``: ``Refused("image_missing")``
+                when the image is gone since preflight, ``CommandFailed`` when
+                ``docker run`` or the copy's clone fails.
+        """
         transport = resolve_transport(self.transport)
         # Named before it exists, so teardown can name it even when a bound
         # kills `docker run` before it says what it made. A create the daemon

@@ -181,6 +181,15 @@ class GitRepo:
         The top, not the directory given: git run from a subdirectory
         narrows to it, and ``apply --cached`` there drops every path of a
         patch outside it without a word.
+
+        Args:
+            repo: Any path inside the repo's working tree.
+
+        Returns:
+            A handle on the repo, with its top and its git common dir resolved.
+
+        Raises:
+            StageError: When ``repo`` is not in a git repo, with no stage named.
         """
         path = Path(repo).resolve()
         top = await _repo_git(path, "rev-parse", "--show-toplevel", check=False)
@@ -193,10 +202,21 @@ class GitRepo:
         return cls(path=path, common_dir=common)
 
     async def git(self, *args: str, env: Mapping[str, str] | None = None) -> str:
-        """Run git in this repo; its stdout, stripped. Raises if git failed.
+        """Run git in this repo; its stdout, stripped.
 
         The ergonomic call, for the many that want a sha. Reach for ``run``
         when the exit code is the answer, or something goes in on stdin.
+
+        Args:
+            *args: git's arguments, after ``git -C <repo>``.
+            env: The environment git runs with, in place of this process's.
+
+        Returns:
+            git's stdout, whitespace stripped from both ends.
+
+        Raises:
+            StageError: ``CommandFailed`` when git exits non-zero, with no
+                stage named (ADR-0032).
         """
         return (await self.run(*args, check=True, env=env)).stdout.strip()
 
@@ -218,6 +238,19 @@ class GitRepo:
         Cancelling it kills git and all it started (ADR-0023) — except a
         command that moves a ref, which finishes first, the cancellation
         raised after it (ADR-0027).
+
+        Args:
+            *args: git's arguments, after ``git -C <repo>``.
+            check: Raise on a non-zero exit instead of returning it.
+            stdin: Bytes fed to git's stdin; ``None`` gives it none.
+            env: The environment git runs with, in place of this process's.
+
+        Returns:
+            git's exit code and both its streams, unstripped.
+
+        Raises:
+            StageError: ``CommandFailed`` when ``check`` is set and git exits
+                non-zero, with no stage named (ADR-0032).
         """
         running = _repo_git(self.path, *args, check=check, stdin=stdin, env=env)
         if _subcommand(args) in _COMMIT_POINTS:
@@ -460,9 +493,28 @@ async def _repo_git(
 
 @runtime_checkable
 class IntegrationStrategy(Protocol):
-    async def integrate(
-        self, repo: GitRepo, series: PatchSeries
-    ) -> IntegrationReport: ...
+    """How a series lands on the host: what ``Integration`` and ``Squash`` are.
+
+    A user's strategy implements this same protocol, built from ``GitRepo``'s
+    landing steps (ADR-0040). Call it through ``integrate``, which holds the
+    per-repo lock; calling it directly races other landings (ADR-0005).
+    """
+
+    async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        """Land ``series`` in ``repo``, or report why it did not.
+
+        Args:
+            repo: The host repo, already locked for this landing.
+            series: The patches to land.
+
+        Returns:
+            What landed and where; a conflict is a report, not a raise.
+
+        Raises:
+            StageError: A refusal — the target checked out, moved or dirty —
+                or a git step that failed; ``integrate`` names the stage.
+        """
+        ...
 
 
 @contextlib.asynccontextmanager
@@ -516,9 +568,18 @@ async def integrate(
     target is moved or not, never half-moved, and the cancellation is still
     raised (ADR-0027).
 
-    Raises ``StageError("integrate", ...)``: this is the integrate stage, so
-    this is the edge that names it, whatever host git the strategy ran
-    (ADR-0032).
+    Args:
+        repo: The host repo, or an open ``GitRepo`` to reuse.
+        series: The patches to land.
+        strategy: How they land.
+
+    Returns:
+        The strategy's report: what landed, or the conflict that stopped it.
+
+    Raises:
+        StageError: Attributed to ``"integrate"``: this is the integrate
+            stage, so this is the edge that names it, whatever host git the
+            strategy ran (ADR-0032).
     """
     with attributing("integrate"):
         git_repo = repo if isinstance(repo, GitRepo) else await GitRepo.open(repo)
@@ -597,6 +658,22 @@ class Integration:
     mechanism: Mechanism = "apply"
 
     async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        """Land ``series`` on ``target`` with ``mechanism``.
+
+        Call it through the top-level ``integrate``, which holds the repo's
+        lock (ADR-0005).
+
+        Args:
+            repo: The host repo.
+            series: The patches to land.
+
+        Returns:
+            What landed and where, or the conflict that left the target alone.
+
+        Raises:
+            StageError: A refusal from ``read_target`` or ``move_target``, or
+                a git step that failed, with no stage named.
+        """
         target = await repo.read_target(self.target, base=series.base_sha)
         if not series.patches:
             return self._report(target, target.tip if target.exists else None)
@@ -697,6 +774,23 @@ class Squash:
     message: str | None = None
 
     async def integrate(self, repo: GitRepo, series: PatchSeries) -> IntegrationReport:
+        """Land ``series`` on ``target`` as one commit.
+
+        Call it through the top-level ``integrate``, which holds the repo's
+        lock (ADR-0005).
+
+        Args:
+            repo: The host repo.
+            series: The patches to land.
+
+        Returns:
+            The one commit that landed, or none when the target already has
+            the change; or the conflict that left the target alone.
+
+        Raises:
+            StageError: A refusal from ``read_target`` or ``move_target``, or
+                a git step that failed, with no stage named.
+        """
         target = await repo.read_target(self.target, base=series.base_sha)
         if not series.patches:
             return self._report(target, target.tip if target.exists else None)

@@ -44,7 +44,21 @@ target-version = "py312"
 src = ["src", "tests", "examples"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I", "UP", "B", "SIM", "D"]
+# A dunder means what its protocol says it means; a docstring on ``__repr__``
+# or ``__aexit__`` would only repeat the data model. ``__init__`` is the
+# exception, since it takes the arguments, and D107 stays on for it.
+ignore = ["D105"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# The docstring rules hold the library's API (#147). A test's docstring states
+# a behaviour, in prose, and an example is a script a user reads top to bottom:
+# neither has Args to document.
+"tests/**" = ["D"]
+"examples/**" = ["D"]
 
 [tool.mypy]
 python_version = "3.12"

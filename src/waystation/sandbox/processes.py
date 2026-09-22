@@ -75,15 +75,33 @@ class ProcessStrategy(Protocol):
     """How one operating system starts, and stops, a sandbox's processes."""
 
     def base_env_keys(self) -> Sequence[str]:
-        """Host env keys a process needs to start on this OS."""
+        """Host env keys a process needs to start on this OS.
+
+        Returns:
+            The names ``allowlisted_env`` passes through from the host before
+            anything else; a run's own env goes on top.
+        """
         ...
 
     def spawn_options(self) -> dict[str, Any]:
-        """Extra ``asyncio.create_subprocess_exec`` keyword arguments."""
+        """Extra ``asyncio.create_subprocess_exec`` keyword arguments.
+
+        Returns:
+            What makes a process started with them one ``adopt`` can take
+            charge of as a tree — its own session, say, or suspended.
+        """
         ...
 
     def adopt(self, process: asyncio.subprocess.Process) -> ProcessTree:
-        """Take charge of a process just started with ``spawn_options``."""
+        """Take charge of a process just started with ``spawn_options``.
+
+        Args:
+            process: The process just spawned, before anything has awaited it.
+
+        Returns:
+            The tree it leads, which kills every descendant it started, not
+            only the process itself (ADR-0023).
+        """
         ...
 
 
@@ -92,12 +110,31 @@ class PosixProcesses:
     """Each exec leads its own session, so killing its process group kills the tree."""
 
     def base_env_keys(self) -> Sequence[str]:
+        """Host env keys a process needs to start on a POSIX host.
+
+        Returns:
+            ``PATH``, ``HOME`` and ``TMPDIR``.
+        """
         return _POSIX_BASE_ENV
 
     def spawn_options(self) -> dict[str, Any]:
+        """Start each exec as the leader of a new session.
+
+        Returns:
+            ``start_new_session=True``.
+        """
         return {"start_new_session": True}
 
     def adopt(self, process: asyncio.subprocess.Process) -> ProcessTree:
+        """Take charge of the process group ``process`` leads.
+
+        Args:
+            process: A process started with ``spawn_options``.
+
+        Returns:
+            Its process group, killed with ``SIGKILL``. Killing it on a
+            Windows host raises ``RuntimeError``.
+        """
         return _ProcessGroup(process)
 
 
@@ -124,9 +161,23 @@ class WindowsProcesses:
     """Each exec joins its own Job Object, so terminating the job kills the tree."""
 
     def base_env_keys(self) -> Sequence[str]:
+        """Host env keys a process needs to start on a Windows host.
+
+        Returns:
+            ``PATH``, ``SYSTEMROOT``, ``TEMP`` and the rest a Windows process
+            reads before it runs any code of its own.
+        """
         return _WINDOWS_BASE_ENV
 
     def spawn_options(self) -> dict[str, Any]:
+        """Start each exec in its own process group, suspended.
+
+        Returns:
+            The ``creationflags`` that do both.
+
+        Raises:
+            RuntimeError: On a host that is not Windows.
+        """
         if sys.platform != "win32":
             raise RuntimeError("WindowsProcesses needs a Windows host")
         # Suspended, so it cannot spawn anything before it is in the job: see
@@ -148,6 +199,19 @@ class WindowsProcesses:
         for ever (cpython gh-119710, present on 3.12, 3.13 and 3.14 alike).
         Creating suspended closes that window: nothing has run, so there is
         nothing to leave behind.
+
+        Args:
+            process: A process started with ``spawn_options``, still
+                suspended.
+
+        Returns:
+            Its job, whose termination kills the tree. A host that gave no
+            job falls back to killing the process alone.
+
+        Raises:
+            OSError: When the process cannot be opened or resumed: one left
+                suspended would never exit, so it is better failed here.
+            RuntimeError: On a host that is not Windows.
         """
         handle = _handle_of(process)
         job = None
@@ -191,7 +255,11 @@ class _JobObject:
 
 
 def host_processes() -> ProcessStrategy:
-    """The strategy for the operating system this process is running on."""
+    """The strategy for the operating system this process is running on.
+
+    Returns:
+        ``WindowsProcesses`` on Windows, ``PosixProcesses`` anywhere else.
+    """
     if sys.platform == "win32":
         return WindowsProcesses()
     return PosixProcesses()

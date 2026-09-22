@@ -73,6 +73,12 @@ def redact_argv(argv: Sequence[str]) -> tuple[str, ...]:
     Environment values go by key (``KEY=***``, the name kept), a published
     credential shape is elided wherever in an argument it appears, and a URL
     keeps at most its user.
+
+    Args:
+        argv: The command line to redact.
+
+    Returns:
+        The same arguments, in order, with each credential replaced.
     """
     return tuple(_redact(arg) for arg in argv)
 

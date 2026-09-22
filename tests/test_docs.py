@@ -108,6 +108,46 @@ def test_every_module_curates_its_public_surface() -> None:
     )
 
 
+def _defined_public_names(path: Path) -> set[str]:
+    """The public names ``path`` defines at top level; imports are not definitions."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(
+                t.id
+                for target in node.targets
+                for t in ast.walk(target)
+                if isinstance(t, ast.Name)
+            )
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+        elif isinstance(node, ast.TypeAlias) and isinstance(node.name, ast.Name):
+            names.add(node.name.id)
+    return {name for name in names if not name.startswith("_")}
+
+
+@pytest.mark.unit
+def test_every_public_name_a_module_defines_is_in_its_all() -> None:
+    """CLAUDE.md's second half: a name outside ``__all__`` is underscore-private.
+
+    A public name left out of ``__all__`` is a seam nobody decided on (#94):
+    either something else imports it, and the module means to offer it, or
+    nothing does, and the underscore says so.
+    """
+    stray = [
+        f"{p.relative_to(REPO).as_posix()}: {name}"
+        for p in sorted((REPO / "src" / "waystation").rglob("*.py"))
+        for name in sorted(_defined_public_names(p) - _exported_names(p))
+    ]
+
+    assert not stray, (
+        f"public but not in __all__: {stray}. Export it or underscore it (CLAUDE.md)."
+    )
+
+
 @pytest.mark.unit
 def test_the_coverage_floor_is_one_number_everywhere_it_is_written() -> None:
     """The floor lives in two config tables and two guides; they drift apart silently.

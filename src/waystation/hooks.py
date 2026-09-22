@@ -29,7 +29,14 @@ _logger = package_logger()
 
 HOOK_NAMES: tuple[HookName, ...] = get_args(HookName)
 
-__all__ = ["HookBundle", "HookName", "RunContext"]
+__all__ = [
+    "HOOK_NAMES",
+    "HookBundle",
+    "HookEntry",
+    "HookName",
+    "HookRegistry",
+    "RunContext",
+]
 
 
 class RunContext:

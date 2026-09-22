@@ -8,13 +8,14 @@ refused type or a provider that cannot build its command fails at the call.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import pytest
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter
+from pydantic.errors import PydanticUserError
 
 from waystation import AgentCommand, Flow, NoSandbox, Sandbox, run_agent
 from waystation.agents import AgentEvent
@@ -62,6 +63,56 @@ def test_run_agent_refuses_a_non_object_outcome_before_the_provider_is_asked() -
         _ = run_agent(_NO_SANDBOX, agent, "report back", str)
 
     assert agent.schemas == []
+
+
+class CallableField(BaseModel):
+    on_done: Callable[[], None]
+
+
+def _early_bound() -> type[BaseModel]:
+    """A model naming one defined after it, in a scope its schema can't see."""
+
+    class Early(BaseModel):
+        later: Later
+
+    class Later(BaseModel):
+        summary: str
+
+    return Early
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("outcome_type", "name"),
+    [(CallableField, "CallableField"), (_early_bound(), "Early")],
+    ids=["field-with-no-schema", "unresolvable-name"],
+)
+def test_run_agent_refuses_a_schemaless_outcome_before_the_provider_is_asked(
+    outcome_type: type[BaseModel], name: str
+) -> None:
+    agent = RecordingAgent()
+
+    with pytest.raises(TypeError, match=rf"{name}.*BaseModel, dataclass or TypedDict"):
+        _ = run_agent(_NO_SANDBOX, agent, "report back", outcome_type)
+
+    assert agent.schemas == []
+
+
+class Left(BaseModel):
+    side: Literal["left"]
+
+
+class Right(BaseModel):
+    side: Literal["right"]
+
+
+@pytest.mark.unit
+def test_misusing_pydantic_is_not_disguised_as_a_refused_outcome() -> None:
+    """A discriminator naming no field is a bug in the type, not its shape."""
+    misused = Annotated[Left | Right, Field(discriminator="nope")]
+
+    with pytest.raises(PydanticUserError, match="nope"):
+        _ = run_agent(_NO_SANDBOX, RecordingAgent(), "report back", misused)  # type: ignore[arg-type]
 
 
 @pytest.mark.unit

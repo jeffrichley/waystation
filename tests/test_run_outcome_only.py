@@ -8,8 +8,9 @@ from typing import TypedDict
 
 import pytest
 from pydantic import BaseModel
+from pydantic.errors import PydanticSchemaGenerationError
 
-from helpers import git
+from helpers import OK_OUTCOME, git
 from waystation import (
     Flow,
     NoSandbox,
@@ -104,6 +105,22 @@ def test_non_object_outcome_raises_at_flow_run(host_repo: Path) -> None:
     )
     with pytest.raises(TypeError, match="object-shaped"):
         flow.run("x", outcome=str)
+
+
+@pytest.mark.git
+def test_a_plain_class_outcome_raises_type_error_at_flow_run(
+    host_repo: Path,
+) -> None:
+    class Plain:
+        def __init__(self, summary: str) -> None:
+            self.summary = summary
+
+    flow = Flow(host_repo, agent=ScriptedAgent(outcome=OK_OUTCOME), sandbox=NoSandbox())
+    accepted = r"Plain.*BaseModel, dataclass or TypedDict"
+    with pytest.raises(TypeError, match=accepted) as info:
+        flow.run("x", outcome=Plain)
+
+    assert isinstance(info.value.__cause__, PydanticSchemaGenerationError)
 
 
 @pytest.mark.git

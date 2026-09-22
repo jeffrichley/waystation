@@ -14,19 +14,24 @@ __all__ = ["redact_argv"]
 
 ELIDED = "***"
 
+# An environment variable's name: identifier-shaped, as a shell requires.
+_KEY = r"[A-Za-z_][A-Za-z0-9_]*"
+
 # An environment assignment wherever it sits in an argument: on its own
 # (``ANTHROPIC_API_KEY=…``) or behind a flag (``--env=ANTHROPIC_API_KEY=…``).
-# The key must be identifier-shaped and must not continue a word, a flag or a
-# dotted name, so ``--api-key=`` and git's ``-c user.email=x`` are not keys.
-_ASSIGNMENT = re.compile(r"(?<![-\w.])([A-Za-z_][A-Za-z0-9_]*)=\S+")
+# The key must not continue a word, a flag or a dotted name, so ``--api-key=``
+# and git's ``-c user.email=x`` are not keys.
+_ASSIGNMENT = re.compile(rf"(?<![-\w.])({_KEY})=\S+")
 
 # An argument that *is* an assignment, bare or behind one flag, loses its whole
 # value: docker's ``-e KEY=VAL`` carries a value with spaces or newlines in it
-# as one argument, and the rule above would stop at its first word. Nothing
-# tells ``TOKEN=abc def`` from a script opening ``A=1 cmd``, so the script loses
-# its tail too — over-redaction is the accepted failure (ADR-0025).
+# as one argument, and the rule above would stop at its first word. This runs
+# before that sweep, not instead of it, so an assignment inside a script still
+# goes. Nothing tells ``TOKEN=abc def`` from a script opening ``A=1 cmd``, so
+# the script loses its tail too — over-redaction is the accepted failure
+# (ADR-0025).
 _WHOLE_ASSIGNMENT = re.compile(
-    r"\A(?P<head>(?:--?[A-Za-z][\w-]*=)?[A-Za-z_][A-Za-z0-9_]*=).+\Z", re.DOTALL
+    rf"\A(?P<head>(?:--?[A-Za-z][\w-]*=)?{_KEY}=).+\Z", re.DOTALL
 )
 
 # Credentials that travel without a key naming them — bare, behind a flag, or

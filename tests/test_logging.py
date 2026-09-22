@@ -14,7 +14,9 @@ from rich.logging import RichHandler
 from helpers import PROMPT, a_run, lifecycle
 from waystation import (
     CommandFailed,
+    GitRepo,
     RunSucceeded,
+    StageError,
     configure_logging,
 )
 from waystation.agents.outcome import OUTCOME_MARKER
@@ -106,6 +108,19 @@ def test_redact_argv_elides_a_whole_value_that_carries_whitespace() -> None:
 def test_redact_argv_elides_an_embedded_assignment_only_up_to_whitespace() -> None:
     argv = ("sh", "-c", "export TOKEN=abc && run --fast now")
     assert redact_argv(argv) == ("sh", "-c", "export TOKEN=*** && run --fast now")
+
+
+def test_redact_argv_elides_all_of_an_argument_that_opens_as_an_assignment() -> None:
+    # Over-redaction, accepted (ADR-0025): nothing tells a value with spaces
+    # from a script that opens with an assignment, nor ``-e=`` from any flag.
+    argv = ("sh", "-c", "A=1 make build", "-e=KEY=a b", "--pretty=format=%H %s")
+    assert redact_argv(argv) == (
+        "sh",
+        "-c",
+        "A=***",
+        "-e=KEY=***",
+        "--pretty=format=***",
+    )
 
 
 def test_configure_logging_installs_exactly_one_stderr_handler(
@@ -257,14 +272,18 @@ def test_command_failed_redacts_its_argv() -> None:
     assert failure.argv == ("docker", "run", "-e", "ANTHROPIC_API_KEY=***", "image")
 
 
-def test_command_failed_redacts_a_value_that_carries_whitespace() -> None:
-    failure = CommandFailed(
-        argv=["docker", "exec", "-e", "TOKEN=abc def\nghi", "c", "sh"],
-        exit_code=1,
-        stderr_tail="boom",
-    )
+@pytest.mark.git
+async def test_a_failing_command_carries_a_whitespace_value_redacted(
+    host_repo: Path,
+) -> None:
+    repo = await GitRepo.open(host_repo)
 
-    assert failure.argv == ("docker", "exec", "-e", "TOKEN=***", "c", "sh")
+    with pytest.raises(StageError) as raised:
+        await repo.git("rev-parse", "--verify", "TOKEN=abc def\nghi")
+
+    failure = raised.value.failure
+    assert isinstance(failure, CommandFailed)
+    assert failure.argv[-3:] == ("rev-parse", "--verify", "TOKEN=***")
 
 
 @pytest.mark.git

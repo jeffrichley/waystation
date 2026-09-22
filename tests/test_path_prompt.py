@@ -2,47 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from helpers import OK_OUTCOME
+from helpers import RecordingAgent
 from waystation import Flow, NoSandbox, RunSucceeded
-from waystation.agents import AgentCommand, AgentEvent
 from waystation.hooks import RunContext
-from waystation.testing import ScriptedAgent
-
-
-@dataclass
-class _Recording:
-    """A provider that remembers each prompt it was handed, then plays back."""
-
-    prompts: list[str] = field(default_factory=list)
-    inner: ScriptedAgent = field(
-        default_factory=lambda: ScriptedAgent(outcome=OK_OUTCOME)
-    )
-
-    def preflight(self) -> None:
-        self.inner.preflight()
-
-    def command(self, prompt: str, outcome_schema: dict[str, Any]) -> AgentCommand:
-        self.prompts.append(prompt)
-        return self.inner.command(prompt, outcome_schema)
-
-    def parse(self, line: str) -> Sequence[AgentEvent]:
-        return self.inner.parse(line)
 
 
 @pytest.mark.git
-async def test_each_await_of_one_spec_reads_the_prompt_file_afresh(
+async def test_each_await_of_one_run_spec_reads_the_prompt_file_afresh(
     host_repo: Path, tmp_path: Path
 ) -> None:
     prompt_file = tmp_path / "prompt.md"
     prompt_file.write_text("first\n", encoding="utf-8")
-    agent = _Recording()
+    agent = RecordingAgent()
     spec = Flow(host_repo, agent=agent, sandbox=NoSandbox()).run(prompt_file)
 
     first = await spec
@@ -58,27 +33,31 @@ async def test_each_await_of_one_spec_reads_the_prompt_file_afresh(
 async def test_the_prompt_file_is_read_before_run_start_and_not_again(
     host_repo: Path, tmp_path: Path
 ) -> None:
-    """What ``ctx.prompt`` shows every hook is what the agent is handed."""
+    """What ``ctx.prompt`` shows every hook is what the agent is handed.
+
+    The ``run_start`` hook edits the file without reading ``ctx.prompt``, so
+    a read put off until something first asks for it would see the edit.
+    """
     prompt_file = tmp_path / "prompt.md"
     prompt_file.write_text("as the run started\n", encoding="utf-8")
     seen: list[str] = []
 
-    def edit_at(point: str) -> Callable[[RunContext], None]:
-        def hook(ctx: RunContext) -> None:
-            seen.append(ctx.prompt)
-            prompt_file.write_text(f"edited at {point}\n", encoding="utf-8")
+    def edit(ctx: RunContext) -> None:
+        prompt_file.write_text("edited at run_start\n", encoding="utf-8")
 
-        return hook
+    def look_and_edit(ctx: RunContext) -> None:
+        seen.append(ctx.prompt)
+        prompt_file.write_text("edited later\n", encoding="utf-8")
 
-    agent = _Recording()
+    agent = RecordingAgent()
     result = await (
         Flow(host_repo, agent=agent, sandbox=NoSandbox())
         .run(prompt_file)
-        .on_run_start(edit_at("run_start"))
-        .on_workspace_ready(edit_at("workspace_ready"))
-        .on_sandbox_ready(edit_at("sandbox_ready"))
+        .on_run_start(edit)
+        .on_workspace_ready(look_and_edit)
+        .on_sandbox_ready(look_and_edit)
     )
 
     assert isinstance(result, RunSucceeded)
-    assert seen == ["as the run started\n"] * 3
+    assert seen == ["as the run started\n"] * 2
     assert agent.prompts == ["as the run started\n"]

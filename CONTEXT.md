@@ -39,7 +39,7 @@ Fan-out's open-ended peer: a block that stays open, takes a run spec whenever on
 _Avoid_: pool, scheduler, job queue, worker
 
 **Merge queue**:
-A queue for one target branch that lands a candidate only once a check has passed on it re-applied onto the target's current head, and lands exactly the commit checked. One candidate at a time, in arrival order; a conflict or failed check is resolved at the front by a resolver run the caller builds, or the candidate is evicted (ADR-0048).
+A queue for one target branch that lands a candidate only once a check has passed on it re-applied onto the target's current head, and lands exactly the commit checked. One candidate at a time, in the order its ordering strategy pulls them — arrival by default; a conflict or failed check is resolved at the front by a resolver run the caller builds, or the candidate is evicted (ADR-0049).
 _Avoid_: merge train, gate, landing queue
 
 **Candidate**:
@@ -49,6 +49,10 @@ _Avoid_: PR, change, patch
 **Check**:
 The caller's command a merge queue runs in a sandbox against the commit it would land — the repo's test suite, say. Zero passes.
 _Avoid_: validation, CI, gate
+
+**Ordering strategy**:
+The pluggable rule for which waiting item a long-lived queue pulls next when more are waiting than there is room for: it sees everything waiting, oldest first, and picks one. Arrival order by default (ADR-0048).
+_Avoid_: priority, scheduler, comparator
 
 **Sandbox**:
 The isolated, ephemeral environment an agent executes in — created for a run, destroyed after it.

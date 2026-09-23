@@ -12,6 +12,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | ADR | Read it when you're… |
 | --- | --- |
 | [0047](0047-flows-are-plain-python-and-a-queue-is-fan-outs-open-ended-peer.md) Flows are plain imperative Python, and a queue is fan-out's open-ended peer | tempted to add config, templates, or a declarative layer, adding a parallel construct, or touching the queue |
+| [0048](0048-a-queue-pulls-by-an-injected-ordering-strategy.md) A queue pulls by an injected ordering strategy, asked only when there is a choice | writing an ordering strategy, changing which queued run starts next, or building the merge queue's pull |
 | [0003](0003-flows-are-plain-python.md) Flows are plain imperative Python with one parallel spelling | *superseded by 0047*: only for the history of "`fan_out` is the only parallel construct" |
 | [0004](0004-pure-library-boundary.md) Pure library: no CLI, no forge, no magic directory | adding a CLI, a GitHub call, or a dotfile the library owns |
 | [0021](0021-dataclass-values-pydantic-at-the-outcome.md) Values are dataclasses; pydantic validates only the Outcome | reaching for a `BaseModel` anywhere but the Outcome |
@@ -46,7 +47,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0040](0040-landing-steps-are-public-and-squash-is-its-own-strategy.md) The landing steps are public on `GitRepo`; squash is its own strategy | writing an integration strategy, adding a landing step, or changing how `Squash` lands |
 | [0041](0041-a-head-target-fast-forwards-the-checkout-and-refuses-for-the-users-files.md) A HEAD target fast-forwards the checkout, and refuses rather than overwrite the user's files | landing on `HEAD`, or deciding what counts as the user's uncommitted work |
 | [0015](0015-conflict-resolution-is-a-run.md) Conflict resolution is a run, not a seam | tempted to add a resolver hook, merger or healer |
-| [0048](0048-a-merge-queue-checks-each-landing-on-the-head-and-resolves-at-the-front.md) A merge queue checks each landing on the target's head, and resolves at the front | landing many series on one branch, touching the merge queue or `run_check`, or wanting a resolver inside a landing |
+| [0049](0049-a-merge-queue-checks-each-landing-on-the-head-and-resolves-at-the-front.md) A merge queue checks each landing on the target's head, and resolves at the front | landing many series on one branch, touching the merge queue or `run_check`, or wanting a resolver inside a landing |
 
 ## Sandboxes
 

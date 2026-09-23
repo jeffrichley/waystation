@@ -287,7 +287,7 @@ _FLOW_SCRIPT_SURFACE = {
     "fan_out",
     "queue",  # fan-out's open-ended peer (#113, ADR-0047)
     # landing many series on one branch, each checked on its head first:
-    # the queue, the check it runs, and what it yields (#138, ADR-0048)
+    # the queue, the check it runs, and what it yields (#138, ADR-0049)
     "merge_queue",
     "run_check",
     "Landing",

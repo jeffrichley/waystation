@@ -7,11 +7,12 @@ front, checked in a sandbox against exactly that tree, and landed by
 fast-forwarding the target to the commit checked. A candidate that conflicts or
 fails its check can be handed to a resolver run the caller builds, at the
 front, where the head cannot move under it; otherwise it is evicted with a
-typed result, and nothing raises (ADR-0048).
+typed result, and nothing raises (ADR-0049).
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from helpers import (
 from waystation import (
     Attempt,
     CheckFailed,
+    Errored,
     Flow,
     Landed,
     Landing,
@@ -44,7 +46,7 @@ from waystation import (
     run_check,
 )
 from waystation.integration import Conflict
-from waystation.merge_queue import Candidate, CheckResult, MergeQueue
+from waystation.merge_queue import Candidate, CheckResult, MergeQueue, QueuedCandidate
 
 TARGET = "effort"
 
@@ -448,3 +450,59 @@ def test_an_attempt_holds_a_conflict_or_a_failed_check_never_both_or_neither() -
         Attempt(
             candidate, "ticket-a", "2" * 40, "2" * 40, Conflict(paths=("A",)), failed
         )
+
+
+class _Urgent:
+    """Ranks the candidate named ``urgent`` first, and the rest as they came."""
+
+    def pick(self, waiting: Sequence[QueuedCandidate]) -> QueuedCandidate:
+        return next((q for q in waiting if q.candidate.name == "urgent"), waiting[0])
+
+
+@pytest.mark.git
+async def test_an_ordering_strategy_says_which_candidate_reaches_the_front(
+    host_repo: Path, base: str
+) -> None:
+    # The same protocol a run queue takes (ADR-0048), over candidates.
+    for name in ("C", "A", "B"):
+        _cut(host_repo, f"ticket-{name}", {name: f"{name}\n"})
+
+    async with merge_queue(
+        host_repo, TARGET, check="true", sandbox=NoSandbox(), order=_Urgent()
+    ) as landings:
+        landings.submit("ticket-C", base=base)
+        landings.submit("ticket-A", base=base, name="urgent")
+        landings.submit("ticket-B", base=base)
+        landings.close()
+        results = [landing async for landing in landings]
+
+    assert all(isinstance(landing, Landed) for landing in results), results
+    assert subjects(host_repo, f"{base}..{TARGET}") == ["add B", "add C", "add A"]
+
+
+class _Broken:
+    def pick(self, waiting: Sequence[QueuedCandidate]) -> QueuedCandidate:
+        raise LookupError("no ranking today")
+
+
+@pytest.mark.git
+async def test_a_failing_ordering_strategy_refuses_its_candidates_as_values(
+    host_repo: Path, base: str
+) -> None:
+    _cut(host_repo, "ticket-a", {"A": "a\n"})
+    _cut(host_repo, "ticket-b", {"B": "b\n"})
+
+    async with merge_queue(
+        host_repo, TARGET, check="true", sandbox=NoSandbox(), order=_Broken()
+    ) as landings:
+        landings.submit("ticket-a", base=base)
+        landings.submit("ticket-b", base=base)
+        landings.close()
+        results = [landing async for landing in landings]
+
+    assert len(results) == 2
+    for landing in results:
+        assert isinstance(landing, LandingFailed), landing
+        assert landing.stage is None
+        assert isinstance(landing.failure, Errored)
+    assert git(host_repo, "rev-parse", TARGET) == base

@@ -10,25 +10,26 @@ and a block whose exit stops what is still going (ADR-0007, ADR-0047).
 
 from __future__ import annotations
 
-import asyncio
 import secrets
 from functools import partial
 from typing import Any
 
-from waystation._serving import Serving, stop
+from waystation._serving import Queued, Serving
 from waystation.errors import PreflightError
 from waystation.flow import RunSpec
+from waystation.ordering import ArrivalOrder, OrderingStrategy
 from waystation.preflight import preflight
-from waystation.results import Errored, RunFailed, RunResult
+from waystation.results import Errored, Failure, RunFailed, RunResult
 
 __all__ = ["QueuedRun", "RunQueue", "queue"]
 
 
-def _refused(spec: RunSpec[Any], error: PreflightError) -> RunFailed:
-    """A run that failed its preflight, as a result: it never began.
+def _refused(spec: RunSpec[Any], failure: Failure) -> RunFailed:
+    """A run refused before it began, as a result.
 
-    No stage failed and none of its work exists, so ``stage`` is ``None``
-    and the run id is minted here, for an attempt that got no further.
+    Its preflight failed, or the strategy ordering it did. No stage failed
+    and none of its work exists, so ``stage`` is ``None`` and the run id is
+    minted here, for an attempt that got no further.
     """
     return RunFailed(
         run_id=secrets.token_hex(4),
@@ -39,52 +40,51 @@ def _refused(spec: RunSpec[Any], error: PreflightError) -> RunFailed:
         series=None,
         preserved=None,
         stage=None,
-        failure=error.failure if error.failure is not None else Errored(error),
+        failure=failure,
     )
 
 
-class _QueuedRun[OutcomeT]:
+class _QueuedRun[OutcomeT](Queued[RunResult[OutcomeT]]):
     """One submitted run: the spec it was submitted as, and the way to stop it.
 
-    ``submit`` makes one; it is private as the queue itself is.
+    ``submit`` makes one; it is private as the queue itself is. ``cancel``
+    stops this run alone: in flight, it keeps what its agent left and tears
+    its sandbox down (ADR-0017); still queued, it never starts.
     """
 
-    def __init__(
-        self, spec: RunSpec[OutcomeT], task: asyncio.Task[RunResult[OutcomeT]]
-    ) -> None:
+    def __init__(self, spec: RunSpec[OutcomeT]) -> None:
+        super().__init__()
         self.spec = spec
-        self._task = task
-
-    async def cancel(self) -> None:
-        """Stop this run alone, and return once it has wound down.
-
-        In flight, it keeps what its agent left and tears its sandbox down
-        (ADR-0017); still queued, it never starts. Either way it reports
-        nothing, and every other run goes on. A run that has already ended
-        is left as it was: its result is yielded as it would have been.
-        """
-        await stop([self._task])
 
 
-class _RunQueue[OutcomeT](Serving[RunResult[OutcomeT]]):
+class _RunQueue[OutcomeT](Serving[_QueuedRun[OutcomeT], RunResult[OutcomeT]]):
     """The runs submitted to one queue, yielded as they complete.
 
     Private, as fan-out's iterator is: a flow script names what it iterates,
-    ``RunResult``, and annotates with ``RunQueue`` when it must. What it
-    shares with a merge queue — the slots, the drain on close, the stop that
-    waits — is ``Serving``'s.
+    ``RunResult``, and annotates with ``RunQueue`` when it must. The pull,
+    the drain on close and the stop that waits are ``Serving``'s, which a
+    merge queue shares (ADR-0049).
     """
 
-    def __init__(self, max_concurrency: int | None) -> None:
+    def __init__(
+        self,
+        max_concurrency: int | None,
+        order: OrderingStrategy[_QueuedRun[OutcomeT]],
+    ) -> None:
         super().__init__(
             max_concurrency,
+            order,
             closed_message="this queue is closed: it takes no more runs",
         )
 
     def submit(
         self, spec: RunSpec[OutcomeT], *, preflighted: bool = False
     ) -> _QueuedRun[OutcomeT]:
-        """Submit ``spec``; it starts as soon as a slot is free.
+        """Submit ``spec``; it starts once the queue has room and pulls it.
+
+        With room for everything waiting, that is the loop's next turn;
+        otherwise the queue's ordering strategy says which waiting run takes
+        each slot as it frees (ADR-0048).
 
         It is preflighted when it starts, not now, so a queue that runs for
         hours checks each run against the host as it is then. A run that
@@ -103,14 +103,17 @@ class _RunQueue[OutcomeT](Serving[RunResult[OutcomeT]]):
         Raises:
             RuntimeError: When the queue is closed, or its block was left.
         """
-        task = self.start(partial(self._run, spec, preflighted=preflighted))
-        return _QueuedRun(spec, task)
+        return self.start(
+            _QueuedRun(spec),
+            partial(self._run, spec, preflighted=preflighted),
+            partial(_refused, spec),
+        )
 
     @staticmethod
     async def _run(
         spec: RunSpec[OutcomeT], *, preflighted: bool
     ) -> RunResult[OutcomeT]:
-        """One run, begun once a slot is free.
+        """One run, begun once the queue pulls it.
 
         Until then it has no workspace, so its base ref resolves when it
         starts, not when it was submitted.
@@ -119,7 +122,10 @@ class _RunQueue[OutcomeT](Serving[RunResult[OutcomeT]]):
             try:
                 await preflight((spec,))
             except PreflightError as error:
-                return _refused(spec, error)
+                return _refused(
+                    spec,
+                    error.failure if error.failure is not None else Errored(error),
+                )
         return await spec.perform(preflighted=True)
 
 
@@ -135,7 +141,11 @@ type QueuedRun[OutcomeT] = _QueuedRun[OutcomeT]
 """What ``submit()`` returns, for annotating what holds one."""
 
 
-def queue(*, max_concurrency: int | None = None) -> RunQueue[Any]:
+def queue(
+    *,
+    max_concurrency: int | None = None,
+    order: OrderingStrategy[QueuedRun[Any]] | None = None,
+) -> RunQueue[Any]:
     """An open queue of runs: submit specs over time; yield each result as it completes.
 
     ``fan_out`` for work that arrives over time — a run that becomes
@@ -165,9 +175,13 @@ def queue(*, max_concurrency: int | None = None) -> RunQueue[Any]:
 
     Args:
         max_concurrency: The most runs in flight at once, across everything
-            submitted; ``None``, the default, is no limit. Queued runs start
-            in the order submitted as slots free, and each resolves its base
-            ref then.
+            submitted; ``None``, the default, is no limit. A queued run
+            starts as a slot frees, and resolves its base ref then.
+        order: Which waiting run starts next, when more are waiting than
+            there is room for: asked at each such pull, with every waiting
+            ``QueuedRun`` oldest first. ``None``, the default, is arrival
+            order. A strategy that fails refuses the runs it was ordering,
+            each a ``RunFailed`` whose ``stage`` is ``None`` (ADR-0048).
 
     Returns:
         An async iterator of results, and an async context manager that
@@ -179,4 +193,4 @@ def queue(*, max_concurrency: int | None = None) -> RunQueue[Any]:
     if max_concurrency is not None and max_concurrency < 1:
         msg = f"max_concurrency must be at least 1, or None, got {max_concurrency}"
         raise ValueError(msg)
-    return _RunQueue(max_concurrency)
+    return _RunQueue(max_concurrency, order if order is not None else ArrivalOrder())

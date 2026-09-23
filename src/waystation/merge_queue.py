@@ -4,7 +4,7 @@
 series each green against one base can land one after the other and leave the
 target red. A merge queue closes that gap the way every gating system since the
 Not Rocket Science Rule has: test each candidate applied to the target's tip
-exactly as it will land, and land exactly what was tested (ADR-0048).
+exactly as it will land, and land exactly what was tested (ADR-0049).
 
 One target per queue, one candidate at a time, in arrival order. Git only: a
 candidate is a range on the host, the check runs in a sandbox, and pushing the
@@ -13,18 +13,18 @@ landed branch anywhere is the caller's (ADR-0004).
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
 
-from waystation._serving import Serving, stop
+from waystation._serving import Queued, Serving
 from waystation.collect import PatchSeries
 from waystation.errors import StageError
 from waystation.flow import RunSpec
 from waystation.integration import GitRepo, Integration, Target, integrate
+from waystation.ordering import ArrivalOrder, OrderingStrategy
 from waystation.results import (
     Conflict,
     Errored,
@@ -261,7 +261,7 @@ class _Rehearsing(GitRepo):
     """The host repo, but a target is only noted where a landing would move it.
 
     ``Integration`` rehearses on this exactly as it would land, and the
-    commit it would move the target to is what gets checked (ADR-0048).
+    commit it would move the target to is what gets checked (ADR-0049).
     """
 
     moves: list[tuple[Target, str]] = field(default_factory=list)
@@ -380,46 +380,51 @@ def _evicted(attempt: Attempt) -> Landing:
     )
 
 
-class _QueuedCandidate:
-    """One submitted candidate, and the way to stop it alone."""
+class _QueuedCandidate(Queued[Landing]):
+    """One submitted candidate, and the way to stop it alone.
 
-    def __init__(self, candidate: Candidate, task: asyncio.Task[Landing]) -> None:
-        self.candidate = candidate
-        self._task = task
-
-    async def cancel(self) -> None:
-        """Stop this candidate alone, and return once it has wound down.
-
-        At the front, its check or resolver run is stopped and cleans up
-        (ADR-0017), and the target does not move — unless the swap had already
-        begun, which finishes (ADR-0027). Still queued, it never starts.
-        Either way it reports nothing, and the next candidate goes on.
-        """
-        await stop([self._task])
-
-
-class _MergeQueue(Serving[Landing]):
-    """The candidates submitted to one target, yielded as each is settled.
-
-    A queue with one slot: what it shares with ``queue()`` — the drain on
-    close, the stop that waits, the cancelled wait that loses nothing — is
-    ``Serving``'s (ADR-0047).
+    ``cancel`` at the front stops its check or resolver run, which cleans up
+    (ADR-0017), and the target does not move — unless the swap had already
+    begun, which finishes (ADR-0027). Still queued, it never starts. Either
+    way it reports nothing, and the next candidate goes on.
     """
 
-    def __init__(self, front: _Front) -> None:
-        # One slot: depth 1, no speculation. A candidate is checked against
-        # a head nothing else is landing on, which is the whole point (#138).
+    def __init__(self, candidate: Candidate) -> None:
+        super().__init__()
+        self.candidate = candidate
+
+
+def _refused(candidate: Candidate, failure: Failure) -> Landing:
+    """A candidate refused before it reached the front: its ordering failed."""
+    return LandingFailed(candidate, candidate.ref, None, failure)
+
+
+class _MergeQueue(Serving[_QueuedCandidate, Landing]):
+    """The candidates submitted to one target, yielded as each is settled.
+
+    A queue with room for one: the pull, the drain on close and the stop
+    that waits are ``Serving``'s, which ``queue()`` shares (ADR-0047,
+    ADR-0048).
+    """
+
+    def __init__(
+        self, front: _Front, order: OrderingStrategy[_QueuedCandidate]
+    ) -> None:
+        # Room for one: depth 1, no speculation. A candidate is checked
+        # against a head nothing else is landing on, which is the whole point.
         super().__init__(
-            1, closed_message="this merge queue is closed: it takes no more"
+            1, order, closed_message="this merge queue is closed: it takes no more"
         )
         self._front = front
 
     def submit(
         self, ref: str, *, base: str, name: str | None = None
     ) -> _QueuedCandidate:
-        """Submit ``base..ref`` to land; it reaches the front after those before it.
+        """Submit ``base..ref`` to land; it reaches the front when the queue pulls it.
 
-        Nothing is read now: the range is read when it reaches the front, so
+        With one candidate waiting that is as soon as the front is free;
+        with more, the queue's ordering strategy says which goes next
+        (ADR-0048). Nothing is read now: the range is read at the front, so
         a branch pushed to meanwhile lands as it is then.
 
         Args:
@@ -434,8 +439,11 @@ class _MergeQueue(Serving[Landing]):
             RuntimeError: When the queue is closed, or its block was left.
         """
         candidate = Candidate(ref=ref, base=base, name=name)
-        task = self.start(partial(self._front.land, candidate))
-        return _QueuedCandidate(candidate, task)
+        return self.start(
+            _QueuedCandidate(candidate),
+            partial(self._front.land, candidate),
+            partial(_refused, candidate),
+        )
 
 
 type MergeQueue = _MergeQueue
@@ -453,6 +461,7 @@ def merge_queue(
     sandbox: SandboxBackend,
     env: Mapping[str, str] | None = None,
     resolve: Resolve | None = None,
+    order: OrderingStrategy[QueuedCandidate] | None = None,
 ) -> MergeQueue:
     """A merge queue for ``target``: submit candidates; yield each as it is settled.
 
@@ -460,9 +469,9 @@ def merge_queue(
     target's head as ``Integration(target)`` would land it, without moving
     anything; ``check`` runs in ``sandbox`` against exactly that commit; and
     only a check that passed moves the target, to that commit. One at a
-    time, in the order submitted. Every candidate reports — ``Landed``,
-    ``LandingConflicted``, ``CheckFailed`` or ``LandingFailed`` — and nothing
-    raises mid-iteration (ADR-0007)::
+    time, in the order submitted unless ``order`` says otherwise. Every
+    candidate reports — ``Landed``, ``LandingConflicted``, ``CheckFailed`` or
+    ``LandingFailed`` — and nothing raises mid-iteration (ADR-0007)::
 
         async with merge_queue(repo, "effort/x", check="just check",
                                sandbox=DockerSandbox("ci")) as landings:
@@ -495,9 +504,18 @@ def merge_queue(
         env: Literal values laid over the sandbox's environment for a check.
         resolve: Given an attempt, the resolver run to perform, or ``None``
             to evict; without it, every setback evicts.
+        order: Which waiting candidate reaches the front next, when more
+            than one is waiting: asked at each such pull, with every waiting
+            ``QueuedCandidate`` oldest first. ``None``, the default, is
+            arrival order. A strategy that fails refuses the candidates it
+            was ordering, each a ``LandingFailed`` whose ``stage`` is
+            ``None`` (ADR-0048).
 
     Returns:
         An async iterator of landings, and an async context manager that
         yields it.
     """
-    return _MergeQueue(_Front(repo, target, check, sandbox, env, resolve))
+    return _MergeQueue(
+        _Front(repo, target, check, sandbox, env, resolve),
+        order if order is not None else ArrivalOrder(),
+    )

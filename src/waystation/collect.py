@@ -72,11 +72,29 @@ class PatchSeries:
             One patch per commit in ``base..ref``, oldest first.
 
         Raises:
-            StageError: When git fails, with no stage named yet.
+            StageError: ``Refused("nonlinear_series")`` when the range holds a
+                merge commit, or ``ref`` does not descend from ``base``: a
+                series is linear, and format-patch would flatten either one
+                without a word (ADR-0006). Or a git failure. No stage is named
+                yet.
         """
         host = Path(repo)
         verified = await run_git(host, "rev-parse", "--verify", base)
         base_sha = verified.stdout.strip()
+        # rev-list first: a ref that names nothing fails as git's own error,
+        # and is-ancestor is then left only its "no" to say.
+        merges = await run_git(host, "rev-list", "--merges", f"{base_sha}..{ref}")
+        descends = await run_git(
+            host, "merge-base", "--is-ancestor", base_sha, ref, check=False
+        )
+        if descends.returncode != 0 or merges.stdout.strip():
+            raise StageError(
+                None,
+                Refused(
+                    reason="nonlinear_series",
+                    detail=f"{base}..{ref}: {_NONLINEAR_DETAIL}",
+                ),
+            )
         result = await run_git(host, "format-patch", "--stdout", f"{base_sha}..{ref}")
         return cls.from_format_patch(base_sha, result.stdout)
 

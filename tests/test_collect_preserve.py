@@ -363,6 +363,46 @@ async def test_patch_series_from_range(host_repo: Path) -> None:
     assert "on feature" in series.patches[0]
 
 
+@pytest.mark.git
+async def test_a_range_with_a_merge_in_it_is_refused_not_flattened(
+    host_repo: Path,
+) -> None:
+    # A forge's "Update branch" merges the target into a ticket branch; a
+    # series built past it must say so, never drop the merge quietly (#138).
+    from waystation import PatchSeries, StageError
+
+    base = git(host_repo, "rev-parse", "HEAD")
+    commit_on(host_repo, "side", {"S": "s\n"}, message="on side")
+    commit_on(host_repo, "feature", {"X": "x\n"}, message="on feature")
+    git(host_repo, "checkout", "-q", "feature")
+    git(host_repo, "merge", "-q", "--no-ff", "-m", "update branch", "side")
+    git(host_repo, "checkout", "-q", "-")
+
+    with pytest.raises(StageError) as raised:
+        await PatchSeries.from_range(host_repo, base, "feature")
+
+    assert raised.value.stage is None
+    assert isinstance(raised.value.failure, Refused)
+    assert raised.value.failure.reason == "nonlinear_series"
+
+
+@pytest.mark.git
+async def test_a_range_whose_base_is_not_an_ancestor_is_refused(
+    host_repo: Path,
+) -> None:
+    # The patches would be cut against a commit the series does not start at.
+    from waystation import PatchSeries, StageError
+
+    moved = commit_on(host_repo, "target", {"T": "t\n"}, message="target moved")
+    commit_on(host_repo, "feature", {"X": "x\n"}, message="on feature")
+
+    with pytest.raises(StageError) as raised:
+        await PatchSeries.from_range(host_repo, moved, "feature")
+
+    assert isinstance(raised.value.failure, Refused)
+    assert raised.value.failure.reason == "nonlinear_series"
+
+
 _REWINDS_BELOW_BASE = "\n".join(
     ["set -e", "git reset -q --hard HEAD~1", f"echo '{OK_OUTCOME_LINE}'"]
 )

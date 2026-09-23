@@ -3,15 +3,29 @@
 set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 set shell := ["bash", "-cu"]
 
+# Material prints a banner about MkDocs 2 on every build; the `site` group pins
+# mkdocs<2, so it says nothing this repo can act on.
+export NO_MKDOCS_2_WARNING := "true"
+
 default:
     @just --list
 
-# Lint, type-check, and test. Fails if any step fails.
+# Lint, type-check, test, and build the site. Fails if any step fails.
 check:
-    uv run ruff check src tests examples
-    uv run ruff format --check src tests examples
+    uv run ruff check src tests examples site
+    uv run ruff format --check src tests examples site
     uv run --group examples mypy
     uv run pytest
+    just site-build
+
+# Build the documentation site, failing on any warning: a broken include,
+# reference or link fails it (#127).
+site-build:
+    uv run --group site mkdocs build --strict -f site/mkdocs.yml
+
+# Serve the documentation site with live reload, at http://127.0.0.1:8000.
+site:
+    uv run --group site mkdocs serve -f site/mkdocs.yml
 
 # Install the secret-scanning hooks (.pre-commit-config.yaml), once per clone.
 hooks:

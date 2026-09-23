@@ -38,6 +38,18 @@ _Avoid_: group, stage, job set
 Fan-out's open-ended peer: a block that stays open, takes a run spec whenever one is submitted, preflights each run as it starts, and yields each result as it completes until it is closed and every submitted run has reported. A batch is the case of it that is submitted and closed at once (ADR-0047).
 _Avoid_: pool, scheduler, job queue, worker
 
+**Merge queue**:
+A queue for one target branch that lands a candidate only once a check has passed on it re-applied onto the target's current head, and lands exactly the commit checked. One candidate at a time, in the order its ordering strategy pulls them — arrival by default; a conflict or failed check is resolved at the front by a resolver run the caller builds, or the candidate is evicted (ADR-0049).
+_Avoid_: merge train, gate, landing queue
+
+**Candidate**:
+A series submitted to a merge queue, named by the range `base..ref` that holds it on the host: a run's preservation branch, or a branch a person pushed.
+_Avoid_: PR, change, patch
+
+**Check**:
+The caller's command a merge queue runs in a sandbox against the commit it would land — the repo's test suite, say. Zero passes.
+_Avoid_: validation, CI, gate
+
 **Ordering strategy**:
 The pluggable rule for which waiting item a long-lived queue pulls next when more are waiting than there is room for: it sees everything waiting, oldest first, and picks one. Arrival order by default (ADR-0048).
 _Avoid_: priority, scheduler, comparator
@@ -114,7 +126,7 @@ The branch that keeps a run's patch series whenever the series does not reach a 
 _Avoid_: backup branch, conflict branch
 
 **Resolver run**:
-An ordinary run whose prompt asks the agent to replay a preservation branch onto a target, resolving conflicts commit by commit. Nothing distinguishes it from any other run but its prompt.
+An ordinary run whose prompt asks the agent to replay a preservation branch onto a target, resolving conflicts commit by commit — or, at a merge queue's front, to fix a candidate whose check failed. Nothing distinguishes it from any other run but its prompt.
 _Avoid_: merger, fixer, healer, conflict handler
 
 **Outcome**:

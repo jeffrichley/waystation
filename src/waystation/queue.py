@@ -10,12 +10,11 @@ and a block whose exit stops what is still going (ADR-0007, ADR-0047).
 
 from __future__ import annotations
 
-import asyncio
 import secrets
-from collections.abc import Iterable
-from typing import Any, Self
+from functools import partial
+from typing import Any
 
-from waystation._cancellation import run_to_end
+from waystation._serving import Queued, Serving
 from waystation.errors import PreflightError
 from waystation.flow import RunSpec
 from waystation.ordering import ArrivalOrder, OrderingStrategy
@@ -23,31 +22,6 @@ from waystation.preflight import preflight
 from waystation.results import Errored, Failure, RunFailed, RunResult
 
 __all__ = ["QueuedRun", "RunQueue", "queue"]
-
-
-# The event loop holds tasks weakly, so a run whose queue was dropped
-# mid-run would be collected mid-run; each run is held here until it ends
-# (the asyncio.create_task docs).
-_UNFINISHED: set[asyncio.Task[Any]] = set()
-
-
-async def _stop(tasks: Iterable[asyncio.Task[Any]]) -> None:
-    """Cancel ``tasks``, and return once each has wound down.
-
-    A run in flight keeps what its agent left and tears its sandbox down
-    before its cancellation finishes (ADR-0017); a queued run never begins.
-    Cancelling the caller meanwhile waits for that too and is raised
-    afterwards, the way ``asyncio.TaskGroup`` leaves.
-    """
-    tasks = list(tasks)
-    for task in tasks:
-        task.cancel()
-    if not tasks:
-        return
-    waited: list[asyncio.CancelledError] = []
-    await run_to_end(asyncio.wait(tasks), waited.append)
-    if waited:
-        raise waited[0]
 
 
 def _refused(spec: RunSpec[Any], failure: Failure) -> RunFailed:
@@ -70,40 +44,26 @@ def _refused(spec: RunSpec[Any], failure: Failure) -> RunFailed:
     )
 
 
-class _QueuedRun[OutcomeT]:
+class _QueuedRun[OutcomeT](Queued[RunResult[OutcomeT]]):
     """One submitted run: the spec it was submitted as, and the way to stop it.
 
-    ``submit`` makes one; it is private as the queue itself is.
+    ``submit`` makes one; it is private as the queue itself is. ``cancel``
+    stops this run alone: in flight, it keeps what its agent left and tears
+    its sandbox down (ADR-0017); still queued, it never starts.
     """
 
-    _task: asyncio.Task[RunResult[OutcomeT]]
-
     def __init__(self, spec: RunSpec[OutcomeT]) -> None:
+        super().__init__()
         self.spec = spec
-        # True from the pull that starts it until it ends.
-        self._holds_slot = False
-        # Set when the queue pulls this run: ``None`` to start it, or the
-        # failure it is refused with, when the strategy ordering it failed.
-        self._turn: asyncio.Future[Failure | None] = (
-            asyncio.get_running_loop().create_future()
-        )
-
-    async def cancel(self) -> None:
-        """Stop this run alone, and return once it has wound down.
-
-        In flight, it keeps what its agent left and tears its sandbox down
-        (ADR-0017); still queued, it never starts. Either way it reports
-        nothing, and every other run goes on. A run that has already ended
-        is left as it was: its result is yielded as it would have been.
-        """
-        await _stop([self._task])
 
 
-class _RunQueue[OutcomeT]:
+class _RunQueue[OutcomeT](Serving[_QueuedRun[OutcomeT], RunResult[OutcomeT]]):
     """The runs submitted to one queue, yielded as they complete.
 
     Private, as fan-out's iterator is: a flow script names what it iterates,
-    ``RunResult``, and annotates with ``RunQueue`` when it must.
+    ``RunResult``, and annotates with ``RunQueue`` when it must. The pull,
+    the drain on close and the stop that waits are ``Serving``'s, which a
+    merge queue shares (ADR-0049).
     """
 
     def __init__(
@@ -111,42 +71,11 @@ class _RunQueue[OutcomeT]:
         max_concurrency: int | None,
         order: OrderingStrategy[_QueuedRun[OutcomeT]],
     ) -> None:
-        self._room = max_concurrency
-        self._order = order
-        self._in_flight = 0
-        # Oldest first: what the strategy is offered at each pull.
-        self._waiting: list[_QueuedRun[OutcomeT]] = []
-        self._pull_due = False
-        self._running: set[asyncio.Task[RunResult[OutcomeT]]] = set()
-        # ``None`` is the end: put once, when the queue is closed and nothing
-        # is running, and put back by each consumer that reads it.
-        self._finished: asyncio.Queue[asyncio.Task[RunResult[OutcomeT]] | None] = (
-            asyncio.Queue()
+        super().__init__(
+            max_concurrency,
+            order,
+            closed_message="this queue is closed: it takes no more runs",
         )
-        self._closed = False
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *exc: object) -> None:
-        """Close the queue, stop the runs still going, and wait for each."""
-        self.close()
-        await _stop(self._running)
-
-    def __aiter__(self) -> Self:
-        return self
-
-    async def __anext__(self) -> RunResult[OutcomeT]:
-        while True:
-            # A cancelled wait takes nothing: the result stays for the next.
-            task = await self._finished.get()
-            if task is None:
-                self._finished.put_nowait(None)  # every consumer sees the end
-                raise StopAsyncIteration
-            # A run stopped by cancel() or the block's exit reports nothing
-            # (ADR-0017).
-            if not task.cancelled():
-                return task.result()
 
     def submit(
         self, spec: RunSpec[OutcomeT], *, preflighted: bool = False
@@ -174,115 +103,21 @@ class _RunQueue[OutcomeT]:
         Raises:
             RuntimeError: When the queue is closed, or its block was left.
         """
-        if self._closed:
-            msg = "this queue is closed: it takes no more runs"
-            raise RuntimeError(msg)
-        queued = _QueuedRun(spec)
-        queued._task = task = asyncio.create_task(
-            self._run(queued, preflighted=preflighted)
+        return self.start(
+            _QueuedRun(spec),
+            partial(self._run, spec, preflighted=preflighted),
+            partial(_refused, spec),
         )
-        self._running.add(task)
-        _UNFINISHED.add(task)
-        task.add_done_callback(lambda _: self._ended(queued))
-        self._waiting.append(queued)
-        if not self._pull_due:
-            # On the loop's next turn, not now, so runs submitted together
-            # are ranked together: six ready and room for three starts the
-            # best three, not the first three submitted.
-            self._pull_due = True
-            asyncio.get_running_loop().call_soon(self._pull)
-        return queued
 
-    def close(self) -> None:
-        """Take no more runs; iteration ends once every submitted run has reported.
-
-        Nothing is stopped: the runs submitted go on, queued ones included.
-        Closing twice is closing once.
-        """
-        if not self._closed:
-            self._closed = True
-            self._end_if_drained()
-
-    def _ended(self, queued: _QueuedRun[OutcomeT]) -> None:
-        task = queued._task
-        _UNFINISHED.discard(task)
-        self._running.discard(task)
-        # Its result first: the pull runs the caller's strategy, and nothing
-        # it raises may cost this run its report.
-        self._finished.put_nowait(task)
-        self._end_if_drained()
-        if queued._holds_slot:
-            # However it ended, even stopped before it could begin.
-            queued._holds_slot = False
-            self._in_flight -= 1
-            self._pull()
-
-    def _end_if_drained(self) -> None:
-        # Once closed, nothing is added to _running, so this holds once.
-        if self._closed and not self._running:
-            self._finished.put_nowait(None)
-
-    def _pull(self) -> None:
-        """Start waiting runs while there is room, asking the strategy which.
-
-        The strategy is asked only when there is a choice — more waiting than
-        room — so a queue with no cap never asks it. When it fails, every run
-        it was ordering is refused with that failure, and the queue goes on
-        taking runs (ADR-0016, ADR-0048).
-        """
-        self._pull_due = False
-        # A run stopped while it waited is not offered, even before it ends.
-        self._waiting = [
-            run
-            for run in self._waiting
-            if not (run._task.done() or run._task.cancelling())
-        ]
-        while self._waiting:
-            room = None if self._room is None else self._room - self._in_flight
-            if room is not None and room < 1:
-                return
-            waiting = tuple(self._waiting)
-            if room is None or len(waiting) <= room:
-                # No choice to make: everything waiting starts.
-                self._waiting.clear()
-                for run in waiting:
-                    self._start(run)
-                return
-            try:
-                at = self._pick(waiting)
-            except Exception as error:  # a failure is a value (ADR-0016)
-                self._waiting.clear()
-                for run in waiting:
-                    run._turn.set_result(Errored(error))
-                return
-            self._start(self._waiting.pop(at))
-
-    def _pick(self, waiting: tuple[_QueuedRun[OutcomeT], ...]) -> int:
-        """Where the strategy's choice sits in ``waiting``: itself, not an equal."""
-        chosen = self._order.pick(waiting)
-        for at, run in enumerate(waiting):
-            if run is chosen:
-                return at
-        msg = f"the ordering strategy picked {chosen!r}, not a waiting run"
-        raise ValueError(msg)
-
-    def _start(self, run: _QueuedRun[OutcomeT]) -> None:
-        self._in_flight += 1
-        run._holds_slot = True
-        run._turn.set_result(None)
-
+    @staticmethod
     async def _run(
-        self, queued: _QueuedRun[OutcomeT], *, preflighted: bool
+        spec: RunSpec[OutcomeT], *, preflighted: bool
     ) -> RunResult[OutcomeT]:
         """One run, begun once the queue pulls it.
 
         Until then it has no workspace, so its base ref resolves when it
         starts, not when it was submitted.
         """
-        spec = queued.spec
-        refusal = await queued._turn
-        if refusal is not None:
-            return _refused(spec, refusal)
         if not preflighted:
             try:
                 await preflight((spec,))

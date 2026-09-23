@@ -43,6 +43,16 @@ from waystation.integration import (
     integrate,
     preserve_series,
 )
+from waystation.merge_queue import (
+    Attempt,
+    CheckFailed,
+    Landed,
+    Landing,
+    LandingConflicted,
+    LandingFailed,
+    merge_queue,
+    run_check,
+)
 from waystation.observability import configure_logging, run_logger
 from waystation.observers import Dashboard, EventLog, RunLogFiles
 from waystation.preflight import preflight
@@ -84,6 +94,8 @@ __all__ = [
     "AgentExited",
     "AgentProvider",
     "AgentUsage",
+    "Attempt",
+    "CheckFailed",
     "ClaudeCode",
     "CommandFailed",
     "Dashboard",
@@ -98,6 +110,10 @@ __all__ = [
     "Integration",
     "IntegrationReport",
     "IntegrationStrategy",
+    "Landed",
+    "Landing",
+    "LandingConflicted",
+    "LandingFailed",
     "NoSandbox",
     "OutcomeInvalid",
     "OutcomeMissing",
@@ -126,12 +142,14 @@ __all__ = [
     "fan_out",
     "handle_signals",
     "integrate",
-    "preserve_series",
+    "merge_queue",
     "preflight",
     "prepare_workspace",
+    "preserve_series",
     "queue",
     "remove_workspace",
     "run_agent",
+    "run_check",
     "run_logger",
     "stages",
 ]

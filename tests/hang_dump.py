@@ -144,6 +144,7 @@ def _dump(nodeid: str) -> None:
         # Written aside and renamed in, so the dump appears whole or not at
         # all: a reader polling the directory, or pytest-timeout's `os._exit`
         # landing mid-write, never finds it created and still empty (#177).
+        # An exit mid-write leaves only the `.partial`, which is not a dump.
         partial = dump.with_name(f"{dump.name}.partial")
         partial.write_text(text, encoding="utf-8")
         os.replace(partial, dump)

@@ -96,7 +96,9 @@ async def test_a_dump_appears_whole_or_not_at_all(
     write_text = Path.write_text
 
     def created_then_held(path: Path, data: str, *args: Any, **kwargs: Any) -> int:
-        if path.parent != dumps:
+        # Only this test's own dump is held: conftest arms a real timer for
+        # this test too, and if the test wedged, that dump must still land.
+        if path.parent != dumps or "test_that_held" not in path.name:
             return write_text(path, data, *args, **kwargs)
         with path.open("w", encoding="utf-8"):
             pass  # created, and empty: the moment a reader raced
@@ -105,14 +107,17 @@ async def test_a_dump_appears_whole_or_not_at_all(
         return write_text(path, data, *args, **kwargs)
 
     monkeypatch.setattr(Path, "write_text", created_then_held)
-    timer = hang_dump.arm("tests/imaginary.py::test_that_hung", after=0.0)
+    timer = hang_dump.arm("tests/imaginary.py::test_that_held", after=0.0)
     try:
-        while not held.is_set():
+        # Stops once the dump is done too: one no longer written through
+        # `Path.write_text` fails here rather than hanging the test.
+        while not held.is_set() and not timer.finished.is_set():
             await asyncio.sleep(0.02)
+        assert held.is_set(), "the dump is written through Path.write_text"
         assert list(dumps.glob("*.txt")) == [], "no dump is visible mid-write"
     finally:
         release.set()
         timer.cancel()
 
     text = await _dump_written(dumps)
-    assert "test_that_hung" in text, "and once written, it is all there"
+    assert "test_that_held" in text, "and once written, it is all there"

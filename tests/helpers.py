@@ -320,7 +320,7 @@ async def until(ready: Callable[[], bool], task: asyncio.Task[Any]) -> None:
 
 
 async def until_batch(
-    ready: Callable[[], bool], results: AsyncIterator[RunResult[Any]]
+    ready: Callable[[], bool], results: AsyncIterator[object]
 ) -> None:
     """``until`` for a batch: fail at once if any run in ``results`` ends first.
 

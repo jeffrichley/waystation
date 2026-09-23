@@ -46,6 +46,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | [0040](0040-landing-steps-are-public-and-squash-is-its-own-strategy.md) The landing steps are public on `GitRepo`; squash is its own strategy | writing an integration strategy, adding a landing step, or changing how `Squash` lands |
 | [0041](0041-a-head-target-fast-forwards-the-checkout-and-refuses-for-the-users-files.md) A HEAD target fast-forwards the checkout, and refuses rather than overwrite the user's files | landing on `HEAD`, or deciding what counts as the user's uncommitted work |
 | [0015](0015-conflict-resolution-is-a-run.md) Conflict resolution is a run, not a seam | tempted to add a resolver hook, merger or healer |
+| [0048](0048-a-merge-queue-checks-each-landing-on-the-head-and-resolves-at-the-front.md) A merge queue checks each landing on the target's head, and resolves at the front | landing many series on one branch, touching the merge queue or `run_check`, or wanting a resolver inside a landing |
 
 ## Sandboxes
 

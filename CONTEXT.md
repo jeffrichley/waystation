@@ -38,6 +38,18 @@ _Avoid_: group, stage, job set
 Fan-out's open-ended peer: a block that stays open, takes a run spec whenever one is submitted, preflights each run as it starts, and yields each result as it completes until it is closed and every submitted run has reported. A batch is the case of it that is submitted and closed at once (ADR-0047).
 _Avoid_: pool, scheduler, job queue, worker
 
+**Merge queue**:
+A queue for one target branch that lands a candidate only once a check has passed on it re-applied onto the target's current head, and lands exactly the commit checked. One candidate at a time, in arrival order; a conflict or failed check is resolved at the front by a resolver run the caller builds, or the candidate is evicted (ADR-0048).
+_Avoid_: merge train, gate, landing queue
+
+**Candidate**:
+A series submitted to a merge queue, named by the range `base..ref` that holds it on the host: a run's preservation branch, or a branch a person pushed.
+_Avoid_: PR, change, patch
+
+**Check**:
+The caller's command a merge queue runs in a sandbox against the commit it would land — the repo's test suite, say. Zero passes.
+_Avoid_: validation, CI, gate
+
 **Sandbox**:
 The isolated, ephemeral environment an agent executes in — created for a run, destroyed after it.
 _Avoid_: container (that's one backend's implementation detail)

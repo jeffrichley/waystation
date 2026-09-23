@@ -12,6 +12,7 @@ You are not expected to read them all. Scan the **Read it when** column, open th
 | ADR | Read it when you're… |
 | --- | --- |
 | [0047](0047-flows-are-plain-python-and-a-queue-is-fan-outs-open-ended-peer.md) Flows are plain imperative Python, and a queue is fan-out's open-ended peer | tempted to add config, templates, or a declarative layer, adding a parallel construct, or touching the queue |
+| [0048](0048-a-queue-pulls-by-an-injected-ordering-strategy.md) A queue pulls by an injected ordering strategy, asked only when there is a choice | writing an ordering strategy, changing which queued run starts next, or building the merge queue's pull |
 | [0003](0003-flows-are-plain-python.md) Flows are plain imperative Python with one parallel spelling | *superseded by 0047*: only for the history of "`fan_out` is the only parallel construct" |
 | [0004](0004-pure-library-boundary.md) Pure library: no CLI, no forge, no magic directory | adding a CLI, a GitHub call, or a dotfile the library owns |
 | [0021](0021-dataclass-values-pydantic-at-the-outcome.md) Values are dataclasses; pydantic validates only the Outcome | reaching for a `BaseModel` anywhere but the Outcome |

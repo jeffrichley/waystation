@@ -43,7 +43,8 @@ from waystation import (
     merge_queue,
     run_check,
 )
-from waystation.merge_queue import MergeQueue
+from waystation.integration import Conflict
+from waystation.merge_queue import Candidate, CheckResult, MergeQueue
 
 TARGET = "effort"
 
@@ -268,11 +269,13 @@ async def test_a_resolver_for_a_failed_check_starts_at_the_tree_that_failed(
 
 @pytest.mark.git
 async def test_a_resolver_that_gives_up_evicts_the_candidate_with_every_round(
-    host_repo: Path, base: str
+    host_repo: Path, base: str, tmp_path: Path
 ) -> None:
     _cut(host_repo, "ticket-a", {"A": "a\n"})
     _cut(host_repo, "ticket-b", {"B": "b\n"})
     rounds: list[int] = []
+    tally = tmp_path / "checks"
+    counted = f"echo >> '{tally.as_posix()}'; {NOT_BOTH}"
 
     def resolve(attempt: Attempt) -> RunSpec[Any] | None:
         rounds.append(attempt.rounds)
@@ -281,7 +284,7 @@ async def test_a_resolver_that_gives_up_evicts_the_candidate_with_every_round(
         return _resolver(host_repo, "true")  # changes nothing
 
     async with merge_queue(
-        host_repo, TARGET, check=NOT_BOTH, sandbox=NoSandbox(), resolve=resolve
+        host_repo, TARGET, check=counted, sandbox=NoSandbox(), resolve=resolve
     ) as landings:
         landings.submit("ticket-a", base=base)
         landings.submit("ticket-b", base=base)
@@ -290,6 +293,9 @@ async def test_a_resolver_that_gives_up_evicts_the_candidate_with_every_round(
     assert isinstance(second, CheckFailed), second
     assert rounds == [0, 1, 2]
     assert len(second.resolutions) == 2
+    # A round that brought nothing new is not checked again: one check for
+    # ticket-a, one for ticket-b, however many rounds the resolver had.
+    assert tally.read_text().count("\n") == 2
 
 
 @pytest.mark.git
@@ -430,3 +436,15 @@ async def test_a_check_runs_against_the_bare_target_with_the_same_command(
 async def test_a_check_given_as_argv_runs_without_a_shell(host_repo: Path) -> None:
     checked = await run_check(host_repo, "HEAD", ["git", "status"], NoSandbox())
     assert checked.passed
+
+
+@pytest.mark.unit
+def test_an_attempt_holds_a_conflict_or_a_failed_check_never_both_or_neither() -> None:
+    candidate = Candidate(ref="ticket-a", base="0" * 40)
+    failed = CheckResult(revision="1" * 40, exit_code=1, stdout="", stderr="")
+    with pytest.raises(ValueError, match="never both or neither"):
+        Attempt(candidate, "ticket-a", "2" * 40, "2" * 40)
+    with pytest.raises(ValueError, match="never both or neither"):
+        Attempt(
+            candidate, "ticket-a", "2" * 40, "2" * 40, Conflict(paths=("A",)), failed
+        )

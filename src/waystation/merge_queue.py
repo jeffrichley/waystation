@@ -13,8 +13,9 @@ landed branch anywhere is the caller's (ADR-0004).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -110,7 +111,9 @@ class Attempt:
             branch the last resolver run kept.
         head: The target's tip the series was re-applied onto.
         start: Where a resolver run starts: ``head`` after a conflict, the
-            commit that failed its check after a failed check.
+            commit that failed its check after a failed check. That commit
+            is on no branch: keep it with a ref of your own if you want it
+            after the queue has moved on.
         conflict: The paths re-applying onto ``head`` conflicted on.
         check: The check that failed.
         resolutions: The resolver runs so far, oldest first.
@@ -123,6 +126,11 @@ class Attempt:
     conflict: Conflict | None = None
     check: CheckResult | None = None
     resolutions: tuple[RunResult[Any], ...] = ()
+
+    def __post_init__(self) -> None:
+        if (self.conflict is None) == (self.check is None):
+            msg = "an attempt holds a conflict or a failed check, never both or neither"
+            raise ValueError(msg)
 
     @property
     def rounds(self) -> int:
@@ -164,7 +172,9 @@ class LandingConflicted:
 class CheckFailed:
     """The series re-applied cleanly, and the check failed on the result.
 
-    The target never moved; ``check.revision`` is the commit that failed.
+    The target never moved; ``check.revision`` is the commit that failed,
+    which no branch holds: the series is kept on ``ref``, and the failing
+    combination is ``ref`` re-applied onto the head, which can be rebuilt.
     """
 
     candidate: Candidate
@@ -296,11 +306,14 @@ class _Front:
         """
         ref, base = candidate.ref, candidate.base
         resolutions: list[RunResult[Any]] = []
+        setback: Attempt | None = None
         try:
             while True:
-                setback = await self._round(candidate, ref, base, resolutions)
-                if not isinstance(setback, Attempt):
-                    return setback
+                if setback is None:
+                    settled = await self._round(candidate, ref, base, resolutions)
+                    if not isinstance(settled, Attempt):
+                        return settled
+                    setback = settled
                 spec = self.resolve(setback) if self.resolve is not None else None
                 if spec is None:
                     return _evicted(setback)
@@ -310,6 +323,12 @@ class _Front:
                 resolutions.append(result)
                 if isinstance(result, RunSucceeded) and result.preserved is not None:
                     ref, base = result.preserved, setback.head
+                    setback = None
+                else:
+                    # Nothing new to land — the run failed, or kept nothing —
+                    # so the tree is the one already tried: the setback stands,
+                    # and is not paid for again.
+                    setback = replace(setback, resolutions=tuple(resolutions))
         except StageError as err:
             return LandingFailed(
                 candidate, ref, err.stage, err.failure, tuple(resolutions)
@@ -364,7 +383,7 @@ def _evicted(attempt: Attempt) -> Landing:
 class _QueuedCandidate:
     """One submitted candidate, and the way to stop it alone."""
 
-    def __init__(self, candidate: Candidate, task: Any) -> None:
+    def __init__(self, candidate: Candidate, task: asyncio.Task[Landing]) -> None:
         self.candidate = candidate
         self._task = task
 

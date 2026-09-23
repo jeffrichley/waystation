@@ -38,10 +38,19 @@ dev = [
 # `uv run --group examples python examples/<rung>.py`; `just check` type-checks
 # them against it, and CI never executes them.
 examples = ["typer>=0.12"]
+site = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-llmstxt>=0.3",
+    "mkdocs-material>=9.7",
+    "mkdocstrings[python]>=0.30",
+]
 
 [tool.ruff]
 target-version = "py312"
-src = ["src", "tests", "examples"]
+src = ["src", "tests", "examples", "site"]
+# Ruff formats a markdown page's Python fences, and a site page's fence holds a
+# snippet include, not Python: formatting it breaks the include (#127).
+extend-exclude = ["site/docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "D"]
@@ -65,7 +74,7 @@ strict = true
 # tests/ too: test modules import their shared helpers as a top-level module,
 # the same way pytest puts the rootdir of a test file on sys.path.
 mypy_path = "src:tests"
-files = ["src", "tests", "examples"]
+files = ["src", "tests", "examples", "site/hooks"]
 explicit_package_bases = true
 
 [tool.pytest.ini_options]

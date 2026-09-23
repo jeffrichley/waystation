@@ -57,3 +57,7 @@ The standing design lens, separate from any one decision: `docs/agents/architect
 ### Docs
 
 `docs/` is an OKF bundle managed by vaultwright. Read `docs/CLAUDE.md` before creating or changing anything under `docs/`.
+
+### The documentation site
+
+`site/` is the published site (MkDocs Material, deployed to GitHub Pages by `.github/workflows/site.yml`), not part of the vault. Its API reference is generated from each public module's `__all__`, and its tutorial pages include the rungs by snippet, never by copy: `tests/test_site.py` holds both. `just site` serves it; `just check` builds it strictly.

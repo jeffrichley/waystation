@@ -1,0 +1,132 @@
+# The documentation site (#127). Built from the repo root, which is where the
+# snippet includes and the API reference find their sources:
+#
+#   uv run --group site mkdocs build --strict -f site/mkdocs.yml
+#   uv run --group site mkdocs serve -f site/mkdocs.yml
+#
+# It lives apart from docs/, which is the vaultwright bundle of ADRs and agent
+# docs with frontmatter rules of its own; pages link to those on GitHub rather
+# than building from them.
+
+site_name: waystation
+site_description: A bare Python library for orchestrating sandboxed AI coding agents.
+site_url: https://jeffrichley.github.io/waystation/
+repo_url: https://github.com/jeffrichley/waystation
+repo_name: jeffrichley/waystation
+edit_uri: edit/main/site/docs/
+site_dir: build
+
+# MkDocs 2 drops plugins and Material with them; <2 is pinned in the `site`
+# dependency group. Zensical reads this file as-is, when it's time to move.
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.indexes
+    - navigation.sections
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+hooks:
+  - hooks/api_reference.py
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      # The repo root, so a page includes `examples/single_run.py` by the path
+      # it has in the repo. A missing file fails the build.
+      base_path: !relative $config_dir/..
+      check_paths: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [../src]
+          options:
+            docstring_style: google
+            docstring_options:
+              # The library's Returns sections are prose wrapped over lines,
+              # never a list of values; griffe would read each line as one.
+              returns_multiple_items: false
+            heading_level: 2
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            show_source: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            signature_crossrefs: true
+  - llmstxt:
+      markdown_description: >-
+        waystation is a bare Python library for orchestrating sandboxed AI
+        coding agents against git repositories. A flow is a plain Python script
+        the user owns; a run puts one agent in a fresh sandbox against a clone
+        of the repo, collects its commits, and lands them, and a failure comes
+        back as a value to match on.
+      full_output: llms-full.txt
+      sections:
+        Start here:
+          - index.md
+          - install.md
+        # In ladder order, which a glob would sort away.
+        Tutorial:
+          - tutorial/index.md
+          - tutorial/single-run.md
+          - tutorial/observability.md
+          - tutorial/primitives.md
+          - tutorial/implement-then-review.md
+          - tutorial/control-room.md
+          - tutorial/parallel-prompts.md
+          - tutorial/bring-your-own-agent.md
+          - tutorial/smoke.md
+        API reference:
+          - reference/index.md
+          - reference/waystation.md
+          - reference/agents.md
+          - reference/sandbox.md
+          - reference/integration.md
+          - reference/ordering.md
+          - reference/testing.md
+
+nav:
+  - Home: index.md
+  - Install: install.md
+  - Tutorial:
+      - tutorial/index.md
+      - tutorial/single-run.md
+      - tutorial/observability.md
+      - tutorial/primitives.md
+      - tutorial/implement-then-review.md
+      - tutorial/control-room.md
+      - tutorial/parallel-prompts.md
+      - tutorial/bring-your-own-agent.md
+      - tutorial/smoke.md
+  - API reference:
+      - reference/index.md
+      - reference/waystation.md
+      - reference/agents.md
+      - reference/sandbox.md
+      - reference/integration.md
+      - reference/ordering.md
+      - reference/testing.md

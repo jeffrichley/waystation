@@ -3,6 +3,7 @@
 A bare Python library for orchestrating sandboxed AI coding agents against git
 repositories.
 
+<!-- --8<-- [start:pitch] -->
 **Your flow is a Python script you own.** There is no config file, no DSL, no
 CLI and no framework to fit into. Waystation gives you primitives: a run puts
 one agent in a fresh sandbox against a clone of your repo, collects the
@@ -10,9 +11,11 @@ commits it made, and lands them where you ask. How many runs, in what order,
 on which branches, and what to do when one fails are all ordinary Python you
 can read, change and debug. When a run fails, you get the failure back as a
 value to `match` on, not an exception to catch.
+<!-- --8<-- [end:pitch] -->
 
 ## The flagship, in about 20 lines
 
+<!-- --8<-- [start:flagship] -->
 Fan three prompts out to Claude Code, each in its own Docker container, landing
 every agent's commits on one shared batch branch while a live dashboard shows
 progress:
@@ -41,6 +44,7 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+<!-- --8<-- [end:flagship] -->
 
 The full version, with a typer CLI and resolver runs that replay conflicting
 work onto the batch branch, is rung 6 of the [examples](examples/README.md).
@@ -70,6 +74,10 @@ Then start with the [examples](examples/README.md), a seven-rung ladder that
 adds one idea per rung.
 
 ## Reading further
+
+The [documentation site](https://jeffrichley.github.io/waystation/) walks the
+ladder with prose around each rung and carries the API reference, generated
+from the code.
 
 `CONTEXT.md` defines the vocabulary, `docs/adr/` records every decision and
 why, and `docs/log-records.md` says what a run logs and how to watch it.

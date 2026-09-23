@@ -38,6 +38,10 @@ _Avoid_: group, stage, job set
 Fan-out's open-ended peer: a block that stays open, takes a run spec whenever one is submitted, preflights each run as it starts, and yields each result as it completes until it is closed and every submitted run has reported. A batch is the case of it that is submitted and closed at once (ADR-0047).
 _Avoid_: pool, scheduler, job queue, worker
 
+**Ordering strategy**:
+The pluggable rule for which waiting item a long-lived queue pulls next when more are waiting than there is room for: it sees everything waiting, oldest first, and picks one. Arrival order by default (ADR-0048).
+_Avoid_: priority, scheduler, comparator
+
 **Sandbox**:
 The isolated, ephemeral environment an agent executes in — created for a run, destroyed after it.
 _Avoid_: container (that's one backend's implementation detail)

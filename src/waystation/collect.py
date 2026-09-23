@@ -87,13 +87,15 @@ class PatchSeries:
         descends = await run_git(
             host, "merge-base", "--is-ancestor", base_sha, ref, check=False
         )
-        if descends.returncode != 0 or merges.stdout.strip():
+        if merges.stdout.strip() or descends.returncode != 0:
+            why = (
+                "the range holds merge commits"
+                if merges.stdout.strip()
+                else f"{ref} does not descend from {base}: pass the fork point, "
+                f"`git merge-base {base} {ref}`"
+            )
             raise StageError(
-                None,
-                Refused(
-                    reason="nonlinear_series",
-                    detail=f"{base}..{ref}: {_NONLINEAR_DETAIL}",
-                ),
+                None, Refused(reason="nonlinear_series", detail=f"{base}..{ref}: {why}")
             )
         result = await run_git(host, "format-patch", "--stdout", f"{base_sha}..{ref}")
         return cls.from_format_patch(base_sha, result.stdout)

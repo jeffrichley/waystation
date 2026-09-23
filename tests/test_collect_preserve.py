@@ -401,6 +401,9 @@ async def test_a_range_whose_base_is_not_an_ancestor_is_refused(
 
     assert isinstance(raised.value.failure, Refused)
     assert raised.value.failure.reason == "nonlinear_series"
+    # The series itself is linear: say what is wrong, and what to pass.
+    assert "does not descend from" in raised.value.failure.detail
+    assert "merge-base" in raised.value.failure.detail
 
 
 _REWINDS_BELOW_BASE = "\n".join(

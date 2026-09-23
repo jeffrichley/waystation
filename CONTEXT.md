@@ -122,7 +122,7 @@ The branch that keeps a run's patch series whenever the series does not reach a 
 _Avoid_: backup branch, conflict branch
 
 **Resolver run**:
-An ordinary run whose prompt asks the agent to replay a preservation branch onto a target, resolving conflicts commit by commit. Nothing distinguishes it from any other run but its prompt.
+An ordinary run whose prompt asks the agent to replay a preservation branch onto a target, resolving conflicts commit by commit — or, at a merge queue's front, to fix a candidate whose check failed. Nothing distinguishes it from any other run but its prompt.
 _Avoid_: merger, fixer, healer, conflict handler
 
 **Outcome**:

@@ -140,7 +140,13 @@ def _dump(nodeid: str) -> None:
     try:
         DUMPS.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", nodeid)[-120:]
-        (DUMPS / f"{worker}-{safe}.txt").write_text(text, encoding="utf-8")
+        dump = DUMPS / f"{worker}-{safe}.txt"
+        # Written aside and renamed in, so the dump appears whole or not at
+        # all: a reader polling the directory, or pytest-timeout's `os._exit`
+        # landing mid-write, never finds it created and still empty (#177).
+        partial = dump.with_name(f"{dump.name}.partial")
+        partial.write_text(text, encoding="utf-8")
+        os.replace(partial, dump)
     except OSError:
         pass  # the stream below may still carry it
 

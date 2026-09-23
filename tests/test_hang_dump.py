@@ -9,7 +9,9 @@ an idle event loop and nothing else. These hold the part that fills that in.
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -74,3 +76,43 @@ async def test_a_cancelled_timer_writes_nothing(
     hang_dump.arm("tests/imaginary.py::test_that_finished", after=0.0).cancel()
     await asyncio.sleep(0.05)
     assert not dumps.exists()
+
+
+@pytest.mark.unit
+async def test_a_dump_appears_whole_or_not_at_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader never finds the dump created but not yet written (#177).
+
+    The window between a file's creation and its write is what a reader of
+    the directory raced — and so does pytest-timeout's ``os._exit``, which
+    would leave a half-written dump. Holding every write into ``DUMPS`` just
+    after it opened the file makes that window as wide as the test likes,
+    so it reproduces to order instead of one run in a few hundred (ADR-0042).
+    """
+    dumps = tmp_path / "dumps"
+    monkeypatch.setattr(hang_dump, "DUMPS", dumps)
+    held, release = threading.Event(), threading.Event()
+    write_text = Path.write_text
+
+    def created_then_held(path: Path, data: str, *args: Any, **kwargs: Any) -> int:
+        if path.parent != dumps:
+            return write_text(path, data, *args, **kwargs)
+        with path.open("w", encoding="utf-8"):
+            pass  # created, and empty: the moment a reader raced
+        held.set()
+        release.wait()
+        return write_text(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", created_then_held)
+    timer = hang_dump.arm("tests/imaginary.py::test_that_hung", after=0.0)
+    try:
+        while not held.is_set():
+            await asyncio.sleep(0.02)
+        assert list(dumps.glob("*.txt")) == [], "no dump is visible mid-write"
+    finally:
+        release.set()
+        timer.cancel()
+
+    text = await _dump_written(dumps)
+    assert "test_that_hung" in text, "and once written, it is all there"

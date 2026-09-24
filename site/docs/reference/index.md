@@ -17,8 +17,12 @@ implementing it is already looking:
 | [`waystation.agents`](agents.md) | an agent provider |
 | [`waystation.sandbox`](sandbox.md) | a sandbox backend |
 | [`waystation.integration`](integration.md) | an integration strategy |
-| [`waystation.ordering`](ordering.md) | an ordering strategy, which picks the next run a `queue` starts |
+| [`waystation.ordering`](ordering.md) | an ordering strategy, which picks what a queue or merge queue pulls next |
+| [`waystation.queue`](queue.md) | a flow that types a queue's handle, or orders its runs |
+| [`waystation.merge_queue`](merge_queue.md) | a flow that submits candidates to a merge queue and resolves what stops one |
+| [`waystation.stages`](stages.md) | a loop composed by hand, typed with its stage runner |
 | [`waystation.testing`](testing.md) | tests: a scripted agent, and a backend's conformance suite |
 
-A seam module also re-exports what a flow script hands it, so `DockerSandbox`
-appears under both `waystation` and `waystation.sandbox`.
+A module also re-exports what a flow script hands it, so `DockerSandbox`
+appears under both `waystation` and `waystation.sandbox`, and `merge_queue`
+under both `waystation` and `waystation.merge_queue`.

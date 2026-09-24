@@ -18,21 +18,15 @@ from types import ModuleType
 
 import pytest
 
+from helpers import MODULE_SURFACES
+
 REPO = Path(__file__).resolve().parent.parent
 SITE = REPO / "site"
 HOOK = SITE / "hooks" / "api_reference.py"
 
-# The modules #18's public import surface names: the top level, the three seams
-# and the test support a user implements against. Plus the ordering seam, which
-# lives in its own module and nowhere else (ADR-0048), though #18 predates it.
-PUBLIC_MODULES = {
-    "waystation",
-    "waystation.agents",
-    "waystation.integration",
-    "waystation.ordering",
-    "waystation.sandbox",
-    "waystation.testing",
-}
+# The top level and every module #18's import surface names, from the one list
+# a test holds against the code (#184).
+PUBLIC_MODULES = {"waystation", *MODULE_SURFACES}
 
 
 def _hook() -> ModuleType:

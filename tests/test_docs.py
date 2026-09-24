@@ -18,6 +18,8 @@ from types import ModuleType
 
 import pytest
 
+from helpers import MODULE_SURFACES
+
 REPO = Path(__file__).resolve().parent.parent
 ADR_DIR = REPO / "docs" / "adr"
 TESTS_GUIDE = REPO / "tests" / "CLAUDE.md"
@@ -274,6 +276,25 @@ def _sections_owed(fn: Callable[..., object]) -> list[str]:
     elif returns not in ("None", "NoReturn", "Never"):
         owed.append("Returns")
     return owed
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("module", sorted(MODULE_SURFACES))
+def test_every_public_module_exports_what_was_agreed_and_no_more(module: str) -> None:
+    """#184: a module's ``__all__`` is a contract, held here as the top level's is.
+
+    A name added to one without a line in ``MODULE_SURFACES`` fails, and so
+    does a line with no export, so the list #18 and the site's reference read
+    from is the list the code has.
+    """
+    exported = set(importlib.import_module(module).__all__)
+    agreed = MODULE_SURFACES[module]
+
+    assert exported == agreed, (
+        f"{module}.__all__ drifted from its agreed surface. "
+        f"exported but not agreed: {sorted(exported - agreed)}; "
+        f"agreed but not exported: {sorted(agreed - exported)}."
+    )
 
 
 # What a flow script writes and reads, and nothing else: the seam vocabulary

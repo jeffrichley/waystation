@@ -107,6 +107,9 @@ plugins:
           - reference/sandbox.md
           - reference/integration.md
           - reference/ordering.md
+          - reference/queue.md
+          - reference/merge_queue.md
+          - reference/stages.md
           - reference/testing.md
 
 nav:
@@ -129,4 +132,7 @@ nav:
       - reference/sandbox.md
       - reference/integration.md
       - reference/ordering.md
+      - reference/queue.md
+      - reference/merge_queue.md
+      - reference/stages.md
       - reference/testing.md

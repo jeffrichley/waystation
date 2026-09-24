@@ -46,6 +46,7 @@ from waystation.testing import ScriptedAgent, ScriptedCommit
 
 __all__ = [
     "MAKES_A_MERGE",
+    "MODULE_SURFACES",
     "OK_OUTCOME",
     "OK_OUTCOME_LINE",
     "OUTCOME",
@@ -79,6 +80,87 @@ __all__ = [
     "why",
     "workspaces",
 ]
+
+# Every public module but the top level, with the names it exports: a seam's
+# vocabulary, or a module's own annotation aliases (#184). The top level is held
+# on its own, in test_docs.py. Each list here is an API commitment, written out
+# so that changing one is a decision; the site's reference has a page for each.
+MODULE_SURFACES: dict[str, set[str]] = {
+    # writing an agent provider
+    "waystation.agents": {
+        "AgentProvider",
+        "AgentCommand",
+        "AgentLine",
+        "AgentEvent",
+        "AgentText",
+        "AgentToolUse",
+        "AgentToolKind",
+        "AgentToolResult",
+        "OutcomeReported",
+        "AgentUsage",
+        "outcome_instructions",
+        "find_outcome",
+        "run_agent",
+    },
+    # writing a sandbox backend
+    "waystation.sandbox": {
+        "SandboxBackend",
+        "Sandbox",
+        "ExecResult",
+        "LineCallback",
+        "clone_in",
+        "allowlisted_env",
+        "HostRunner",
+        "ProcessStrategy",
+        "ProcessTree",
+        "PosixProcesses",
+        "WindowsProcesses",
+        "host_processes",
+        "host_shell",
+        "DockerSandbox",
+        "NoSandbox",
+    },
+    # writing an integration strategy
+    "waystation.integration": {
+        "IntegrationStrategy",
+        "GitRepo",
+        "GitResult",
+        "Target",
+        "PatchSeries",
+        "IntegrationReport",
+        "Conflict",
+        "FailedPatch",
+        "Mechanism",
+        "Integration",
+        "Squash",
+        "integrate",
+        "preserve_series",
+    },
+    # writing an ordering strategy for a queue (ADR-0048)
+    "waystation.ordering": {"OrderingStrategy", "ArrivalOrder"},
+    # a queue's handle and what it offers a strategy, as annotations (ADR-0047)
+    "waystation.queue": {"queue", "RunQueue", "QueuedRun"},
+    # a merge queue's candidates, check, resolver and handle (ADR-0049)
+    "waystation.merge_queue": {
+        "merge_queue",
+        "run_check",
+        "Candidate",
+        "CheckResult",
+        "Resolve",
+        "MergeQueue",
+        "QueuedCandidate",
+        "Landing",
+        "Landed",
+        "LandingConflicted",
+        "CheckFailed",
+        "LandingFailed",
+        "Attempt",
+    },
+    # the stage runner a hand-composed loop is typed with (ADR-0047)
+    "waystation.stages": {"stages", "StageRunner"},
+    # testing a flow without tokens, and a backend against the contract (ADR-0044)
+    "waystation.testing": {"ScriptedAgent", "ScriptedCommit", "SandboxConformance"},
+}
 
 TEST_IMAGE = "waystation-test"
 """The image the docker tier runs in; ``just test-image`` builds it."""

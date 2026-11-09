@@ -61,7 +61,7 @@ jobs:
       # and the log says only "worker 'gwN' crashed" (#105).
       - name: Keep what a hung test left behind
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hang-dumps-${{ matrix.os }}
           path: hang-dumps/

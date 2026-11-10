@@ -41,7 +41,7 @@ jobs:
           enable-cache: true
 
       - name: Install just
-        uses: extractions/setup-just@v2
+        uses: extractions/setup-just@v4
 
       - name: Sync dependencies
         run: uv sync --group dev --group examples --group site
